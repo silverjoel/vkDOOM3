@@ -3,14 +3,15 @@
   <PropertyGroup>
     <_ProjectFileVersion>10.0.40219.1</_ProjectFileVersion>
     <_PropertySheetDisplayName>Common Project Properties</_PropertySheetDisplayName>
-    <OutDir>..\build\$(PlatformName)\$(Configuration)\</OutDir>
-    <IntDir>..\build\$(PlatformName)\$(Configuration)\intermediate\$(ProjectName)\</IntDir>
+    <OutDir>..\build\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>..\build\$(Platform)\$(Configuration)\intermediate\$(ProjectName)\</IntDir>
     <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     <ImageXexOutput>$(OutDir)$(ProjectName).xex</ImageXexOutput>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <PreprocessorDefinitions>_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_USE_32BIT_TIME_T;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Platform)'=='Win32'">_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_USE_32BIT_TIME_T;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+	  <PreprocessorDefinitions Condition="'$(Platform)'=='x64'">_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level4</WarningLevel>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
