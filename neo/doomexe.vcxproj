@@ -103,9 +103,9 @@
     <IncludePath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
     <IncludePath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
     <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
-    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
+    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
     <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
-    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
+    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
     <IncludePath Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
     <IncludePath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
   </PropertyGroup>

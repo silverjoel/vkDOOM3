@@ -465,7 +465,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IncludePath>$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>..\build\$(PlatformName)\$(Configuration)\</OutDir>
