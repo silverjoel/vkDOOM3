@@ -1115,6 +1115,12 @@ void FullscreenFX_Warp::DrawWarp( WarpPolygon_t wp, float interp ) {
 
 	trans = wp;
 
+	//VulkanFix - w inversion added to correct vertically mirrored GL bottom-up
+	// texture orientation to compensate Vulkan top-down texture orientation.
+	trans.outer1.w = 1 - trans.outer1.w;
+	trans.outer2.w = 1 - trans.outer2.w;
+	trans.center.w = 1 - trans.center.w;
+
 	// compute mid points
 	mid1 = trans.outer1 * ( interp ) + trans.center * ( 1 - interp );
 	mid2 = trans.outer2 * ( interp ) + trans.center * ( 1 - interp );
@@ -1415,9 +1421,9 @@ void FullscreenFX_InfluenceVision::HighQuality() {
 		renderSystem->DrawStretchPic( 
 			0.0f, 0.0f, 
 			SCREEN_WIDTH, SCREEN_HEIGHT, 
-			0.0f, 0.0f, 
-			1.0f, 1.0f, 
-			player->GetInfluenceMaterial() );
+			0.0f, 1.0f, 
+			1.0f, 0.0f, 
+			player->GetInfluenceMaterial() );	//VulkanFix - changed t1 to 1.0f and t2 to 0.0f to vertically mirror the image to fix orientation
 	} else if ( player->GetInfluenceEntity() == NULL ) {
 		return;
 	} else {
