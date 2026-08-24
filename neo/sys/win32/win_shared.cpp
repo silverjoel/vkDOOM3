@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
 #include "win_local.h"
 
 #undef StrCmpN
@@ -267,6 +268,7 @@ char *Sys_GetCurrentUser() {
 }	
 
 
+#if !defined(_WIN64)
 /*
 ===============================================================================
 
@@ -790,3 +792,4 @@ Sys_ShutdownSymbols
 void Sys_ShutdownSymbols() {
 	Sym_Shutdown();
 }
+#endif

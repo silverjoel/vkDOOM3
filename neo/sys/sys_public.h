@@ -391,7 +391,11 @@ struct sysMemoryStats_t {
 	int availExtendedVirtual;
 };
 
+#if defined(_WIN64)
+typedef uintptr_t address_t;
+#else
 typedef unsigned long address_t;
+#endif
 
 void			Sys_Init();
 void			Sys_Shutdown();

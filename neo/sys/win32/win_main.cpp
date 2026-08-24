@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../../idlib/precompiled.h"
+#pragma hdrstop
+
 #include "../../renderer/RenderSystem.h"
 
 #include <direct.h>
@@ -1265,7 +1266,8 @@ EXCEPTION_DISPOSITION __cdecl _except_handler( struct _EXCEPTION_RECORD *Excepti
 										ContextRecord->FloatSave.ErrorSelector,
 										ContextRecord->FloatSave.DataOffset,
 										ContextRecord->FloatSave.DataSelector );
-
+										
+	);
 
 	sprintf( msg, 
 		"Please describe what you were doing when DOOM 3 crashed!\n"
