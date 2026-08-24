@@ -391,11 +391,9 @@ struct sysMemoryStats_t {
 	int availExtendedVirtual;
 };
 
-#if defined(_WIN64)
-typedef uintptr_t address_t;
-#else
-typedef unsigned long address_t;
-#endif
+
+typedef uintptr_t address_t;	// x64FIXES
+typedef intptr_t dllHandle_t;	// x64FIXES
 
 void			Sys_Init();
 void			Sys_Shutdown();
@@ -495,10 +493,10 @@ const char *	Sys_GetCallStackCurStr( int depth );
 const char *	Sys_GetCallStackCurAddressStr( int depth );
 void			Sys_ShutdownSymbols();
 
-// DLL loading, the path should be a fully qualified OS path to the DLL file to be loaded
-int				Sys_DLL_Load( const char *dllName );
-void *			Sys_DLL_GetProcAddress( int dllHandle, const char *procName );
-void			Sys_DLL_Unload( int dllHandle );
+// DLL loading, the path should be a fully qualified OS path to the DLL file to be loaded x64FIXES
+dllHandle_t     Sys_DLL_Load(const char* dllName);
+void*			Sys_DLL_GetProcAddress(dllHandle_t dllHandle, const char* procName);
+void            Sys_DLL_Unload(dllHandle_t dllHandle);
 
 // event generation
 void			Sys_GenerateEvents();
@@ -707,9 +705,9 @@ public:
 	virtual const char *	GetCallStackCurStr( int depth ) = 0;
 	virtual void			ShutdownSymbols() = 0;
 
-	virtual int				DLL_Load( const char *dllName ) = 0;
-	virtual void *			DLL_GetProcAddress( int dllHandle, const char *procName ) = 0;
-	virtual void			DLL_Unload( int dllHandle ) = 0;
+	virtual dllHandle_t     DLL_Load(const char* dllName) = 0;	//x64FIXES
+	virtual void*			DLL_GetProcAddress(dllHandle_t dllHandle, const char* procName) = 0;
+	virtual void            DLL_Unload(dllHandle_t dllHandle) = 0;
 	virtual void			DLL_GetFileName( const char *baseName, char *dllName, int maxLength ) = 0;
 
 	virtual sysEvent_t		GenerateMouseButtonEvent( int button, bool down ) = 0;

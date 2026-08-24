@@ -26,8 +26,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../framework/precompiled.h"
+#pragma hdrstop
+
 #include "sys_local.h"
 
 const char * sysLanguageNames[] = {
@@ -109,16 +110,17 @@ void idSysLocal::ShutdownSymbols() {
 	Sys_ShutdownSymbols();
 }
 
-int idSysLocal::DLL_Load( const char *dllName ) {
-	return Sys_DLL_Load( dllName );
+// x64FIXES
+dllHandle_t idSysLocal::DLL_Load(const char* dllName) {
+	return Sys_DLL_Load(dllName);
 }
 
-void *idSysLocal::DLL_GetProcAddress( int dllHandle, const char *procName ) {
-	return Sys_DLL_GetProcAddress( dllHandle, procName );
+void* idSysLocal::DLL_GetProcAddress(dllHandle_t dllHandle, const char* procName) {
+	return Sys_DLL_GetProcAddress(dllHandle, procName);
 }
 
-void idSysLocal::DLL_Unload( int dllHandle ) {
-	Sys_DLL_Unload( dllHandle );
+void idSysLocal::DLL_Unload(dllHandle_t dllHandle) {
+	Sys_DLL_Unload(dllHandle);
 }
 
 void idSysLocal::DLL_GetFileName( const char *baseName, char *dllName, int maxLength ) {

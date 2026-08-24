@@ -818,9 +818,10 @@ DLL Loading
 Sys_DLL_Load
 =====================
 */
-int Sys_DLL_Load( const char *dllName ) {
-	HINSTANCE libHandle = LoadLibrary( dllName );
-	return (int)libHandle;
+dllHandle_t Sys_DLL_Load(const char* dllName) {
+	HMODULE libHandle = LoadLibrary(dllName);
+
+	return reinterpret_cast<dllHandle_t>(libHandle);
 }
 
 /*
@@ -828,8 +829,10 @@ int Sys_DLL_Load( const char *dllName ) {
 Sys_DLL_GetProcAddress
 =====================
 */
-void *Sys_DLL_GetProcAddress( int dllHandle, const char *procName ) {
-	return GetProcAddress( (HINSTANCE)dllHandle, procName ); 
+void* Sys_DLL_GetProcAddress(dllHandle_t dllHandle, const char* procName) {
+	HMODULE libHandle = reinterpret_cast<HMODULE>(dllHandle);
+
+	return reinterpret_cast<void*>(GetProcAddress(libHandle, procName));
 }
 
 /*
@@ -837,23 +840,32 @@ void *Sys_DLL_GetProcAddress( int dllHandle, const char *procName ) {
 Sys_DLL_Unload
 =====================
 */
-void Sys_DLL_Unload( int dllHandle ) {
-	if ( !dllHandle ) {
+void Sys_DLL_Unload(dllHandle_t dllHandle) {
+	if (dllHandle == 0) {
 		return;
 	}
-	if ( FreeLibrary( (HINSTANCE)dllHandle ) == 0 ) {
+
+	HMODULE libHandle = reinterpret_cast<HMODULE>(dllHandle);
+
+	if (FreeLibrary(libHandle) == 0) {
 		int lastError = GetLastError();
 		LPVOID lpMsgBuf;
+
 		FormatMessage(
 			FORMAT_MESSAGE_ALLOCATE_BUFFER,
-		    NULL,
+			NULL,
 			lastError,
-			MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
-			(LPTSTR) &lpMsgBuf,
+			MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+			(LPTSTR)&lpMsgBuf,
 			0,
-			NULL 
+			NULL
 		);
-		Sys_Error( "Sys_DLL_Unload: FreeLibrary failed - %s (%d)", lpMsgBuf, lastError );
+
+		Sys_Error(
+			"Sys_DLL_Unload: FreeLibrary failed - %s (%d)",
+			lpMsgBuf,
+			lastError
+		);
 	}
 }
 
@@ -1266,8 +1278,7 @@ EXCEPTION_DISPOSITION __cdecl _except_handler( struct _EXCEPTION_RECORD *Excepti
 										ContextRecord->FloatSave.ErrorSelector,
 										ContextRecord->FloatSave.DataOffset,
 										ContextRecord->FloatSave.DataSelector );
-										
-	);
+
 
 	sprintf( msg, 
 		"Please describe what you were doing when DOOM 3 crashed!\n"
