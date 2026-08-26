@@ -32,8 +32,9 @@ instancing of objects.
 
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 //#include "TypeInfo.h"
 
@@ -239,7 +240,7 @@ idList<idTypeInfo *, TAG_IDCLASS>	idClass::typenums;
 
 bool	idClass::initialized	= false;
 int		idClass::typeNumBits	= 0;
-int		idClass::memused		= 0;
+size_t	idClass::memused		= 0;
 int		idClass::numobjects		= 0;
 
 /*
@@ -283,16 +284,42 @@ idClass::FindUninitializedMemory
 */
 void idClass::FindUninitializedMemory() {
 #ifdef ID_DEBUG_UNINITIALIZED_MEMORY
-	unsigned long *ptr = ( ( unsigned long * )this ) - 1;
-	int size = *ptr;
-	assert( ( size & 3 ) == 0 );
-	size >>= 2;
-	for ( int i = 0; i < size; i++ ) {
-		if ( ptr[i] == 0xcdcdcdcd ) {
-			const char *varName = GetTypeVariableName( GetClassname(), i << 2 );
-			gameLocal.Warning( "type '%s' has uninitialized variable %s (offset %d)", GetClassname(), varName, i << 2 );
+
+	const size_t* sizePtr =
+		reinterpret_cast<const size_t*>(this) - 1;
+
+	const size_t allocationSize = *sizePtr;
+
+	const uint32_t* ptr =
+		reinterpret_cast<const uint32_t*>(this);
+
+	const size_t objectSize =
+		allocationSize - sizeof(size_t);
+
+	const size_t count =
+		objectSize / sizeof(uint32_t);
+
+	for (size_t i = 0; i < count; i++) {
+		if (ptr[i] == 0xcdcdcdcd) {
+			const char* varName =
+				GetTypeVariableName(
+					GetClassname(),
+					static_cast<int>(
+						i * sizeof(uint32_t)
+						)
+				);
+
+			gameLocal.Warning(
+				"type '%s' has uninitialized variable %s (offset %d)",
+				GetClassname(),
+				varName,
+				static_cast<int>(
+					i * sizeof(uint32_t)
+					)
+			);
 		}
 	}
+
 #endif
 }
 
@@ -321,7 +348,7 @@ idClass::DisplayInfo_f
 ================
 */
 void idClass::DisplayInfo_f( const idCmdArgs &args ) {
-	gameLocal.Printf( "Class memory status: %i bytes allocated in %i objects\n", memused, numobjects );
+	gameLocal.Printf( "Class memory status: %i bytes allocated in %i objects\n", static_cast<unsigned long long>(memused), numobjects );
 }
 
 /*
@@ -438,12 +465,17 @@ void idClass::Shutdown() {
 idClass::new
 ================
 */
-void * idClass::operator new( size_t s ) {
-	int *p;
+void* idClass::operator new(size_t s) {
+	size_t* p;
 
-	s += sizeof( int );
-	p = (int *)Mem_Alloc( s, TAG_IDCLASS );
+	s += sizeof(size_t);
+
+	p = static_cast<size_t*>(
+		Mem_Alloc(s, TAG_IDCLASS)
+		);
+
 	*p = s;
+
 	memused += s;
 	numobjects++;
 
@@ -455,14 +487,16 @@ void * idClass::operator new( size_t s ) {
 idClass::delete
 ================
 */
-void idClass::operator delete( void *ptr ) {
-	int *p;
+void idClass::operator delete(void* ptr) {
+	size_t* p;
 
-	if ( ptr ) {
-		p = ( ( int * )ptr ) - 1;
+	if (ptr) {
+		p = static_cast<size_t*>(ptr) - 1;
+
 		memused -= *p;
 		numobjects--;
-        Mem_Free( p );
+
+		Mem_Free(p);
 	}
 }
 
@@ -784,7 +818,7 @@ idClass::ProcessEventArgs
 bool idClass::ProcessEventArgs( const idEventDef *ev, int numargs, ... ) {
 	idTypeInfo	*c;
 	int			num;
-	int			data[ D_EVENT_MAXARGS ];
+	intptr_t	data[ D_EVENT_MAXARGS ];
 	va_list		args;
 	
 	assert( ev );
@@ -892,7 +926,7 @@ bool idClass::ProcessEvent( const idEventDef *ev, idEventArg arg1, idEventArg ar
 idClass::ProcessEventArgPtr
 ================
 */
-bool idClass::ProcessEventArgPtr( const idEventDef *ev, int *data ) {
+bool idClass::ProcessEventArgPtr( const idEventDef *ev, intptr_t *data ) {
 	idTypeInfo	*c;
 	int			num;
 	eventCallback_t	callback;

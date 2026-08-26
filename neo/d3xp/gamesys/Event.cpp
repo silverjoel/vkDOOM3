@@ -32,8 +32,9 @@ Event are used for scheduling tasks and for linking script commands.
 
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 
 #define MAX_EVENTSPERFRAME			4096
@@ -74,7 +75,7 @@ idEventDef::idEventDef( const char *command, const char *formatspec, char return
 	this->formatspec = formatspec;
 	this->returnType = returnType;
 
-	numargs = strlen( formatspec );
+	numargs = static_cast<int>(strlen(formatspec));
 	assert( numargs <= D_EVENT_MAXARGS );
 	if ( numargs > D_EVENT_MAXARGS ) {
 		eventError = true;
@@ -332,7 +333,7 @@ idEvent *idEvent::Alloc( const idEventDef *evdef, int numargs, va_list args ) {
 idEvent::CopyArgs
 ================
 */
-void idEvent::CopyArgs( const idEventDef *evdef, int numargs, va_list args, int data[ D_EVENT_MAXARGS ] ) {
+void idEvent::CopyArgs( const idEventDef *evdef, int numargs, va_list args, intptr_t data[D_EVENT_MAXARGS] ) {
 	int			i;
 	const char	*format;
 	idEventArg	*arg;
@@ -487,7 +488,7 @@ idEvent::ServiceEvents
 void idEvent::ServiceEvents() {
 	idEvent		*event;
 	int			num;
-	int			args[ D_EVENT_MAXARGS ];
+	intptr_t	args[ D_EVENT_MAXARGS ];
 	int			offset;
 	int			i;
 	int			numargs;
@@ -588,7 +589,7 @@ idEvent::ServiceFastEvents
 void idEvent::ServiceFastEvents() {
 	idEvent	*event;
 	int		num;
-	int			args[ D_EVENT_MAXARGS ];
+	intptr_t	args[ D_EVENT_MAXARGS ];
 	int			offset;
 	int			i;
 	int			numargs;

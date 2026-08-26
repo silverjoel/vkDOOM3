@@ -27,15 +27,20 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
 
 #include "Simd_Generic.h"
 #include "Simd_SSE.h"
+#if defined( _MSC_VER )
+#include <intrin.h>
+#endif
 
 idSIMDProcessor	*	processor = NULL;			// pointer to SIMD processor
 idSIMDProcessor *	generic = NULL;				// pointer to generic SIMD implementation
 idSIMDProcessor *	SIMDProcessor = NULL;
+
+
 
 /*
 ================
@@ -124,32 +129,52 @@ void idSIMD::Shutdown() {
 
 idSIMDProcessor *p_simd;
 idSIMDProcessor *p_generic;
-long baseClocks = 0;
+
+typedef uint64_t TIME_TYPE;
+
+static TIME_TYPE baseClocks = 0;
 
 
-#define TIME_TYPE int
+/*
+================
+ReadSIMDTimeStamp
 
-#pragma warning(disable : 4731)     // frame pointer register 'ebx' modified by inline assembly code
+Serializes execution with CPUID and reads the CPU time stamp counter.
+Works with both Win32 and x64 MSVC builds.
+================
+*/
+static ID_INLINE TIME_TYPE ReadSIMDTimeStamp() {
+#if defined( _MSC_VER )
 
-long saved_ebx = 0;
+	int cpuInfo[4];
 
-#define StartRecordTime( start )			\
-	__asm mov saved_ebx, ebx				\
-	__asm xor eax, eax						\
-	__asm cpuid								\
-	__asm rdtsc								\
-	__asm mov start, eax					\
-	__asm xor eax, eax						\
-	__asm cpuid
+	__cpuid(cpuInfo, 0);
 
-#define StopRecordTime( end )				\
-	__asm xor eax, eax						\
-	__asm cpuid								\
-	__asm rdtsc								\
-	__asm mov end, eax						\
-	__asm mov ebx, saved_ebx				\
-	__asm xor eax, eax						\
-	__asm cpuid
+	const TIME_TYPE ticks =
+		static_cast<TIME_TYPE>(__rdtsc());
+
+	__cpuid(cpuInfo, 0);
+
+	return ticks;
+
+#else
+
+	return static_cast<TIME_TYPE>(
+		idLib::sys->GetClockTicks()
+		);
+
+#endif
+}
+
+#define StartRecordTime( start ) \
+    do {                         \
+        start = ReadSIMDTimeStamp(); \
+    } while ( 0 )
+
+#define StopRecordTime( end ) \
+    do {                      \
+        end = ReadSIMDTimeStamp(); \
+    } while ( 0 )
 
 
 #define GetBest( start, end, best )			\
@@ -163,20 +188,48 @@ long saved_ebx = 0;
 PrintClocks
 ============
 */
-void PrintClocks( char *string, int dataCount, int clocks, int otherClocks = 0 ) {
+void PrintClocks(char* string, int dataCount, TIME_TYPE clocks, TIME_TYPE otherClocks = 0) {
 	int i;
 
-	idLib::Printf( string );
-	for ( i = idStr::LengthWithoutColors(string); i < 48; i++ ) {
+	idLib::Printf(string);
+	for (i = idStr::LengthWithoutColors(string); i < 48; i++) {
 		idLib::Printf(" ");
 	}
-	clocks -= baseClocks;
-	if ( otherClocks && clocks ) {
-		otherClocks -= baseClocks;
-		float p = (float)otherClocks / (float)clocks;
-		idLib::Printf( "c = %4d, clcks = %5d, %.1fX\n", dataCount, clocks, p );
-	} else {
-		idLib::Printf( "c = %4d, clcks = %5d\n", dataCount, clocks );
+	if (clocks > baseClocks) {
+		clocks -= baseClocks;
+	}
+	else {
+		clocks = 0;
+	}
+
+	if (otherClocks && clocks) {
+
+		if (otherClocks > baseClocks) {
+			otherClocks -= baseClocks;
+		}
+		else {
+			otherClocks = 0;
+		}
+
+		const float p =
+			static_cast<float>(otherClocks) /
+			static_cast<float>(clocks);
+
+		idLib::Printf(
+			"c = %4d, clcks = %5llu, %.1fX\n",
+			dataCount,
+			static_cast<unsigned long long>(clocks),
+			p
+		);
+
+	}
+	else {
+
+		idLib::Printf(
+			"c = %4d, clcks = %5llu\n",
+			dataCount,
+			static_cast<unsigned long long>(clocks)
+		);
 	}
 }
 
@@ -186,14 +239,19 @@ GetBaseClocks
 ============
 */
 void GetBaseClocks() {
-	int i, start, end, bestClocks;
+	int i;
+	TIME_TYPE start;
+	TIME_TYPE end;
+	TIME_TYPE bestClocks;
 
 	bestClocks = 0;
-	for ( i = 0; i < NUMTESTS; i++ ) {
-		StartRecordTime( start );
-		StopRecordTime( end );
-		GetBest( start, end, bestClocks );
+
+	for (i = 0; i < NUMTESTS; i++) {
+		StartRecordTime(start);
+		StopRecordTime(end);
+		GetBest(start, end, bestClocks);
 	}
+
 	baseClocks = bestClocks;
 }
 

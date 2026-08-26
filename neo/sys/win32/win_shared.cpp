@@ -792,4 +792,369 @@ Sys_ShutdownSymbols
 void Sys_ShutdownSymbols() {
 	Sym_Shutdown();
 }
+
+#else
+/*
+===============================================================================
+
+	x64 Call Stack
+
+===============================================================================
+*/
+
+#include <dbghelp.h>
+
+static HANDLE x64SymbolProcess = NULL;
+static bool x64SymbolsInitialized = false;
+static SRWLOCK x64SymbolLock = SRWLOCK_INIT;
+
+
+/*
+==================
+Sym_InitLocked
+
+Must be called while x64SymbolLock is held.
+==================
+*/
+static bool Sym_InitLocked() {
+
+	if (x64SymbolsInitialized) {
+		return true;
+	}
+
+	x64SymbolProcess = GetCurrentProcess();
+
+	SymSetOptions(
+		SymGetOptions() |
+		SYMOPT_UNDNAME |
+		SYMOPT_DEFERRED_LOADS
+	);
+
+	if (!SymInitialize(x64SymbolProcess, NULL, TRUE)) {
+		x64SymbolProcess = NULL;
+		return false;
+	}
+
+	x64SymbolsInitialized = true;
+
+	return true;
+}
+
+
+/*
+==================
+Sym_Shutdown
+==================
+*/
+static void Sym_Shutdown() {
+
+	AcquireSRWLockExclusive(&x64SymbolLock);
+
+	if (x64SymbolsInitialized) {
+
+		SymCleanup(x64SymbolProcess);
+
+		x64SymbolsInitialized = false;
+		x64SymbolProcess = NULL;
+	}
+
+	ReleaseSRWLockExclusive(&x64SymbolLock);
+}
+
+
+/*
+==================
+Sym_GetFuncInfo
+==================
+*/
+static void Sym_GetFuncInfo(
+	address_t addr,
+	idStr& module,
+	idStr& funcName) {
+
+	module = "";
+
+	if (addr == 0) {
+		funcName = "0x0000000000000000";
+		return;
+	}
+
+	AcquireSRWLockExclusive(&x64SymbolLock);
+
+	if (Sym_InitLocked()) {
+
+		alignas(SYMBOL_INFO)
+			unsigned char symbolBuffer[
+				sizeof(SYMBOL_INFO) + MAX_SYM_NAME
+			];
+
+		memset(symbolBuffer, 0, sizeof(symbolBuffer));
+
+		SYMBOL_INFO* symbol =
+			reinterpret_cast<SYMBOL_INFO*>(symbolBuffer);
+
+		symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+		symbol->MaxNameLen = MAX_SYM_NAME;
+
+		DWORD64 displacement = 0;
+
+		if (SymFromAddr(
+			x64SymbolProcess,
+			static_cast<DWORD64>(addr),
+			&displacement,
+			symbol)) {
+
+			funcName = symbol->Name;
+
+			// Match the old implementation by removing
+			// the argument list from the function name.
+			for (int i = 0; i < funcName.Length(); i++) {
+
+				if (funcName[i] == '(') {
+					funcName.CapLength(i);
+					break;
+				}
+			}
+
+			IMAGEHLP_MODULE64 moduleInfo;
+			memset(&moduleInfo, 0, sizeof(moduleInfo));
+
+			moduleInfo.SizeOfStruct = sizeof(moduleInfo);
+
+			if (SymGetModuleInfo64(
+				x64SymbolProcess,
+				static_cast<DWORD64>(addr),
+				&moduleInfo)) {
+
+				module = moduleInfo.ModuleName;
+			}
+
+			ReleaseSRWLockExclusive(&x64SymbolLock);
+			return;
+		}
+	}
+
+	ReleaseSRWLockExclusive(&x64SymbolLock);
+
+	char addressString[32];
+
+	sprintf_s(
+		addressString,
+		sizeof(addressString),
+		"0x%016llx",
+		static_cast<unsigned long long>(addr)
+	);
+
+	funcName = addressString;
+}
+
+
+/*
+==================
+Sys_GetCallStack
+==================
+*/
+void Sys_GetCallStack(
+	address_t* callStack,
+	const int callStackSize) {
+
+	if (callStack == NULL || callStackSize <= 0) {
+		return;
+	}
+
+	const ULONG framesToCapture =
+		(callStackSize > 0xFFFF)
+		? 0xFFFF
+		: static_cast<ULONG>(callStackSize);
+
+	void** frames =
+		reinterpret_cast<void**>(
+			_alloca(sizeof(void*) * framesToCapture)
+			);
+
+	/*
+		Skip:
+
+		1. Sys_GetCallStack
+		2. The engine wrapper/caller
+
+		This approximately matches the old x86 implementation,
+		which explicitly walked past two stack frames.
+	*/
+	const USHORT captured =
+		CaptureStackBackTrace(
+			2,
+			framesToCapture,
+			frames,
+			NULL
+		);
+
+	int i = 0;
+
+	for (; i < captured; i++) {
+
+		callStack[i] =
+			reinterpret_cast<address_t>(frames[i]);
+	}
+
+	for (; i < callStackSize; i++) {
+		callStack[i] = 0;
+	}
+}
+
+
+/*
+==================
+Sys_GetCallStackStr
+==================
+*/
+const char* Sys_GetCallStackStr(
+	const address_t* callStack,
+	const int callStackSize) {
+
+	static char string[MAX_STRING_CHARS * 2];
+
+	string[0] = '\0';
+
+	int index = 0;
+
+	for (int i = callStackSize - 1; i >= 0; i--) {
+
+		if (callStack[i] == 0) {
+			continue;
+		}
+
+		idStr module;
+		idStr funcName;
+
+		Sym_GetFuncInfo(
+			callStack[i],
+			module,
+			funcName
+		);
+
+		const size_t remaining =
+			sizeof(string) - index;
+
+		if (remaining <= 1) {
+			break;
+		}
+
+		const int written =
+			sprintf_s(
+				string + index,
+				remaining,
+				" -> %s",
+				funcName.c_str()
+			);
+
+		if (written <= 0) {
+			break;
+		}
+
+		index += written;
+	}
+
+	return string;
+}
+
+
+/*
+==================
+Sys_GetCallStackCurStr
+==================
+*/
+const char* Sys_GetCallStackCurStr(int depth) {
+
+	if (depth <= 0) {
+		return "";
+	}
+
+	address_t* callStack =
+		reinterpret_cast<address_t*>(
+			_alloca(depth * sizeof(address_t))
+			);
+
+	Sys_GetCallStack(
+		callStack,
+		depth
+	);
+
+	return Sys_GetCallStackStr(
+		callStack,
+		depth
+	);
+}
+
+
+/*
+==================
+Sys_GetCallStackCurAddressStr
+==================
+*/
+const char* Sys_GetCallStackCurAddressStr(int depth) {
+
+	static char string[MAX_STRING_CHARS * 2];
+
+	string[0] = '\0';
+
+	if (depth <= 0) {
+		return string;
+	}
+
+	address_t* callStack =
+		reinterpret_cast<address_t*>(
+			_alloca(depth * sizeof(address_t))
+			);
+
+	Sys_GetCallStack(
+		callStack,
+		depth
+	);
+
+	int index = 0;
+
+	for (int i = depth - 1; i >= 0; i--) {
+
+		if (callStack[i] == 0) {
+			continue;
+		}
+
+		const size_t remaining =
+			sizeof(string) - index;
+
+		if (remaining <= 1) {
+			break;
+		}
+
+		const int written =
+			sprintf_s(
+				string + index,
+				remaining,
+				" -> 0x%016llx",
+				static_cast<unsigned long long>(
+					callStack[i]
+					)
+			);
+
+		if (written <= 0) {
+			break;
+		}
+
+		index += written;
+	}
+
+	return string;
+}
+
+
+/*
+==================
+Sys_ShutdownSymbols
+==================
+*/
+void Sys_ShutdownSymbols() {
+	Sym_Shutdown();
+}
 #endif
+
