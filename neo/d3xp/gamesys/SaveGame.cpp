@@ -26,8 +26,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../../framework/DeclFX.h"
 #include "../../framework/DeclSkin.h"
 #include "../../ui/ListGUI.h"
@@ -292,7 +293,12 @@ void idSaveGame::WriteString( const char *string ) {
 	stringHash.Add( hash, stringTable.Num() - 1 );
 
 	WriteInt( curStringTableOffset );
-	curStringTableOffset += ( strlen( string ) + 4 );
+	const size_t stringLength = strlen(string);
+
+	assert(stringLength <= INT_MAX - 4);
+	assert(curStringTableOffset <= INT_MAX - static_cast<int>(stringLength) - 4);
+
+	curStringTableOffset +=	static_cast<int>(stringLength) + 4;
 }
 
 /*

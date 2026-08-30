@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "precompiled.h"
+#pragma hdrstop
+
 #include "../renderer/RenderSystem.h"
 #include "../renderer/RenderWorld.h"
 #include "../sys/sys_localuser.h"
@@ -3547,7 +3548,7 @@ int idGameLocal::GetTargets( const idDict &args, idList< idEntityPtr<idEntity> >
 
 	list.Clear();
 
-	refLength = strlen( ref );
+	refLength = static_cast<int>(strlen(ref));
 	num = args.GetNumKeyVals();
 	for( i = 0; i < num; i++ ) {
 

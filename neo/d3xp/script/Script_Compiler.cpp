@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 
 #define FUNCTION_PRIORITY	2
@@ -2421,7 +2422,7 @@ void idCompiler::ParseEventDef( idTypeDef *returnType, const char *name ) {
 	ExpectToken( "(" );
 
 	format = ev->GetArgFormat();
-	num = strlen( format );
+	num = static_cast<int>(strlen(format));
 	for( i = 0; i < num; i++ ) {
 		expectedType = GetTypeForEventArg( format[ i ] );
 		if ( expectedType == NULL || ( expectedType == &type_void ) ) {
@@ -2588,7 +2589,11 @@ void idCompiler::CompileFile( const char *text, const char *filename, bool toCon
 	memset( &immediate, 0, sizeof( immediate ) );
 
 	parser.SetFlags( LEXFL_ALLOWMULTICHARLITERALS );
-	parser.LoadMemory( text, strlen( text ), filename );
+	const size_t textLength = strlen(text);
+
+	assert(textLength <= INT_MAX);
+
+	parser.LoadMemory( text,	static_cast<int>(textLength), filename	);
 	parserPtr = &parser;
 
 	// unread tokens to include script defines

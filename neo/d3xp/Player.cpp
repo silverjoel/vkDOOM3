@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "precompiled.h"
+#pragma hdrstop
+
 #include "../renderer/RenderSystem.h"
 #include "../renderer/RenderWorld.h"
 #include "../sys/Snapshot.h"
@@ -872,10 +873,10 @@ bool idInventory::Give( idPlayer *owner, const idDict &spawnArgs, const char *st
 		for( pos = value; pos != NULL; pos = end ) {
 			end = strchr( pos, ',' );
 			if ( end ) {
-				len = end - pos;
+				len = static_cast<int>(end - pos);
 				end++;
 			} else {
-				len = strlen( pos );
+				len = static_cast<int>(strlen(pos));
 			}
 
 			idStr weaponName( pos, 0, len );
@@ -1105,7 +1106,7 @@ void idInventory::InitRechargeAmmo(idPlayer *owner) {
 	const idKeyValue *kv = owner->spawnArgs.MatchPrefix( "ammorecharge_" );
 	while( kv ) {
 		idStr key = kv->GetKey();
-		idStr ammoname = key.Right(key.Length()- strlen("ammorecharge_"));
+		idStr ammoname = key.Right(key.Length()- static_cast<int>(strlen("ammorecharge_")));
 		int ammoType = AmmoIndexForAmmoClass(ammoname);
 		rechargeAmmo[ammoType].ammo = (atof(kv->GetValue().c_str())*1000);
 		strcpy(rechargeAmmo[ammoType].ammoName, ammoname);

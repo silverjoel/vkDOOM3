@@ -249,8 +249,24 @@ void idSoundHardware_XAudio2::Init() {
 
 	DWORD outputSampleRate = 44100; // Max( (DWORD)XAUDIO2FX_REVERB_MIN_FRAMERATE, Min( (DWORD)XAUDIO2FX_REVERB_MAX_FRAMERATE, deviceDetails.OutputFormat.Format.nSamplesPerSec ) );
 
-	if ( FAILED( pXAudio2->CreateMasteringVoice( &pMasterVoice, XAUDIO2_DEFAULT_CHANNELS, outputSampleRate, 0, preferredDevice, NULL ) ) ) {
-		idLib::Warning( "Failed to create master voice" );
+	HRESULT hr = pXAudio2->CreateMasteringVoice(
+		&pMasterVoice,
+		XAUDIO2_DEFAULT_CHANNELS,
+		outputSampleRate,
+		0,
+		preferredDevice,
+		NULL
+	);
+
+	if (FAILED(hr)) {
+
+		idLib::Warning(
+			"Failed to create master voice: HRESULT 0x%08X, device %d, sampleRate %u",
+			static_cast<unsigned int>(hr),
+			preferredDevice,
+			static_cast<unsigned int>(outputSampleRate)
+		);
+
 		pXAudio2->Release();
 		pXAudio2 = NULL;
 		return;

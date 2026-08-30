@@ -541,7 +541,7 @@ Sys_ListFiles
 int Sys_ListFiles( const char *directory, const char *extension, idStrList &list ) {
 	idStr		search;
 	struct _finddata_t findinfo;
-	int			findhandle;
+	intptr_t findhandle;
 	int			flag;
 
 	if ( !extension) {
@@ -965,14 +965,18 @@ void Sys_GenerateEvents() {
 
 	// check for console commands
 	s = Sys_ConsoleInput();
-	if ( s ) {
-		char	*b;
-		int		len;
+	if (s) {
+		char* b;
+		const size_t stringLength = strlen(s);
+		assert(stringLength < INT_MAX);
 
-		len = strlen( s ) + 1;
-		b = (char *)Mem_Alloc( len, TAG_EVENTS );
-		strcpy( b, s );
-		Sys_QueEvent( SE_CONSOLE, 0, 0, len, b, 0 );
+		const int len =	static_cast<int>(stringLength) + 1;
+
+		b = static_cast<char*>(Mem_Alloc(len, TAG_EVENTS));
+
+		strcpy(b, s);
+
+		Sys_QueEvent( SE_CONSOLE, 0, 0, len, b, 0);
 	}
 
 	entered = false;
