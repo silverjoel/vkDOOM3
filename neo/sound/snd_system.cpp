@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../framework/precompiled.h"
+#pragma hdrstop
+
 #include "snd_local.h"
 
 idCVar s_noSound( "s_noSound", "0", CVAR_BOOL, "returns NULL for all sounds loaded and does not update the sound rendering" );
@@ -343,6 +344,17 @@ void idSoundSystemLocal::StopAllSounds() {
 	hardware.Update();
 }
 
+#if defined(USE_OPENAL)
+/*
+========================
+idSoundSystemLocal::GetOpenALDevice
+========================
+*/
+void* idSoundSystemLocal::GetOpenALDevice() const
+{
+	return (void*)hardware.GetOpenALDevice();
+}
+#else
 /*
 ========================
 idSoundSystemLocal::GetIXAudio2
@@ -351,6 +363,7 @@ idSoundSystemLocal::GetIXAudio2
 void * idSoundSystemLocal::GetIXAudio2() const {
 	return (void *)hardware.GetIXAudio2();
 }
+#endif
 
 /*
 ========================

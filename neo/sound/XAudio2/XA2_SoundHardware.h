@@ -25,6 +25,11 @@ If you have questions concerning this license or the applicable additional terms
 
 ===========================================================================
 */
+
+#if defined(USE_OPENAL)
+
+#else
+
 #ifndef __XA_SOUNDHARDWARE_H__
 #define __XA_SOUNDHARDWARE_H__
 
@@ -110,4 +115,5 @@ idSoundHardware
 class idSoundHardware : public idSoundHardware_XAudio2 {
 };
 
+#endif
 #endif

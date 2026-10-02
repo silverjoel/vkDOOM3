@@ -55,6 +55,9 @@
     <Filter Include="Renderer\Vulkan">
       <UniqueIdentifier>{23bc9dc4-7f57-4b5a-8d1c-aab407996b2f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Sound\OpenAL">
+      <UniqueIdentifier>{dac146fd-1625-4ea8-9b4a-2f34eaf55d0f}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ui\BindWindow.cpp">
@@ -639,6 +642,15 @@
     <ClCompile Include="renderer\RenderContext.cpp">
       <Filter>Renderer</Filter>
     </ClCompile>
+    <ClCompile Include="sound\OpenAL\AL_SoundHardware.cpp">
+      <Filter>Sound\OpenAL</Filter>
+    </ClCompile>
+    <ClCompile Include="sound\OpenAL\AL_SoundSample.cpp">
+      <Filter>Sound\OpenAL</Filter>
+    </ClCompile>
+    <ClCompile Include="sound\OpenAL\AL_SoundVoice.cpp">
+      <Filter>Sound\OpenAL</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ui\BindWindow.h">
@@ -1090,6 +1102,15 @@
     </ClInclude>
     <ClInclude Include="renderer\RenderContext.h">
       <Filter>Renderer</Filter>
+    </ClInclude>
+    <ClInclude Include="sound\OpenAL\AL_SoundHardware.h">
+      <Filter>Sound\OpenAL</Filter>
+    </ClInclude>
+    <ClInclude Include="sound\OpenAL\AL_SoundSample.h">
+      <Filter>Sound\OpenAL</Filter>
+    </ClInclude>
+    <ClInclude Include="sound\OpenAL\AL_SoundVoice.h">
+      <Filter>Sound\OpenAL</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

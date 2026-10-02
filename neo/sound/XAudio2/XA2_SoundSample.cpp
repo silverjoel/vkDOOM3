@@ -27,8 +27,14 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
+
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
+#if defined(USE_OPENAL)
+
+#else
+
 #include "../snd_local.h"
 
 extern idCVar s_useCompression;
@@ -487,3 +493,5 @@ float idSoundSample_XAudio2::GetAmplitude( int timeMS ) const {
 	}
 	return (float)amplitude[index] / 255.0f;
 }
+
+#endif

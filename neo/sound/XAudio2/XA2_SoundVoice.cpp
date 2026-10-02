@@ -26,8 +26,14 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
+
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
+#if defined(USE_OPENAL)
+
+#else
+
 #include "../snd_local.h"
 
 idCVar s_skipHardwareSets( "s_skipHardwareSets", "0", CVAR_BOOL, "Do all calculation, but skip XA2 calls" );
@@ -491,3 +497,5 @@ void idSoundVoice_XAudio2::OnBufferStart( idSoundSample_XAudio2 * sample, int bu
 
 	SubmitBuffer( nextSample, nextBuffer, 0 );
 }
+
+#endif

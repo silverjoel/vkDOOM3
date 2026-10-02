@@ -27,8 +27,14 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
+
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
+#if defined(USE_OPENAL)
+
+#else
+
 #include "../snd_local.h"
 #include "../../../doomclassic/doom/i_sound.h"
 
@@ -542,3 +548,5 @@ idSoundEngineCallback::OnCriticalError
 void idSoundEngineCallback::OnCriticalError( HRESULT Error ) {
 	soundSystemLocal.SetNeedsRestart();
 }
+
+#endif
