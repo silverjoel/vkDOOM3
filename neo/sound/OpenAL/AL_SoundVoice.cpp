@@ -48,17 +48,20 @@ idSoundVoice_OpenAL::idSoundVoice_OpenAL
 */
 idSoundVoice_OpenAL::idSoundVoice_OpenAL()
 	:
-	triggered( false ),
-	openalSource( 0 ),
-	leadinSample( NULL ),
-	loopingSample( NULL ),
-	formatTag( 0 ),
-	numChannels( 0 ),
-	sampleRate( 0 ),
-	paused( true ),
-	hasVUMeter( false )
+	triggered(false),
+	openalSource(0),
+	openalStreamingOffset(0),
+	leadinSample(NULL),
+	loopingSample(NULL),
+	formatTag(0),
+	numChannels(0),
+	sourceVoiceRate(0),
+	sampleRate(0),
+	hasVUMeter(false),
+	paused(true)
 {
-
+	memset(openalStreamingBuffer, 0, sizeof(openalStreamingBuffer));
+	memset(lastopenalStreamingBuffer, 0, sizeof(lastopenalStreamingBuffer));
 }
 
 /*
@@ -207,11 +210,11 @@ void idSoundVoice_OpenAL::DestroyInternal()
 		{
 			idLib::Printf( "%dms: %i destroyed\n", Sys_Milliseconds(), openalSource );
 		}
+
+		FlushSourceBuffers();
 		
 		alDeleteSources( 1, &openalSource );
 		openalSource = 0;
-		
-		alSourcei( openalSource, AL_BUFFER, 0 );
 		
 		if( openalStreamingBuffer[0] && openalStreamingBuffer[1] && openalStreamingBuffer[2] )
 		{
@@ -381,6 +384,16 @@ int idSoundVoice_OpenAL::SubmitBuffer( idSoundSample_OpenAL* sample, int bufferN
 		alSourcei( openalSource, AL_BUFFER, sample->openalBuffer );
 		alSourcei( openalSource, AL_LOOPING, ( sample == loopingSample && loopingSample != NULL ? AL_TRUE : AL_FALSE ) );
 		
+		if (offset > 0)
+		{
+			alSourcei(openalSource, AL_SAMPLE_OFFSET, offset);
+		}
+
+		if (CheckALErrors() != AL_NO_ERROR)
+		{
+			return 0;
+		}
+
 		return sample->totalBufferSize;
 	}
 	else
@@ -561,10 +574,35 @@ idSoundVoice_OpenAL::FlushSourceBuffers
 */
 void idSoundVoice_OpenAL::FlushSourceBuffers()
 {
-	if( alIsSource( openalSource ) )
+	if (!alIsSource(openalSource))
 	{
-		//pSourceVoice->FlushSourceBuffers();
+		return;
 	}
+
+	alSourceStop(openalSource);
+
+	ALint sourceType = AL_UNDETERMINED;
+	alGetSourcei(openalSource, AL_SOURCE_TYPE, &sourceType);
+
+	if (sourceType == AL_STREAMING)
+	{
+		ALint queued = 0;
+		alGetSourcei(openalSource, AL_BUFFERS_QUEUED, &queued);
+
+		while (queued > 0)
+		{
+			ALuint buffer = 0;
+			alSourceUnqueueBuffers(openalSource, 1, &buffer);
+			queued--;
+		}
+	}
+
+	alSourcei(openalSource, AL_BUFFER, 0);
+	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
+
+	CheckALErrors();
+
+	paused = true;
 }
 
 /*
