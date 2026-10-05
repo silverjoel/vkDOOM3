@@ -31,6 +31,7 @@ If you have questions concerning this license or the applicable additional terms
 #pragma hdrstop
 
 #include "../snd_local.h"
+#include <AL/efx.h>
 
 idCVar s_skipHardwareSets( "s_skipHardwareSets", "0", CVAR_BOOL, "Do all calculation, but skip XA2 calls" );
 idCVar s_debugHardware( "s_debugHardware", "0", CVAR_BOOL, "Print a message any time a hardware voice changes" );
@@ -39,6 +40,46 @@ idCVar s_debugHardware( "s_debugHardware", "0", CVAR_BOOL, "Print a message any 
 static int SYSTEM_SAMPLE_RATE = 44100;
 static float ONE_OVER_SYSTEM_SAMPLE_RATE = 1.0f / SYSTEM_SAMPLE_RATE;
 
+typedef LPALGENFILTERS			openalGenFilters_t;
+typedef LPALDELETEFILTERS		openalDeleteFilters_t;
+typedef LPALFILTERI				openalFilteri_t;
+typedef LPALFILTERF				openalFilterf_t;
+
+static openalGenFilters_t		qalGenFilters = NULL;
+static openalDeleteFilters_t	qalDeleteFilters = NULL;
+static openalFilteri_t			qalFilteri = NULL;
+static openalFilterf_t			qalFilterf = NULL;
+
+// The XAudio2 backend used a low-pass cutoff of 1000 / occlusion Hz.
+// EFX exposes high-frequency gain instead of the same cutoff control, so use
+// a smooth HF attenuation that gives a similar muffling effect without
+// changing the source's overall gain.
+static const float OPENAL_OCCLUSION_HF_ATTENUATION_DB = -16.0f;
+
+static bool OpenAL_LoadEfxFilterProcs()
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if (context == NULL)
+	{
+		return false;
+	}
+	
+	ALCdevice * device = alcGetContextsDevice( context );
+	if (device == NULL || alcIsExtensionPresent( device, ALC_EXT_EFX_NAME) != ALC_TRUE )
+	{
+		return false;
+	}
+	
+	qalGenFilters = reinterpret_cast<openalGenFilters_t>( alGetProcAddress( "alGenFilters" ) );
+	qalDeleteFilters = reinterpret_cast<openalDeleteFilters_t>( alGetProcAddress("alDeleteFilters" ) );
+	qalFilteri = reinterpret_cast<openalFilteri_t>(alGetProcAddress( "alFilteri" ) );
+	qalFilterf = reinterpret_cast<openalFilterf_t>(alGetProcAddress( "alFilterf" ) );
+	
+	return qalGenFilters != NULL &&
+	qalDeleteFilters != NULL &&
+	qalFilteri != NULL &&
+	qalFilterf != NULL;
+}
 
 
 /*
@@ -50,6 +91,7 @@ idSoundVoice_OpenAL::idSoundVoice_OpenAL()
 	:
 	triggered(false),
 	openalSource(0),
+	openalLowPassFilter(0),
 	openalStreamingOffset(0),
 	leadinSample(NULL),
 	loopingSample(NULL),
@@ -204,6 +246,12 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	
 	alSourcef( openalSource, AL_GAIN, 1.0f );
 	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
+
+	// A source may be reused from a previously occluded sound. Start each
+	// allocation with an unfiltered direct path; UpdateHardware() will call
+	// SetOcclusion() before playback starts.
+	idSoundVoice_Base::SetOcclusion(0.0f);
+	ApplyOcclusionFilter();
 	
 	if (CheckALErrors() != AL_NO_ERROR)
 	{
@@ -260,6 +308,114 @@ void idSoundVoice_OpenAL::DestroyInternal()
 		
 		hasVUMeter = false;
 	}
+
+	DestroyOcclusionFilter();
+}
+
+/*
+========================
+idSoundVoice_OpenAL::EnsureOcclusionFilter
+========================
+*/
+bool idSoundVoice_OpenAL::EnsureOcclusionFilter()
+ {
+	if( !OpenAL_LoadEfxFilterProcs() )
+	{
+		return false;
+	}
+	
+	if( openalLowPassFilter != 0 )
+	{
+		return true;
+	}
+	
+	CheckALErrors();
+	qalGenFilters( 1, &openalLowPassFilter );
+	if( CheckALErrors() != AL_NO_ERROR || openalLowPassFilter == 0 )
+	{
+		openalLowPassFilter = 0;
+		return false;
+	}
+	
+	qalFilteri( openalLowPassFilter, AL_FILTER_TYPE, AL_FILTER_LOWPASS );
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAIN, 1.0f );
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAINHF, 1.0f );
+	
+	if( CheckALErrors() != AL_NO_ERROR )
+	{
+		qalDeleteFilters(1, &openalLowPassFilter);
+		openalLowPassFilter = 0;
+		CheckALErrors();
+		return false;
+	}
+	
+	return true;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::ApplyOcclusionFilter
+========================
+*/
+void idSoundVoice_OpenAL::ApplyOcclusionFilter()
+{
+	if( !alIsSource(openalSource) )
+	{
+		return;
+	}
+	
+	const float amount = idMath::ClampFloat( 0.0f, 1.0f, occlusion );
+	
+	if( amount <= 0.0f )
+	{
+		if( openalLowPassFilter != 0 && OpenAL_LoadEfxFilterProcs() )
+		{
+			CheckALErrors();
+			alSourcei( openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL );
+			CheckALErrors();
+		}
+		return;
+	}
+	
+	if( !EnsureOcclusionFilter() )
+	{
+		// EFX is optional. If the current OpenAL device does not expose it,
+		// leave the source unfiltered rather than failing voice playback.
+		return;
+	}
+	
+	const float gainHF = idMath::ClampFloat(
+		0.0f,
+		1.0f,
+		DBtoLinear( OPENAL_OCCLUSION_HF_ATTENUATION_DB * amount ) );
+	
+	CheckALErrors();
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAIN, 1.0f );
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAINHF, gainHF );
+	alSourcei( openalSource, AL_DIRECT_FILTER, openalLowPassFilter );
+	CheckALErrors();
+	}
+
+/*
+========================
+idSoundVoice_OpenAL::DestroyOcclusionFilter
+========================
+*/
+void idSoundVoice_OpenAL::DestroyOcclusionFilter()
+{
+	if( openalLowPassFilter == 0 )
+	{
+		return;
+	}
+	
+	if( OpenAL_LoadEfxFilterProcs() )
+	{
+		CheckALErrors();
+		qalDeleteFilters( 1, &openalLowPassFilter );
+		CheckALErrors();
+	}
+	
+	openalLowPassFilter = 0;
 }
 
 /*

@@ -66,6 +66,12 @@ public:
 		
 		alSourcef( openalSource, AL_PITCH, p );
 	}
+
+	void					SetOcclusion(float f)
+	{
+		idSoundVoice_Base::SetOcclusion(idMath::ClampFloat(0.0f, 1.0f, f));
+		ApplyOcclusionFilter();
+	}
 	
 	bool					Create(const idSoundSample* leadinSample, const idSoundSample* loopingSample);
 	
@@ -110,6 +116,11 @@ private:
 	// Destroy the internal hardware resource
 	void					DestroyInternal();
 	
+	// EFX low-pass filter used to reproduce the XAudio2 occlusion/muffling path.
+	bool					EnsureOcclusionFilter();
+	void					ApplyOcclusionFilter();
+	void					DestroyOcclusionFilter();
+
 	// Helper function used by the initial start as well as for looping a streamed buffer
 	int						RestartAt( int offsetSamples );
 	
@@ -119,9 +130,9 @@ private:
 	// Adjust the voice frequency based on the new sample rate for the buffer
 	void					SetSampleRate( uint32 newSampleRate, uint32 operationSet );
 	
-	//IXAudio2SourceVoice* 	pSourceVoice;
 	bool					triggered;
 	ALuint					openalSource;
+	ALuint					openalLowPassFilter;
 	ALuint					openalStreamingOffset;
 	ALuint					openalStreamingBuffer[3];
 	ALuint					lastopenalStreamingBuffer[3];
