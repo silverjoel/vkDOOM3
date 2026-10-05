@@ -30,6 +30,9 @@ If you have questions concerning this license or the applicable additional terms
 #ifndef __AL_SOUNDVOICE_H__
 #define __AL_SOUNDVOICE_H__
 
+// Reset OpenAL extension/procedure caches when the hardware context changes.
+void OpenAL_ResetContextCaches();
+
 /*
 ================================================
 idSoundVoice_OpenAL

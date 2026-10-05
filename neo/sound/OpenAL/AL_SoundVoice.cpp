@@ -44,6 +44,8 @@ static openalGenFilters_t		qalGenFilters = NULL;
 static openalDeleteFilters_t	qalDeleteFilters = NULL;
 static openalFilteri_t			qalFilteri = NULL;
 static openalFilterf_t			qalFilterf = NULL;
+static ALCcontext*				openalEfxContext = NULL;
+static bool						openalEfxAvailable = false;
 
 // The XAudio2 backend used a low-pass cutoff of 1000 / occlusion Hz.
 // EFX exposes high-frequency gain instead of the same cutoff control, so use
@@ -57,13 +59,30 @@ static const float OPENAL_OCCLUSION_HF_ATTENUATION_DB = -16.0f;
 static ALCcontext * openalSourceRadiusContext = NULL;
 static ALenum openalSourceRadiusEnum = AL_NONE;
 
+/*
+========================
+OpenAL_ResetContextCaches
+========================
+*/
+void OpenAL_ResetContextCaches()
+{
+	openalSourceRadiusContext = NULL;
+	openalSourceRadiusEnum = AL_NONE;
+
+	openalEfxContext = NULL;
+	openalEfxAvailable = false;
+	qalGenFilters = NULL;
+	qalDeleteFilters = NULL;
+	qalFilteri = NULL;
+	qalFilterf = NULL;
+}
+
 static ALenum OpenAL_GetSourceRadiusEnum()
 {
 	ALCcontext * context = alcGetCurrentContext();
 	if( context == NULL )
 	{
-		openalSourceRadiusContext = NULL;
-		openalSourceRadiusEnum = AL_NONE;
+		OpenAL_ResetContextCaches();
 		return AL_NONE;
 	}
 	
@@ -94,26 +113,50 @@ static ALenum OpenAL_GetSourceRadiusEnum()
 static bool OpenAL_LoadEfxFilterProcs()
 {
 	ALCcontext * context = alcGetCurrentContext();
-	if (context == NULL)
+	if( context == NULL )
 	{
+		OpenAL_ResetContextCaches();
 		return false;
 	}
+
+	if (context == openalEfxContext)
+	{
+		return openalEfxAvailable;
+	}
+	
+	openalEfxContext = context;
+	openalEfxAvailable = false;
+	qalGenFilters = NULL;
+	qalDeleteFilters = NULL;
+	qalFilteri = NULL;
+	qalFilterf = NULL;
 	
 	ALCdevice * device = alcGetContextsDevice( context );
-	if (device == NULL || alcIsExtensionPresent( device, ALC_EXT_EFX_NAME) != ALC_TRUE )
+	if (device == NULL || alcIsExtensionPresent(device, ALC_EXT_EFX_NAME) != ALC_TRUE)
 	{
 		return false;
 	}
 	
 	qalGenFilters = reinterpret_cast<openalGenFilters_t>( alGetProcAddress( "alGenFilters" ) );
-	qalDeleteFilters = reinterpret_cast<openalDeleteFilters_t>( alGetProcAddress("alDeleteFilters" ) );
-	qalFilteri = reinterpret_cast<openalFilteri_t>(alGetProcAddress( "alFilteri" ) );
-	qalFilterf = reinterpret_cast<openalFilterf_t>(alGetProcAddress( "alFilterf" ) );
+	qalDeleteFilters = reinterpret_cast<openalDeleteFilters_t>(alGetProcAddress("alDeleteFilters"));
+	qalFilteri = reinterpret_cast<openalFilteri_t>(alGetProcAddress("alFilteri"));
+	qalFilterf = reinterpret_cast<openalFilterf_t>(alGetProcAddress("alFilterf"));
 	
-	return qalGenFilters != NULL &&
-	qalDeleteFilters != NULL &&
-	qalFilteri != NULL &&
-	qalFilterf != NULL;
+	openalEfxAvailable =
+		qalGenFilters != NULL &&
+		qalDeleteFilters != NULL &&
+		qalFilteri != NULL &&
+		qalFilterf != NULL;
+	
+	if (!openalEfxAvailable)
+	{
+		qalGenFilters = NULL;
+		qalDeleteFilters = NULL;
+		qalFilteri = NULL;
+		qalFilterf = NULL;
+	}
+	
+	return openalEfxAvailable;
 }
 
 

@@ -246,6 +246,10 @@ void idSoundHardware_OpenAL::Init()
 		common->FatalError( "idSoundHardware_OpenAL::Init: alcMakeContextCurrent() failed\n" );
 		return;
 	}
+
+	// Extension availability and procedure addresses are context-dependent.
+	// Start every hardware context with fresh OpenAL extension caches.
+	OpenAL_ResetContextCaches();
 	
 	common->Printf( "Done.\n" );
 	
@@ -323,6 +327,11 @@ void idSoundHardware_OpenAL::Shutdown()
 
 	voices.Clear();
 	freeVoices.Clear();
+
+	// Never carry extension state or procedure pointers across a context
+	// destruction/restart, even if the OpenAL implementation later reuses the
+	// same ALCcontext address.
+	OpenAL_ResetContextCaches();
 	
 	if( openalContext != NULL )
 	{
