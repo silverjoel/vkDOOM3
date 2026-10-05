@@ -42,9 +42,6 @@ If you have questions concerning this license or the applicable additional terms
 // This is limited primarily by seeking on the optical drive, secondarily by memory consumption, and tertiarily by CPU time spent mixing
 #define MAX_HARDWARE_CHANNELS 64
 
-// We may need up to 3 buffers for each hardware voice if they are all long sounds
-#define MAX_SOUND_BUFFERS ( MAX_HARDWARE_VOICES * 3 )
-
 // Maximum number of channels in a sound sample
 #define MAX_CHANNELS_PER_VOICE	8
 
@@ -398,9 +395,6 @@ public:
 
 	virtual void			StopAllSounds();
 
-	virtual void			InitStreamBuffers();
-	virtual void			FreeStreamBuffers();
-
 	virtual void*			GetOpenALDevice() const;
 
 	// for the sound level meter window
@@ -434,28 +428,6 @@ public:
 	idSoundSample *			LoadSample( const char * name );
 
 	virtual void			Preload( idPreloadManifest & preload );
-
-	struct bufferContext_t {
-		bufferContext_t() :
-			voice( NULL ),
-			sample( NULL ),
-			bufferNumber( 0 )
-		{ }
-
-		idSoundVoice_OpenAL* voice;
-		idSoundSample_OpenAL* sample;
-
-		int bufferNumber;
-	};
-
-	// Get a stream buffer from the free pool, returns NULL if none are available
-	bufferContext_t *			ObtainStreamBufferContext();
-	void						ReleaseStreamBufferContext( bufferContext_t * p );
-
-	idSysMutex					streamBufferMutex;
-	idStaticList< bufferContext_t *, MAX_SOUND_BUFFERS > freeStreamBufferContexts;
-	idStaticList< bufferContext_t *, MAX_SOUND_BUFFERS > activeStreamBufferContexts;
-	idStaticList< bufferContext_t, MAX_SOUND_BUFFERS > bufferContexts;
 
 	idSoundWorldLocal *			currentSoundWorld;
 	idStaticList<idSoundWorldLocal *, 32>	soundWorlds;

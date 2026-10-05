@@ -123,8 +123,6 @@ void idSoundSystemLocal::Restart() {
 	if ( !s_noSound.GetBool() ) {
 		hardware.Init();
 	}
-
-	InitStreamBuffers();
 }
 
 /*
@@ -143,7 +141,6 @@ void idSoundSystemLocal::Init() {
 
 	if ( !s_noSound.GetBool() ) {
 		hardware.Init();
-		InitStreamBuffers();
 	}
 
 	cmdSystem->AddCommand( "testSound", TestSound_f, 0, "tests a sound", idCmdSystem::ArgCompletion_SoundName );
@@ -156,86 +153,13 @@ void idSoundSystemLocal::Init() {
 
 /*
 ========================
-idSoundSystemLocal::InitStreamBuffers
-========================
-*/
-void idSoundSystemLocal::InitStreamBuffers() {
-	streamBufferMutex.Lock();
-	const bool empty = ( bufferContexts.Num() == 0 );
-	if ( empty ) {
-		bufferContexts.SetNum( MAX_SOUND_BUFFERS );
-		for ( int i = 0; i < MAX_SOUND_BUFFERS; i++ ) {
-			freeStreamBufferContexts.Append( &( bufferContexts[ i ] ) );
-		}
-	} else {
-		for ( int i = 0; i < activeStreamBufferContexts.Num(); i++ ) {
-			freeStreamBufferContexts.Append( activeStreamBufferContexts[ i ] );
-		}
-		activeStreamBufferContexts.Clear();
-	}
-	assert( bufferContexts.Num() == MAX_SOUND_BUFFERS );
-	assert( freeStreamBufferContexts.Num() == MAX_SOUND_BUFFERS );
-	assert( activeStreamBufferContexts.Num() == 0 );
-	streamBufferMutex.Unlock();
-}
-
-/*
-========================
-idSoundSystemLocal::FreeStreamBuffers
-========================
-*/
-void idSoundSystemLocal::FreeStreamBuffers() {
-	streamBufferMutex.Lock();
-	bufferContexts.Clear();
-	freeStreamBufferContexts.Clear();
-	activeStreamBufferContexts.Clear();
-	streamBufferMutex.Unlock();
-}
-
-/*
-========================
 idSoundSystemLocal::Shutdown
 ========================
 */
 void idSoundSystemLocal::Shutdown() {
 	hardware.Shutdown();
-	FreeStreamBuffers();
 	samples.DeleteContents( true );
 	sampleHash.Free();
-}
-
-/*
-========================
-idSoundSystemLocal::ObtainStreamBuffer
-
-Get a stream buffer from the free pool, returns NULL if none are available
-========================
-*/
-idSoundSystemLocal::bufferContext_t * idSoundSystemLocal::ObtainStreamBufferContext() {
-	bufferContext_t * bufferContext = NULL;
-	streamBufferMutex.Lock();
-	if ( freeStreamBufferContexts.Num() != 0 ) {
-		bufferContext = freeStreamBufferContexts[ freeStreamBufferContexts.Num() - 1 ];
-		freeStreamBufferContexts.SetNum( freeStreamBufferContexts.Num() - 1 );
-		activeStreamBufferContexts.Append( bufferContext );
-	}
-	streamBufferMutex.Unlock();
-	return bufferContext;
-}
-
-/*
-========================
-idSoundSystemLocal::ReleaseStreamBuffer
-
-Releases a stream buffer back to the free pool
-========================
-*/
-void idSoundSystemLocal::ReleaseStreamBufferContext( bufferContext_t * bufferContext ) {
-	streamBufferMutex.Lock();
-	if ( activeStreamBufferContexts.Remove( bufferContext ) ) {
-		freeStreamBufferContexts.Append( bufferContext );
-	}
-	streamBufferMutex.Unlock();
 }
 
 /*

@@ -298,10 +298,6 @@ public:
 	// Called before freeing any sound sample resources
 	virtual void			StopAllSounds() = 0;
 
-	// May be called to free memory for level loads
-	virtual void			InitStreamBuffers() = 0;
-	virtual void			FreeStreamBuffers() = 0;
-
 	virtual void*			GetOpenALDevice() const = 0;
 
 	// for the sound level meter window

@@ -127,7 +127,7 @@ private:
 	// near-listener omni-to-directional blend for mono sources.
 	void					ApplySourceRadius();
 
-	// Helper function used by the initial start as well as for looping a streamed buffer
+	// Helper function used by the initial start and lead-in/loop transitions.
 	int						RestartAt( int offsetSamples );
 	
 	// Helper function to submit a buffer
