@@ -1039,46 +1039,126 @@ idSoundVoice_OpenAL::GetAmplitude
 */
 float idSoundVoice_OpenAL::GetAmplitude()
 {
-	// TODO
-	return 1.0f;
-	
-	/*
 	if( !hasVUMeter )
 	{
 		return 1.0f;
 	}
 	
-	float peakLevels[ MAX_CHANNELS_PER_VOICE ];
-	float rmsLevels[ MAX_CHANNELS_PER_VOICE ];
-	
-	XAUDIO2FX_VOLUMEMETER_LEVELS levels;
-	levels.ChannelCount = leadinSample->NumChannels();
-	levels.pPeakLevels = peakLevels;
-	levels.pRMSLevels = rmsLevels;
-	
-	if( levels.ChannelCount > MAX_CHANNELS_PER_VOICE )
-	{
-		levels.ChannelCount = MAX_CHANNELS_PER_VOICE;
-	}
-	
-	if( pSourceVoice->GetEffectParameters( 0, &levels, sizeof( levels ) ) != S_OK )
+	if( !alIsSource( openalSource ) || leadinSample == NULL )
 	{
 		return 0.0f;
 	}
 	
-	if( levels.ChannelCount == 1 )
+	ALint state = AL_INITIAL;
+	ALint sourceType = AL_UNDETERMINED;
+	ALint sampleOffset = 0;
+	
+	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
+	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
+	alGetSourcei( openalSource, AL_SAMPLE_OFFSET, &sampleOffset );
+	
+	if( CheckALErrors() != AL_NO_ERROR )
 	{
-		return rmsLevels[0];
+		return 0.0f;
 	}
 	
-	float rms = 0.0f;
-	for( uint32 i = 0; i < levels.ChannelCount; i++ )
+	// A stopped or paused voice is not currently producing audible output.
+	if( state != AL_PLAYING )
 	{
-		rms += rmsLevels[i];
+		return 0.0f;
 	}
 	
-	return rms / ( float )levels.ChannelCount;
-	*/
+	idSoundSample_OpenAL* currentSample = leadinSample;
+	int currentSampleOffset = Max( 0, sampleOffset );
+	
+	if( sourceType == AL_STATIC )
+	{
+		ALint currentBuffer = 0;
+		alGetSourcei( openalSource, AL_BUFFER, &currentBuffer );
+		if( CheckALErrors() != AL_NO_ERROR )
+		{
+			return 0.0f;
+		}
+
+		if( loopingSample != NULL &&
+			loopingSample != leadinSample &&
+			(ALuint)currentBuffer == loopingSample->openalBuffer )
+		{
+			currentSample = loopingSample;
+		}
+	}
+	else if( sourceType == AL_STREAMING )
+	{
+		// The static lead-in + static loop implementation uses a two-buffer
+		// OpenAL queue. AL_SAMPLE_OFFSET is relative to the beginning of the
+		// currently queued buffers, so use the queue size to determine whether
+		// the lead-in has already been removed by Update().
+		const bool queuedLeadinAndLoop =
+		loopingSample != NULL &&
+		loopingSample != leadinSample &&
+		leadinSample->openalBuffer != 0 &&
+		loopingSample->openalBuffer != 0 &&
+		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
+		leadinSample->SampleRate() == loopingSample->SampleRate();
+		
+		if( !queuedLeadinAndLoop )
+		 {
+			// The legacy CPU streaming fallback does not currently retain
+			// enough source-sample position state for an accurate envelope
+			// lookup. Preserve the old non-flickering fallback rather than
+			// reporting a false zero amplitude.
+			return 1.0f;
+		}
+		
+		ALint queuedBuffers = 0;
+		alGetSourcei( openalSource, AL_BUFFERS_QUEUED, &queuedBuffers );
+		if( CheckALErrors() != AL_NO_ERROR || queuedBuffers <= 0 )
+		{
+			return 0.0f;
+		}
+		
+		if( queuedBuffers == 1 )
+		{
+			// Update() has removed the processed lead-in, leaving only the
+			// looping buffer in the queue.
+			currentSample = loopingSample;
+		}
+		else if( leadinSample->buffers.Num() > 0 )
+		{
+			const int leadinBufferSamples =
+			leadinSample->buffers[leadinSample->buffers.Num() - 1].numSamples;
+			
+			if( currentSampleOffset >= leadinBufferSamples )
+			{
+				currentSampleOffset -= leadinBufferSamples;
+				currentSample = loopingSample;
+			}
+		}
+	}
+	else
+	{
+		return 0.0f;
+	}
+	
+	if( currentSample == NULL )
+	{
+		return 0.0f;
+	}
+	
+	// Generated samples normally carry a precomputed 60 Hz amplitude envelope.
+	// Raw WAVs may not have a matching .amp file; in that case retaining 1.0f
+	// is preferable to making an audible sound appear silent to the game.
+	if( currentSample->IsDefault() || currentSample->amplitude.Num() == 0 )
+	{
+		return 1.0f;
+	}
+	
+	const int relativeSample =
+	Max( 0, currentSampleOffset - currentSample->playBegin );
+	const int timeMS =
+	SamplesToMsec( relativeSample, currentSample->SampleRate() );
+	
+	return currentSample->GetAmplitude( timeMS );
 }
 
 /*
