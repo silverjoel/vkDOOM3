@@ -149,6 +149,16 @@ public:
 	ALenum			GetOpenALBufferFormat() const;
 	
 	void			CreateOpenALBuffer();
+
+	// OpenAL object names are owned by the current context. A sound restart
+	// destroys that context, so invalidate the old name and rebuild it from
+	// the resident CPU sample data after the new context is created.
+	void			InvalidateOpenALBuffer()
+	{
+		openalBuffer = 0;
+	}
+
+	void			RecreateOpenALBuffer();
 	
 protected:
 	friend class idSoundHardware_OpenAL;
@@ -199,6 +209,7 @@ protected:
 	
 	// OpenAL buffer that contains all buffers
 	ALuint			openalBuffer;
+	bool			openalDataDecoded;
 	
 	int				playBegin;
 	int				playLength;

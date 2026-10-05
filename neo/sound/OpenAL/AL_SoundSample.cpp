@@ -85,6 +85,7 @@ idSoundSample_OpenAL::idSoundSample_OpenAL()
 	lastPlayedTime = 0;
 	
 	openalBuffer = 0;
+	openalDataDecoded = false;
 }
 
 /*
@@ -281,6 +282,11 @@ void idSoundSample_OpenAL::LoadResource()
 
 void idSoundSample_OpenAL::CreateOpenALBuffer()
 {
+	if (!loaded || buffers.Num() == 0)
+	{
+		return;
+	}
+
 	// build OpenAL buffer
 	CheckALErrors();
 	alGenBuffers( 1, &openalBuffer );
@@ -299,20 +305,27 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		
 		if( format.basic.formatTag == idWaveFile::FORMAT_ADPCM )
 		{
-			// RB: decode idWaveFile::FORMAT_ADPCM to idWaveFile::FORMAT_PCM
+			// Decode ADPCM only once. The decoder replaces the compressed CPU
+			// buffer with 16-bit PCM, which can then be uploaded again after an
+			// OpenAL context restart without decoding the PCM a second time.
+			if (!openalDataDecoded)
+			{
+				buffer = buffers[0].buffer;
+				bufferSize = buffers[0].bufferSize;
+				
+				if (MS_ADPCM_decode((uint8**)&buffer, &bufferSize) < 0)
+				{
+					common->Error("idSoundSample_OpenAL::CreateOpenALBuffer: could not decode ADPCM '%s' to 16 bit format", GetName());
+				}
+				
+				buffers[0].buffer = buffer;
+				buffers[0].bufferSize = bufferSize;
+				totalBufferSize = bufferSize;
+				openalDataDecoded = true;
+			}
 			
 			buffer = buffers[0].buffer;
 			bufferSize = buffers[0].bufferSize;
-			
-			if( MS_ADPCM_decode( ( uint8** ) &buffer, &bufferSize ) < 0 )
-			{
-				common->Error( "idSoundSample_OpenAL::CreateOpenALBuffer: could not decode ADPCM '%s' to 16 bit format", GetName() );
-			}
-			
-			buffers[0].buffer = buffer;
-			buffers[0].bufferSize = bufferSize;
-			
-			totalBufferSize = bufferSize;
 		}
 		else if( format.basic.formatTag == idWaveFile::FORMAT_XMA2 )
 		{
@@ -360,6 +373,23 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 			common->Error( "idSoundSample_OpenAL::CreateOpenALBuffer: error loading data into OpenAL hardware buffer" );
 		}
 	}
+}
+
+/*
+========================
+idSoundSample_OpenAL::RecreateOpenALBuffer
+========================
+*/
+void idSoundSample_OpenAL::RecreateOpenALBuffer()
+{
+	if (!loaded || buffers.Num() == 0)
+	{
+		openalBuffer = 0;
+		return;
+	}
+	
+	openalBuffer = 0;
+	CreateOpenALBuffer();
 }
 
 /*
@@ -542,6 +572,7 @@ idSoundSample_OpenAL::MakeDefault
 void idSoundSample_OpenAL::MakeDefault()
 {
 	FreeData();
+	openalDataDecoded = false;
 	
 	static const int DEFAULT_NUM_SAMPLES = 4096;
 	
@@ -627,6 +658,7 @@ void idSoundSample_OpenAL::FreeData()
 	totalBufferSize = 0;
 	playBegin = 0;
 	playLength = 0;
+	openalDataDecoded = false;
 	
 	if( openalBuffer != 0 && alIsBuffer( openalBuffer ) )
 	{
@@ -642,6 +674,10 @@ void idSoundSample_OpenAL::FreeData()
 			openalBuffer = 0;
 		}
 	}
+
+	// Always clear the cached name. It may refer to an object from a context
+	// that has already been destroyed.
+	openalBuffer = 0;
 }
 
 /*

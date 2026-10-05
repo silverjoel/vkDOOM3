@@ -119,9 +119,28 @@ void idSoundSystemLocal::Restart() {
 	}
 	// Shutdown sound hardware
 	hardware.Shutdown();
+
+	// OpenAL buffer names are local to the context that was just destroyed.
+	// Keep the CPU sample data, but discard every stale hardware object name.
+	for (int i = 0; i < samples.Num(); i++) 
+	{
+		samples[i]->InvalidateOpenALBuffer();
+	}
+
 	// Reinitialize sound hardware
-	if ( !s_noSound.GetBool() ) {
+	if ( !s_noSound.GetBool() ) 
+	{
 		hardware.Init();
+		// Re-upload all resident samples into the new OpenAL context. ADPCM
+		// samples retain their already-decoded PCM data, so this does not
+		// perform a second decode.
+		for (int i = 0; i < samples.Num(); i++)
+		{
+			if (samples[i]->IsLoaded())
+			{
+				samples[i]->RecreateOpenALBuffer();
+			}
+		}
 	}
 }
 
@@ -158,6 +177,14 @@ idSoundSystemLocal::Shutdown
 */
 void idSoundSystemLocal::Shutdown() {
 	hardware.Shutdown();
+
+	// The OpenAL context is gone, so these numeric names are no longer valid.
+	// Clear them before sample destructors call FreeData().
+	for (int i = 0; i < samples.Num(); i++) 
+	{
+		samples[i]->InvalidateOpenALBuffer();
+	}
+
 	samples.DeleteContents( true );
 	sampleHash.Free();
 }
