@@ -81,13 +81,14 @@ idSoundVoice_OpenAL::CompatibleFormat
 */
 bool idSoundVoice_OpenAL::CompatibleFormat( idSoundSample_OpenAL* s )
 {
-	if( alIsSource( openalSource ) )
+	if (s == NULL)
 	{
-		// If this voice has never been allocated, then it's compatible with everything
-		return true;
+		return false;
 	}
-	
-	return false;
+
+	// OpenAL sources are not tied to a PCM format the way XAudio2 source
+	// voices are. A stopped source can therefore be reused for any sample.
+	return !IsPlaying();
 }
 
 /*
@@ -95,13 +96,18 @@ bool idSoundVoice_OpenAL::CompatibleFormat( idSoundSample_OpenAL* s )
 idSoundVoice_OpenAL::Create
 ========================
 */
-void idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSoundSample* loopingSample_ )
+bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSoundSample* loopingSample_ )
 {
-	if( IsPlaying() )
+	if (IsPlaying())
 	{
-		// This should never hit
+		// AllocateVoice() should only hand us a free voice. Be defensive in
+		// case the bookkeeping ever gets out of sync.
 		Stop();
-		return;
+		
+		if (IsPlaying())
+		{
+			return false;
+		}
 	}
 	
 	triggered = true;
@@ -111,25 +117,26 @@ void idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	
 	if( alIsSource( openalSource ) && CompatibleFormat( leadinSample ) )
 	{
-		sampleRate = leadinSample->format.basic.samplesPerSec;
+		// A reused OpenAL source may still have an old static buffer or queue
+		// attached. Clear it before configuring the new sample.
+		FlushSourceBuffers();
 	}
 	else
 	{
 		DestroyInternal();
-		formatTag = leadinSample->format.basic.formatTag;
-		numChannels = leadinSample->format.basic.numChannels;
-		sampleRate = leadinSample->format.basic.samplesPerSec;
-		
-		//soundSystemLocal.hardware.pXAudio2->CreateSourceVoice( &pSourceVoice, ( const WAVEFORMATEX* )&leadinSample->format, XAUDIO2_VOICE_USEFILTER, 4.0f, &streamContext );
-		
 		CheckALErrors();
 		
+		openalSource = 0;
+
 		alGenSources( 1, &openalSource );
-		if( CheckALErrors() != AL_NO_ERROR )
-			//if( pSourceVoice == NULL )
+
+		if (CheckALErrors() != AL_NO_ERROR || !alIsSource(openalSource))
 		{
-			// If this hits, then we are most likely passing an invalid sample format, which should have been caught by the loader (and the sample defaulted)
-			return;
+			openalSource = 0;
+			triggered = false;
+			leadinSample = NULL;
+			loopingSample = NULL;
+			return false;
 		}
 		
 		alSourcef( openalSource, AL_ROLLOFF_FACTOR, 0.0f );
@@ -184,17 +191,28 @@ void idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		}
 	}
 	
+	// Keep these fields current even when an existing OpenAL source is reused.
+	formatTag = leadinSample->format.basic.formatTag;
+	numChannels = leadinSample->format.basic.numChannels;
+	sampleRate = leadinSample->format.basic.samplesPerSec;
 	sourceVoiceRate = sampleRate;
-	//pSourceVoice->SetSourceSampleRate( sampleRate );
-	//pSourceVoice->SetVolume( 0.0f );
+
+	CheckALErrors();
 	
 	alSourcei( openalSource, AL_SOURCE_RELATIVE, AL_TRUE );
 	alSource3f( openalSource, AL_POSITION, 0.0f, 0.0f, 0.0f );
 	
-	// RB: FIXME 0.0f ?
 	alSourcef( openalSource, AL_GAIN, 1.0f );
+	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
 	
-	//OnBufferStart( leadinSample, 0 );
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		DestroyInternal();
+		return false;
+	}
+	
+	paused = true;
+	return true;
 }
 
 /*
@@ -312,8 +330,6 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 	{
 		return;
 	}
-	
-	RestartAt( offsetSamples );
 
 	if (RestartAt(offsetSamples) <= 0)
 	{
@@ -341,70 +357,75 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 	idSoundSample_OpenAL* sample = leadinSample;
 	if( offsetSamples >= leadinSample->playLength )
 	{
+		if (loopingSample == NULL || loopingSample->playLength <= 0)
+		{
+			return 0;
+		}
+		
 		if (loopingSample == leadinSample)
 		{
 			offsetSamples %= loopingSample->playLength;
 		}
-		else if (loopingSample->SampleRate() == leadinSample->SampleRate())
+		else if( loopingSample->SampleRate() == leadinSample->SampleRate() )
 		{
 			// offsetSamples is measured from the start of the lead-in.
-			offsetSamples = (offsetSamples - leadinSample->playLength) % loopingSample->playLength;
+			offsetSamples = ( offsetSamples - leadinSample->playLength ) % loopingSample->playLength;
 		}
 		else
 		{
 			// Convert through time when the lead-in and loop use different
 			// sample rates.
-			const int elapsedMS = SamplesToMsec(offsetSamples, leadinSample->SampleRate());
-			const int loopElapsedMS = Max(0, elapsedMS - leadinSample->LengthInMsec());
-			offsetSamples = MsecToSamples(loopElapsedMS, loopingSample->SampleRate());
+			const int elapsedMS = SamplesToMsec( offsetSamples, leadinSample->SampleRate() );
+			const int loopElapsedMS = Max( 0, elapsedMS - leadinSample->LengthInMsec() );
+			offsetSamples = MsecToSamples( loopElapsedMS, loopingSample->SampleRate() );
 			offsetSamples %= loopingSample->playLength;
 		}
-			sample = loopingSample;
-		}
-		else
-		{
-			return 0;
-		}
+
+		sample = loopingSample;
 	}
 	
 	// A distinct lead-in followed by a loop is best represented as a two-buffer
 	// OpenAL queue.  Start with looping disabled; Update() removes the processed
 	// lead-in and enables AL_LOOPING once only the loop buffer remains.
 	const bool queueLeadinAndLoop =
-	sample == leadinSample &&
-	loopingSample != NULL &&
-	loopingSample != leadinSample &&
-	leadinSample->openalBuffer != 0 &&
-	loopingSample->openalBuffer != 0 &&
-	leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
-	leadinSample->SampleRate() == loopingSample->SampleRate();
+		sample == leadinSample &&
+		loopingSample != NULL &&
+		loopingSample != leadinSample &&
+		leadinSample->openalBuffer != 0 &&
+		loopingSample->openalBuffer != 0 &&
+		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
+		leadinSample->SampleRate() == loopingSample->SampleRate();
 
-	if (queueLeadinAndLoop)
+	if ( queueLeadinAndLoop )
 	{
 		FlushSourceBuffers();
 	
-		ALuint queuedBuffers[2] = {	leadinSample->openalBuffer, loopingSample->openalBuffer	 };
-	
+		ALuint queuedBuffers[2] =
+		{
+			leadinSample->openalBuffer,
+			loopingSample->openalBuffer
+		};
+
 		CheckALErrors();
-		alSourcei(openalSource, AL_LOOPING, AL_FALSE);
-		alSourceQueueBuffers(openalSource, 2, queuedBuffers);
+		alSourcei( openalSource, AL_LOOPING, AL_FALSE );
+		alSourceQueueBuffers( openalSource, 2, queuedBuffers );
 	
 		// For a queued source AL_SAMPLE_OFFSET is relative to the beginning
 		// of the complete queue, so an offset inside the lead-in can be
 		// applied directly here.
 		const int queueOffset = leadinSample->playBegin + offsetSamples;
-		if (queueOffset > 0)
+		if ( queueOffset > 0 )
 		{
-			alSourcei(openalSource, AL_SAMPLE_OFFSET, queueOffset);
+			alSourcei( openalSource, AL_SAMPLE_OFFSET, queueOffset );
 		}
 	
-		if (CheckALErrors() != AL_NO_ERROR)
+		if ( CheckALErrors() != AL_NO_ERROR )
 		{
 			FlushSourceBuffers();
 			return 0;
 		}
 	
-		return Max(1, leadinSample->totalBufferSize);
+		return Max( 1, leadinSample->totalBufferSize );
 	}
 
 	int previousNumSamples = 0;
@@ -690,12 +711,12 @@ bool idSoundVoice_OpenAL::IsPlaying()
 	
 	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
 	
-	return ( state == AL_PLAYING );
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		return false;
+	}
 	
-	//XAUDIO2_VOICE_STATE state;
-	//pSourceVoice->GetState( &state );
-	
-	//return ( state.BuffersQueued != 0 );
+	return (state == AL_PLAYING || state == AL_PAUSED);
 }
 
 /*

@@ -350,7 +350,11 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 	}
 	if( voice != NULL )
 	{
-		voice->Create( leadinSample, loopingSample );
+		if (!voice->Create(leadinSample, loopingSample))
+		{
+			idLib::Warning("OpenAL failed to create voice for %s", leadinSample->GetName());
+			return NULL;
+		}
 		freeVoices.Remove( voice );
 		return voice;
 	}

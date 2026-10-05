@@ -63,7 +63,7 @@ public:
 		alSourcef( openalSource, AL_PITCH, p );
 	}
 	
-	void					Create( const idSoundSample* leadinSample, const idSoundSample* loopingSample );
+	bool					Create(const idSoundSample* leadinSample, const idSoundSample* loopingSample);
 	
 	// Start playing at a particular point in the buffer.  Does an Update() too
 	void					Start( int offsetMS, int ssFlags );
