@@ -156,9 +156,6 @@
     <ClCompile Include="sound\snd_world.cpp" />
     <ClCompile Include="sound\SoundVoice.cpp" />
     <ClCompile Include="sound\WaveFile.cpp" />
-    <ClCompile Include="sound\XAudio2\XA2_SoundHardware.cpp" />
-    <ClCompile Include="sound\XAudio2\XA2_SoundSample.cpp" />
-    <ClCompile Include="sound\XAudio2\XA2_SoundVoice.cpp" />
     <ClCompile Include="swf\SWF_Bitstream.cpp" />
     <ClCompile Include="swf\SWF_Dictionary.cpp" />
     <ClCompile Include="swf\SWF_Events.cpp" />
@@ -323,9 +320,6 @@
     <ClInclude Include="sound\sound.h" />
     <ClInclude Include="sound\SoundVoice.h" />
     <ClInclude Include="sound\WaveFile.h" />
-    <ClInclude Include="sound\XAudio2\XA2_SoundHardware.h" />
-    <ClInclude Include="sound\XAudio2\XA2_SoundSample.h" />
-    <ClInclude Include="sound\XAudio2\XA2_SoundVoice.h" />
     <ClInclude Include="swf\SWF.h" />
     <ClInclude Include="swf\SWF_Bitstream.h" />
     <ClInclude Include="swf\SWF_Enums.h" />

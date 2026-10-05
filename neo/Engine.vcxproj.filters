@@ -16,9 +16,6 @@
     <Filter Include="Sound">
       <UniqueIdentifier>{75ecf798-225f-4008-8ef3-bef613a3a6a5}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Sound\XAudio2">
-      <UniqueIdentifier>{29ed427d-5891-4883-a093-ea03db376e5f}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Renderer">
       <UniqueIdentifier>{5c2294a1-be44-4abc-9d97-3f3fdff10082}</UniqueIdentifier>
     </Filter>
@@ -293,15 +290,6 @@
     </ClCompile>
     <ClCompile Include="sound\WaveFile.cpp">
       <Filter>Sound</Filter>
-    </ClCompile>
-    <ClCompile Include="sound\XAudio2\XA2_SoundHardware.cpp">
-      <Filter>Sound\XAudio2</Filter>
-    </ClCompile>
-    <ClCompile Include="sound\XAudio2\XA2_SoundSample.cpp">
-      <Filter>Sound\XAudio2</Filter>
-    </ClCompile>
-    <ClCompile Include="sound\XAudio2\XA2_SoundVoice.cpp">
-      <Filter>Sound\XAudio2</Filter>
     </ClCompile>
     <ClCompile Include="renderer\BinaryImage.cpp">
       <Filter>Renderer</Filter>
@@ -844,15 +832,6 @@
     </ClInclude>
     <ClInclude Include="sound\WaveFile.h">
       <Filter>Sound</Filter>
-    </ClInclude>
-    <ClInclude Include="sound\XAudio2\XA2_SoundHardware.h">
-      <Filter>Sound\XAudio2</Filter>
-    </ClInclude>
-    <ClInclude Include="sound\XAudio2\XA2_SoundSample.h">
-      <Filter>Sound\XAudio2</Filter>
-    </ClInclude>
-    <ClInclude Include="sound\XAudio2\XA2_SoundVoice.h">
-      <Filter>Sound\XAudio2</Filter>
     </ClInclude>
     <ClInclude Include="renderer\BinaryImage.h">
       <Filter>Renderer</Filter>
