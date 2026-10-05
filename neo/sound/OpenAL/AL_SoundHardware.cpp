@@ -183,9 +183,22 @@ void idSoundHardware_OpenAL::Init()
 	}
 	
 	openalContext = alcCreateContext( openalDevice, NULL );
-	if( alcMakeContextCurrent( openalContext ) == 0 )
+
+	if( openalContext == NULL )
 	{
-		common->FatalError( "idSoundHardware_OpenAL::Init: alcMakeContextCurrent( %p) failed\n", openalContext );
+		alcCloseDevice( openalDevice );
+		openalDevice = NULL;
+		common->FatalError( "idSoundHardware_OpenAL::Init: alcCreateContext() failed\n" );
+		return;
+	}
+	
+	if( alcMakeContextCurrent( openalContext ) == ALC_FALSE )
+	{
+		alcDestroyContext( openalContext );
+		openalContext = NULL;
+		alcCloseDevice( openalDevice );
+		openalDevice = NULL;
+		common->FatalError( "idSoundHardware_OpenAL::Init: alcMakeContextCurrent() failed\n" );
 		return;
 	}
 	
@@ -277,6 +290,16 @@ idSoundHardware_OpenAL::Shutdown
 */
 void idSoundHardware_OpenAL::Shutdown()
 {
+	// All OpenAL sources and buffers must be released while this context is
+	// still valid and current.
+	if( openalContext != NULL && alcGetCurrentContext() != openalContext )
+	{
+		if( alcMakeContextCurrent( openalContext ) == ALC_FALSE )
+		{
+			idLib::Warning( "idSoundHardware_OpenAL::Shutdown: could not make OpenAL context current" );
+		}
+	}
+
 	for( int i = 0; i < voices.Num(); i++ )
 	{
 		voices[ i ].DestroyInternal();
@@ -285,32 +308,29 @@ void idSoundHardware_OpenAL::Shutdown()
 	freeVoices.Clear();
 	zombieVoices.Clear();
 	
-	alcMakeContextCurrent( NULL );
-	
-	alcDestroyContext( openalContext );
-	openalContext = NULL;
-	
-	alcCloseDevice( openalDevice );
-	openalDevice = NULL;
-	
-	
 	// ---------------------
-	// Shutdown the Doom classic sound system.
+	// Shutdown the Doom classic sound system while the OpenAL context is
+	// still current. I_ShutdownSoundHardware() deletes its OpenAL sources
+	// and buffers.
 	// ---------------------
 	I_ShutdownSoundHardware();
 	
-	/*
-	if( vuMeterRMS != NULL )
+	if( openalContext != NULL )
 	{
-		console->DestroyGraph( vuMeterRMS );
-		vuMeterRMS = NULL;
+		if( alcGetCurrentContext() == openalContext )
+		{
+			alcMakeContextCurrent(NULL);
+		}
+		
+		alcDestroyContext( openalContext );
+		openalContext = NULL;
 	}
-	if( vuMeterPeak != NULL )
+	
+	if( openalDevice != NULL )
 	{
-		console->DestroyGraph( vuMeterPeak );
-		vuMeterPeak = NULL;
+		alcCloseDevice( openalDevice );
+		openalDevice = NULL;
 	}
-	*/
 }
 
 /*
