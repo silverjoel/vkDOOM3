@@ -26,10 +26,9 @@ If you have questions concerning this license or the applicable additional terms
 
 ===========================================================================
 */
+
 #ifndef __AL_SOUNDVOICE_H__
 #define __AL_SOUNDVOICE_H__
-
-static const int MAX_QUEUED_BUFFERS = 3;
 
 /*
 ================================================
@@ -140,12 +139,8 @@ private:
 	// Adjust the voice frequency based on the new sample rate for the buffer
 	void					SetSampleRate( uint32 newSampleRate, uint32 operationSet );
 	
-	bool					triggered;
 	ALuint					openalSource;
 	ALuint					openalLowPassFilter;
-	ALuint					openalStreamingOffset;
-	ALuint					openalStreamingBuffer[3];
-	ALuint					lastopenalStreamingBuffer[3];
 	
 	idSoundSample_OpenAL*	leadinSample;
 	idSoundSample_OpenAL*	loopingSample;
