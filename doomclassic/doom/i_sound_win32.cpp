@@ -691,9 +691,67 @@ void I_ShutdownSoundHardware()
 	}
 
 	// Delete OpenAL buffers for all sounds
-	for (int i = 0; i < NUMSFX; i++) {
-		alDeleteBuffers(1, &alBuffers[i]);
+	for (int i = 0; i < NUMSFX; i++) 
+	{
+		if (alBuffers[i]) 
+		{
+			alDeleteBuffers(1, &alBuffers[i]);
+			alBuffers[i] = 0;
+			
+		}
 	}
+}
+
+/*
+======================
+I_InvalidateSoundHardware
+
+Called when the owning OpenAL context cannot be made current during
+shutdown. The context will reclaim its AL objects when it is destroyed,
+so only clear Classic Doom's cached handles and CPU-side music state here.
+No OpenAL calls are made from this path.
+======================
+*/
+void I_InvalidateSoundHardware()
+{
+	soundHardwareInitialized = false;
+
+	for (int i = 0; i < NUM_SOUNDBUFFERS; ++i) {
+		activeSound_t* sound = &activeSounds[i];
+		sound->alSourceVoice = 0;
+		sound->id = 0;
+		sound->valid = 0;
+		sound->start = 0;
+		sound->player = -1;
+		sound->localSound = false;
+		sound->originator = NULL;
+
+	}
+
+	for (int i = 0; i < NUMSFX; ++i) {
+		alBuffers[i] = 0;
+
+	}
+
+	alMusicSourceVoice = 0;
+	alMusicBuffer = 0;
+
+	if (musicBuffer) {
+		free(musicBuffer);
+		musicBuffer = NULL;
+
+	}
+
+	if (Music_initialized) {
+		Timidity_Shutdown();
+
+	}
+
+	doomMusic = NULL;
+	totalBufferSize = 0;
+	waitingForMusic = false;
+	musicReady = false;
+	Music_initialized = false;
 }
 
 /*
@@ -754,7 +812,7 @@ void I_InitSound()
 			else {
 				// Previously loaded already?
 				S_sfx[i].data = S_sfx[i].link->data;
-				lengths[i] = lengths[(S_sfx[i].link - S_sfx) / sizeof(sfxinfo_t)];
+				lengths[i] = lengths[S_sfx[i].link - S_sfx];
 			}
 			if (S_sfx[i].data) {
 				alBufferData(alBuffers[i], SFX_SAMPLETYPE, (byte*)S_sfx[i].data, lengths[i], SFX_RATE);

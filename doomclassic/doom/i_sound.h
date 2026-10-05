@@ -46,6 +46,7 @@ extern char* sndserver_filename;
 // Init at program start...
 void I_InitSound();
 void I_InitSoundHardware( int numOutputChannels_, int channelMask );
+void I_InvalidateSoundHardware();
 
 // ... update sound buffer and audio device at runtime...
 void I_UpdateSound(void);

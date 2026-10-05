@@ -117,6 +117,10 @@ private:
 	
 	// Destroy the internal hardware resource
 	void					DestroyInternal();
+
+	// Clear cached AL object names without issuing AL calls. Used only when
+	// the owning context cannot be made current during hardware shutdown.
+	void					InvalidateContextObjects();
 	
 	// EFX low-pass filter used to reproduce the XAudio2 occlusion/muffling path.
 	bool					EnsureOcclusionFilter();

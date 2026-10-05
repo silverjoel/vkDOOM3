@@ -289,7 +289,7 @@ idSoundVoice_OpenAL::DestroyInternal
 */
 void idSoundVoice_OpenAL::DestroyInternal()
 {
-	if( alIsSource( openalSource ) )
+	if (openalSource != 0 && alIsSource(openalSource))
 	{
 		if( s_debugHardware.GetBool() )
 		{
@@ -299,11 +299,29 @@ void idSoundVoice_OpenAL::DestroyInternal()
 		FlushSourceBuffers();
 		
 		alDeleteSources( 1, &openalSource );
-		openalSource = 0;
-		trackAmplitude = false;
 	}
 
+	openalSource = 0;
+	trackAmplitude = false;
+
 	DestroyOcclusionFilter();
+}
+
+/*
+========================
+idSoundVoice_OpenAL::InvalidateContextObjects
+========================
+*/
+void idSoundVoice_OpenAL::InvalidateContextObjects()
+{
+	openalSource = 0;
+	openalLowPassFilter = 0;
+	leadinSample = NULL;
+	loopingSample = NULL;
+	numChannels = 0;
+	sampleRate = 0;
+	trackAmplitude = false;
+	paused = true;
 }
 
 /*

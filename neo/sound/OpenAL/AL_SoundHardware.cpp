@@ -277,31 +277,56 @@ void idSoundHardware_OpenAL::Shutdown()
 {
 	// All OpenAL sources and buffers must be released while this context is
 	// still valid and current.
-	if( openalContext != NULL && alcGetCurrentContext() != openalContext )
-	{
-		if( alcMakeContextCurrent( openalContext ) == ALC_FALSE )
-		{
-			idLib::Warning( "idSoundHardware_OpenAL::Shutdown: could not make OpenAL context current" );
-		}
-	}
-
-	for( int i = 0; i < voices.Num(); i++ )
-	{
-		voices[ i ].DestroyInternal();
-	}
-	voices.Clear();
-	freeVoices.Clear();
-	
-	// ---------------------
-	// Shutdown the Doom classic sound system while the OpenAL context is
-	// still current. I_ShutdownSoundHardware() deletes its OpenAL sources
-	// and buffers.
-	// ---------------------
-	I_ShutdownSoundHardware();
+	bool contextCurrent = false;
 	
 	if( openalContext != NULL )
 	{
 		if( alcGetCurrentContext() == openalContext )
+		{
+			contextCurrent = true;
+		}
+		else if( alcMakeContextCurrent(openalContext) != ALC_FALSE )
+		{
+			contextCurrent = true;
+		}
+		else
+		{
+			idLib::Warning("idSoundHardware_OpenAL::Shutdown: could not make OpenAL context current; invalidating cached AL objects");
+		}
+	}
+
+	if (contextCurrent)
+	{
+		for (int i = 0; i < voices.Num(); i++)
+		{
+			voices[i].DestroyInternal();
+		}
+		
+		// ---------------------
+		// Shutdown the Doom classic sound system while the OpenAL context is
+		// still current. I_ShutdownSoundHardware() deletes its OpenAL sources
+		// and buffers.
+		// ---------------------
+		I_ShutdownSoundHardware();
+	}
+	else
+	{
+		// Never issue AL calls against no context or an unrelated context.
+		// alcDestroyContext() below will reclaim the context-owned AL objects.
+		for (int i = 0; i < voices.Num(); i++)
+		{
+			voices[i].InvalidateContextObjects();
+		}
+		
+		I_InvalidateSoundHardware();
+	}
+
+	voices.Clear();
+	freeVoices.Clear();
+	
+	if( openalContext != NULL )
+	{
+		if( contextCurrent && alcGetCurrentContext() == openalContext )
 		{
 			alcMakeContextCurrent(NULL);
 		}
