@@ -605,6 +605,11 @@ int idSoundVoice_OpenAL::SubmitBuffer( idSoundSample_OpenAL* sample, int bufferN
 	{
 		return 0;
 	}
+
+	// OpenAL keeps the first error until alGetError() consumes it.  Clear and
+	// report any error left by an earlier operation so the result below only
+	// reflects this buffer submission.
+	CheckALErrors();
 	
 	alSourcei( openalSource, AL_BUFFER, sample->openalBuffer );
 	alSourcei( openalSource, AL_LOOPING, (sample == loopingSample && loopingSample != NULL ? AL_TRUE : AL_FALSE) );
@@ -636,6 +641,10 @@ bool idSoundVoice_OpenAL::Update()
 
 	ALint state = AL_INITIAL;
 	ALint sourceType = AL_UNDETERMINED;
+
+	// Do not let a sticky error from an unrelated source operation make a
+	// valid voice look dead.
+	CheckALErrors();
 	
 	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
 	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
@@ -738,6 +747,9 @@ bool idSoundVoice_OpenAL::IsPlaying()
 	}
 	
 	ALint state = AL_INITIAL;
+
+	// Isolate this state query from any error left by a previous AL call.
+	CheckALErrors();
 	
 	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
 	
@@ -791,10 +803,13 @@ void idSoundVoice_OpenAL::Pause()
 		idLib::Printf( "%dms: %i pausing %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
 	}
 	
+	CheckALErrors();
 	alSourcePause( openalSource );
-	//pSourceVoice->Stop( 0, OPERATION_SET );
-	paused = true;
-}
+
+	if( CheckALErrors() == AL_NO_ERROR )
+	{
+		paused = true;
+	}
 
 /*
 ========================
@@ -813,8 +828,13 @@ void idSoundVoice_OpenAL::UnPause()
 		idLib::Printf( "%dms: %i unpausing %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
 	}
 	
+	CheckALErrors();
 	alSourcePlay( openalSource );
-	paused = false;
+
+	if (CheckALErrors() == AL_NO_ERROR)
+	{
+		paused = false;
+	}
 }
 
 /*
@@ -859,6 +879,9 @@ float idSoundVoice_OpenAL::GetAmplitude()
 	ALint state = AL_INITIAL;
 	ALint sourceType = AL_UNDETERMINED;
 	ALint sampleOffset = 0;
+
+	// Keep an unrelated sticky error from suppressing a valid amplitude query.
+	CheckALErrors();
 	
 	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
 	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
