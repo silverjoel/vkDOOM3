@@ -793,24 +793,24 @@ idSoundVoice_OpenAL::Pause
 */
 void idSoundVoice_OpenAL::Pause()
 {
-	if( !alIsSource( openalSource ) || paused )
+	if (!alIsSource(openalSource) || paused)
 	{
 		return;
 	}
-	
-	if( s_debugHardware.GetBool() )
-	{
-		idLib::Printf( "%dms: %i pausing %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
-	}
-	
-	CheckALErrors();
-	alSourcePause( openalSource );
 
-	if( CheckALErrors() == AL_NO_ERROR )
+	if (s_debugHardware.GetBool())
+	{
+		idLib::Printf("%dms: %i pausing %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>");
+	}
+
+	CheckALErrors();
+	alSourcePause(openalSource);
+
+	if (CheckALErrors() == AL_NO_ERROR)
 	{
 		paused = true;
 	}
-
+}
 /*
 ========================
 idSoundVoice_OpenAL::UnPause

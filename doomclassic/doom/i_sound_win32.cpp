@@ -623,6 +623,27 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 		}
 	}
 
+	// I_InitSound() owns the decoded Doom sound data and normally uploads it
+	// the first time Classic Doom starts. A tech4 sound restart recreates the
+	// OpenAL context without re-running I_InitSound(), so repopulate the newly
+	// generated buffers when the sound data is already resident.
+	if( S_initialized ) 
+	{
+		for( int i = 1; i < NUMSFX; i++ ) 
+		{
+			if( S_sfx[i].data && alBuffers[i] != 0 ) 
+			{
+				alBufferData( alBuffers[i], SFX_SAMPLETYPE, (byte*)S_sfx[i].data, lengths[i], SFX_RATE );
+				
+				ALenum aerr = alGetError();
+				if( aerr != AL_NO_ERROR ) 
+				{
+					printf( "[doomclassic] alBufferData restart error for buffer %d: 0x%X\n", i, aerr );		
+				}
+			}
+		}
+	}
+
 	I_InitMusic();
 
 	soundHardwareInitialized = true;
@@ -653,11 +674,20 @@ void I_ShutdownSoundHardware()
 			continue;
 		}
 
-		if (sound->alSourceVoice) {
+		if (sound->alSourceVoice) 
+		{
 			alSourceStop(sound->alSourceVoice);
 			alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
 			alDeleteSources(1, &sound->alSourceVoice);
 		}
+
+		sound->alSourceVoice = 0;
+		sound->id = 0;
+		sound->valid = 0;
+		sound->start = 0;
+		sound->player = -1;
+		sound->localSound = false;
+		sound->originator = NULL;
 	}
 
 	// Delete OpenAL buffers for all sounds
@@ -674,6 +704,14 @@ I_InitSoundChannel
 void I_InitSoundChannel(int channel, int numOutputChannels_)
 {
 	activeSound_t* soundchannel = &activeSounds[channel];
+
+	soundchannel->alSourceVoice = 0;
+	soundchannel->id = 0;
+	soundchannel->valid = 0;
+	soundchannel->start = 0;
+	soundchannel->player = -1;
+	soundchannel->localSound = false;
+	soundchannel->originator = NULL;
 
 	alGenSources((ALuint)1, &soundchannel->alSourceVoice);
 
@@ -810,10 +848,12 @@ void I_ShutdownMusic(void)
 			I_StopSong(0);
 			alSourcei(alMusicSourceVoice, AL_BUFFER, 0);
 			alDeleteSources(1, &alMusicSourceVoice);
+			alMusicSourceVoice = 0;
 		}
 
 		if (alMusicBuffer) {
 			alDeleteBuffers(1, &alMusicBuffer);
+			alMusicBuffer = 0;
 		}
 
 		if (musicBuffer) {
@@ -824,6 +864,7 @@ void I_ShutdownMusic(void)
 		Timidity_Shutdown();
 	}
 
+	doomMusic = NULL;
 	totalBufferSize = 0;
 	waitingForMusic = false;
 	musicReady = false;
