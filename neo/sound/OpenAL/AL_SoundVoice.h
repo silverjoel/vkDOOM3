@@ -51,9 +51,13 @@ public:
 	
 	void					SetGain( float gain )
 	{
-		idSoundVoice_Base::SetGain( gain );
+		// snd_emitter.cpp already clamps ordinary sounds to 1.0f, while
+		// SSF_UNCLAMPED intentionally allows values above 1.0f.  Do not
+		// impose another upper clamp here. OpenAL requires AL_GAIN >= 0.
+		const float openalGain = Max(0.0f, gain);
 		
-		alSourcef( openalSource, AL_GAIN, ( gain ) < ( 1.0f ) ? ( gain ) : ( 1.0f ) );
+		idSoundVoice_Base::SetGain(openalGain);
+		alSourcef(openalSource, AL_GAIN, openalGain);
 	}
 	
 	void		SetPitch( float p )
