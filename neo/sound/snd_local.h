@@ -27,12 +27,6 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#if defined(_MSC_VER)
-#pragma comment(lib, "OpenAL32.lib")
-#endif
-
-#define USE_OPENAL
-
 #ifndef __SND_LOCAL_H__
 #define __SND_LOCAL_H__
 
@@ -88,8 +82,6 @@ typedef enum {
 
 #include "SoundVoice.h"
 
-#if defined(USE_OPENAL)
-
 #include <AL/al.h>
 #include <AL/alc.h>
 
@@ -118,22 +110,6 @@ ID_INLINE_EXTERN ALCenum CheckALCErrors_(ALCdevice* device, const char* filename
 	return err;
 }
 #define CheckALCErrors(x) CheckALCErrors_((x), __FILE__, __LINE__)
-
-#else
-
-#define OPERATION_SET 1
-#include <dxsdkver.h>
-#include <xaudio2.h>
-#include <xaudio2fx.h>
-#include <X3DAudio.h>
-#include <xma2defs.h>
-
-#include "XAudio2/XA2_SoundSample.h"
-#include "XAudio2/XA2_SoundVoice.h"
-#include "XAudio2/XA2_SoundHardware.h"
-
-#endif
-
 
 //------------------------
 // Listener data
@@ -425,11 +401,7 @@ public:
 	virtual void			InitStreamBuffers();
 	virtual void			FreeStreamBuffers();
 
-#if defined(USE_OPENAL)
 	virtual void*			GetOpenALDevice() const;
-#else
-	virtual void *			GetIXAudio2() const;
-#endif
 
 	// for the sound level meter window
 	virtual cinData_t		ImageForTime( const int milliseconds, const bool waveform );
@@ -469,13 +441,10 @@ public:
 			sample( NULL ),
 			bufferNumber( 0 )
 		{ }
-#if defined(USE_OPENAL)
+
 		idSoundVoice_OpenAL* voice;
 		idSoundSample_OpenAL* sample;
-#else
-		idSoundVoice_XAudio2 *	voice;
-		idSoundSample_XAudio2 * sample;
-#endif
+
 		int bufferNumber;
 	};
 

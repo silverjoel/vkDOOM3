@@ -344,7 +344,6 @@ void idSoundSystemLocal::StopAllSounds() {
 	hardware.Update();
 }
 
-#if defined(USE_OPENAL)
 /*
 ========================
 idSoundSystemLocal::GetOpenALDevice
@@ -354,16 +353,6 @@ void* idSoundSystemLocal::GetOpenALDevice() const
 {
 	return (void*)hardware.GetOpenALDevice();
 }
-#else
-/*
-========================
-idSoundSystemLocal::GetIXAudio2
-========================
-*/
-void * idSoundSystemLocal::GetIXAudio2() const {
-	return (void *)hardware.GetIXAudio2();
-}
-#endif
 
 /*
 ========================

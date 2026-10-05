@@ -31,8 +31,6 @@ If you have questions concerning this license or the applicable additional terms
 #pragma comment(lib, "OpenAL32.lib")
 #endif
 
-#define USE_OPENAL
-
 #ifndef __SOUND__
 #define __SOUND__
 
@@ -304,12 +302,8 @@ public:
 	virtual void			InitStreamBuffers() = 0;
 	virtual void			FreeStreamBuffers() = 0;
 
-#if defined(USE_OPENAL)
 	virtual void*			GetOpenALDevice() const = 0;
-#else
-	// video playback needs to get this
-	virtual void *			GetIXAudio2() const = 0;
-#endif
+
 	// for the sound level meter window
 	virtual cinData_t		ImageForTime( const int milliseconds, const bool waveform ) = 0;
 
