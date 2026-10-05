@@ -62,7 +62,7 @@ public:
 	
 	int				GetNumZombieVoices() const
 	{
-		return zombieVoices.Num();
+		return 0;
 	}
 	int				GetNumFreeVoices() const
 	{
@@ -99,10 +99,10 @@ private:
 	//idDebugGraph* 	vuMeterPeak;
 	//int				vuMeterPeakTimes[ 8 ];
 	
-	// Can't stop and start a voice on the same frame, so we have to double this to handle the worst case scenario of stopping all voices and starting a full new set
-	idStaticList<idSoundVoice_OpenAL, MAX_HARDWARE_VOICES* 2 > voices;
-	idStaticList<idSoundVoice_OpenAL*, MAX_HARDWARE_VOICES* 2 > zombieVoices;
-	idStaticList<idSoundVoice_OpenAL*, MAX_HARDWARE_VOICES* 2 > freeVoices;
+	// OpenAL Stop()/FlushSourceBuffers() is synchronous, so stopped voices can
+	// be returned directly to the free list without a second zombie pool.
+	idStaticList<idSoundVoice_OpenAL, MAX_HARDWARE_VOICES > voices;
+	idStaticList<idSoundVoice_OpenAL*, MAX_HARDWARE_VOICES > freeVoices;
 };
 
 /*

@@ -64,7 +64,6 @@ idSoundHardware_OpenAL::idSoundHardware_OpenAL()
 	//channelMask = 0;
 	
 	voices.SetNum( 0 );
-	zombieVoices.SetNum( 0 );
 	freeVoices.SetNum( 0 );
 	
 	lastResetTime = 0;
@@ -276,7 +275,6 @@ void idSoundHardware_OpenAL::Init()
 	// OpenAL doesn't really impose a maximum number of sources
 	voices.SetNum( voices.Max() );
 	freeVoices.SetNum( voices.Max() );
-	zombieVoices.SetNum( 0 );
 	for( int i = 0; i < voices.Num(); i++ )
 	{
 		freeVoices[i] = &voices[i];
@@ -306,7 +304,6 @@ void idSoundHardware_OpenAL::Shutdown()
 	}
 	voices.Clear();
 	freeVoices.Clear();
-	zombieVoices.Clear();
 	
 	// ---------------------
 	// Shutdown the Doom classic sound system while the OpenAL context is
@@ -389,11 +386,25 @@ idSoundHardware_OpenAL::FreeVoice
 */
 void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 {
+	if( voice == NULL )
+	{
+		return;
+	}
+
 	voice->Stop();
 	
-	// Stop() is asyncronous, so we won't flush bufferes until the
-	// voice on the zombie channel actually returns !IsPlaying()
-	zombieVoices.Append( voice );
+	// OpenAL Stop()/FlushSourceBuffers() is synchronous. The source is stopped
+	// and its buffer/queue has already been detached, so the voice can be
+	// recycled immediately.
+	for( int i = 0; i < freeVoices.Num(); i++ )
+	{
+		if( freeVoices[i] == voice )
+		{
+			idLib::Warning( "idSoundHardware_OpenAL::FreeVoice: voice already free" );
+			return;
+		}
+	}
+	freeVoices.Append( voice );
 }
 
 /*
@@ -422,99 +433,6 @@ void idSoundHardware_OpenAL::Update()
 	{
 		alListenerf( AL_GAIN, DBtoLinear( s_volume_dB.GetFloat() ) );
 	}
-	
-	// IXAudio2SourceVoice::Stop() has been called for every sound on the
-	// zombie list, but it is documented as asyncronous, so we have to wait
-	// until it actually reports that it is no longer playing.
-	for( int i = 0; i < zombieVoices.Num(); i++ )
-	{
-		zombieVoices[i]->FlushSourceBuffers();
-		if( !zombieVoices[i]->IsPlaying() )
-		{
-			freeVoices.Append( zombieVoices[i] );
-			zombieVoices.RemoveIndexFast( i );
-			i--;
-		}
-		else
-		{
-			static int playingZombies;
-			playingZombies++;
-		}
-	}
-	
-	/*
-	if( s_showPerfData.GetBool() )
-	{
-		XAUDIO2_PERFORMANCE_DATA perfData;
-		pXAudio2->GetPerformanceData( &perfData );
-		idLib::Printf( "Voices: %d/%d CPU: %.2f%% Mem: %dkb\n", perfData.ActiveSourceVoiceCount, perfData.TotalSourceVoiceCount, perfData.AudioCyclesSinceLastQuery / ( float )perfData.TotalCyclesSinceLastQuery, perfData.MemoryUsageInBytes / 1024 );
-	}
-	*/
-	
-	/*
-	if( vuMeterRMS == NULL )
-	{
-		// Init probably hasn't been called yet
-		return;
-	}
-	
-	vuMeterRMS->Enable( s_showLevelMeter.GetBool() );
-	vuMeterPeak->Enable( s_showLevelMeter.GetBool() );
-	
-	if( !s_showLevelMeter.GetBool() )
-	{
-		pMasterVoice->DisableEffect( 0 );
-		return;
-	}
-	else
-	{
-		pMasterVoice->EnableEffect( 0 );
-	}
-	
-	float peakLevels[ 8 ];
-	float rmsLevels[ 8 ];
-	
-	XAUDIO2FX_VOLUMEMETER_LEVELS levels;
-	levels.ChannelCount = outputChannels;
-	levels.pPeakLevels = peakLevels;
-	levels.pRMSLevels = rmsLevels;
-	
-	if( levels.ChannelCount > 8 )
-	{
-		levels.ChannelCount = 8;
-	}
-	
-	pMasterVoice->GetEffectParameters( 0, &levels, sizeof( levels ) );
-	
-	int currentTime = Sys_Milliseconds();
-	for( int i = 0; i < outputChannels; i++ )
-	{
-		if( vuMeterPeakTimes[i] < currentTime )
-		{
-			vuMeterPeak->SetValue( i, vuMeterPeak->GetValue( i ) * 0.9f, colorRed );
-		}
-	}
-	
-	float width = 20.0f;
-	float height = 200.0f;
-	float left = 100.0f;
-	float top = 100.0f;
-	
-	sscanf( s_meterPosition.GetString(), "%f %f %f %f", &left, &top, &width, &height );
-	
-	vuMeterRMS->SetPosition( left, top, width * levels.ChannelCount, height );
-	vuMeterPeak->SetPosition( left, top, width * levels.ChannelCount, height );
-	
-	for( uint32 i = 0; i < levels.ChannelCount; i++ )
-	{
-		vuMeterRMS->SetValue( i, rmsLevels[ i ], idVec4( 0.5f, 1.0f, 0.0f, 1.00f ) );
-		if( peakLevels[ i ] >= vuMeterPeak->GetValue( i ) )
-		{
-			vuMeterPeak->SetValue( i, peakLevels[ i ], colorRed );
-			vuMeterPeakTimes[i] = currentTime + s_meterTopTime.GetInteger();
-		}
-	}
-	*/
 }
 
 
