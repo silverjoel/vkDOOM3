@@ -56,6 +56,46 @@ static openalFilterf_t			qalFilterf = NULL;
 // changing the source's overall gain.
 static const float OPENAL_OCCLUSION_HF_ATTENUATION_DB = -16.0f;
 
+// The bundled OpenAL headers predate AL_EXT_SOURCE_RADIUS. Query the enum at
+// runtime instead of hard-coding a newer header dependency. Cache per context
+// so a device/context restart can select a different OpenAL implementation.
+static ALCcontext * openalSourceRadiusContext = NULL;
+static ALenum openalSourceRadiusEnum = AL_NONE;
+
+static ALenum OpenAL_GetSourceRadiusEnum()
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if( context == NULL )
+	{
+		openalSourceRadiusContext = NULL;
+		openalSourceRadiusEnum = AL_NONE;
+		return AL_NONE;
+	}
+	
+	if( context == openalSourceRadiusContext )
+	{
+		return openalSourceRadiusEnum;
+	}
+	
+	openalSourceRadiusContext = context;
+	openalSourceRadiusEnum = AL_NONE;
+	
+	CheckALErrors();
+	if( alIsExtensionPresent("AL_EXT_SOURCE_RADIUS") != AL_TRUE )
+	{
+		CheckALErrors();
+		return AL_NONE;
+	}
+	
+	const ALenum sourceRadius = alGetEnumValue( "AL_SOURCE_RADIUS" );
+	if( CheckALErrors() == AL_NO_ERROR && sourceRadius != AL_NONE )
+	{
+		openalSourceRadiusEnum = sourceRadius;
+	}
+	
+	return openalSourceRadiusEnum;
+}
+
 static bool OpenAL_LoadEfxFilterProcs()
 {
 	ALCcontext * context = alcGetCurrentContext();
@@ -183,23 +223,12 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		
 		alSourcef( openalSource, AL_ROLLOFF_FACTOR, 0.0f );
 		
-		//if( ( loopingSample == NULL && leadinSample->openalBuffer != 0 ) || ( loopingSample != NULL && soundShader->entries[0]->hardwareBuffer ) )
 		if( leadinSample->openalBuffer != 0 )
 		{
 			alSourcei( openalSource, AL_BUFFER, 0 );
-			
-			// handle uncompressed (non streaming) single shot and looping sounds
-			/*
-			if( triggered )
-			{
-				alSourcei( openalSource, AL_BUFFER, looping ? chan->soundShader->entries[0]->openalBuffer : leadinSample->openalBuffer );
-			}
-			*/
 		}
 		else
-		{
-			//if( triggered )
-			
+		{	
 			// handle streaming sounds (decode on the fly) both single shot AND looping
 			
 			alSourcei( openalSource, AL_BUFFER, 0 );
@@ -253,6 +282,11 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	idSoundVoice_Base::SetOcclusion(0.0f);
 	ApplyOcclusionFilter();
 	
+	// Reset any source-radius state inherited from a reused OpenAL source.
+	// UpdateHardware() supplies the shader's actual minDistance before Start().
+	idSoundVoice_Base::SetInnerRadius(0.0f);
+	ApplySourceRadius();
+
 	if (CheckALErrors() != AL_NO_ERROR)
 	{
 		DestroyInternal();
@@ -416,6 +450,36 @@ void idSoundVoice_OpenAL::DestroyOcclusionFilter()
 	}
 	
 	openalLowPassFilter = 0;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::ApplySourceRadius
+========================
+*/
+void idSoundVoice_OpenAL::ApplySourceRadius()
+{
+	if( !alIsSource( openalSource ) )
+	{
+		return;
+	}
+	
+	const ALenum sourceRadiusEnum = OpenAL_GetSourceRadiusEnum();
+	if( sourceRadiusEnum == AL_NONE )
+	{
+		// AL_EXT_SOURCE_RADIUS is optional. Older OpenAL implementations keep
+		// the existing point-source spatialization behavior.
+		return;
+	}
+	
+	// The original BFG surround matrix applied innerRadius blending only to
+	// mono sources. Stereo samples were routed as stereo rather than treated
+	// as a positionable mono point source, so do not give them a source radius.
+	const float radius = ( numChannels == 1 ) ? Max( 0.0f, innerRadius ) : 0.0f;
+	
+	CheckALErrors();
+	alSourcef( openalSource, sourceRadiusEnum, radius );
+	CheckALErrors();
 }
 
 /*

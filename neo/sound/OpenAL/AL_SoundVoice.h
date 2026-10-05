@@ -72,6 +72,12 @@ public:
 		idSoundVoice_Base::SetOcclusion(idMath::ClampFloat(0.0f, 1.0f, f));
 		ApplyOcclusionFilter();
 	}
+
+	void					SetInnerRadius(float r)
+	{
+		idSoundVoice_Base::SetInnerRadius(Max(0.0f, r));
+		ApplySourceRadius();
+	}
 	
 	bool					Create(const idSoundSample* leadinSample, const idSoundSample* loopingSample);
 	
@@ -120,6 +126,10 @@ private:
 	bool					EnsureOcclusionFilter();
 	void					ApplyOcclusionFilter();
 	void					DestroyOcclusionFilter();
+
+	// AL_EXT_SOURCE_RADIUS is used when available to reproduce the original
+	// near-listener omni-to-directional blend for mono sources.
+	void					ApplySourceRadius();
 
 	// Helper function used by the initial start as well as for looping a streamed buffer
 	int						RestartAt( int offsetSamples );
