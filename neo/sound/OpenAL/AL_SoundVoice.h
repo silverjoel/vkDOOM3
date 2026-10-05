@@ -95,7 +95,7 @@ public:
 	// Sends new position/volume/pitch information to the hardware
 	bool					Update();
 	
-	// returns the RMS levels of the most recently processed block of audio, SSF_FLICKER must have been passed to Start
+	// Returns the sample amplitude envelope when amplitude tracking is enabled.
 	float					GetAmplitude();
 	
 	// returns true if we can re-use this voice
@@ -144,7 +144,7 @@ private:
 
 	uint32					sampleRate;
 	
-	bool					hasVUMeter;
+	bool					trackAmplitude;
 	bool					paused;
 };
 

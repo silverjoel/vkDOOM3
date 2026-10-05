@@ -28,24 +28,14 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-//#include "precompiled.h"
 #include "../../framework/precompiled.h"
 #pragma hdrstop
-
-//#if defined(_MSC_VER)
-//#pragma comment(lib, "OpenAL32.lib")
-//#endif
 
 #include "../snd_local.h"
 #include "../../../doomclassic/doom/i_sound.h"
 
-idCVar s_showLevelMeter( "s_showLevelMeter", "0", CVAR_BOOL | CVAR_ARCHIVE, "Show VU meter" );
-idCVar s_meterTopTime( "s_meterTopTime", "1000", CVAR_INTEGER | CVAR_ARCHIVE, "How long (in milliseconds) peaks are displayed on the VU meter" );
-idCVar s_meterPosition( "s_meterPosition", "100 100 20 200", CVAR_ARCHIVE, "VU meter location (x y w h)" );
 idCVar s_device( "s_device", "-1", CVAR_INTEGER | CVAR_ARCHIVE, "Which audio device to use (listDevices to list, -1 for default)" );
-idCVar s_showPerfData( "s_showPerfData", "0", CVAR_BOOL, "Show XAudio2 Performance data" );
 extern idCVar s_volume_dB;
-
 
 /*
 ========================
@@ -84,7 +74,7 @@ static const ALCchar * OpenAL_GetPlaybackDeviceList()
 }
 
 /*
-+=======================
+========================
 OpenAL_GetPlaybackDeviceName
 ========================
 */
@@ -264,70 +254,11 @@ void idSoundHardware_OpenAL::Init()
 	common->Printf( "OpenAL version: %s\n", alGetString( AL_VERSION ) );
 	common->Printf( "OpenAL extensions: %s\n", alGetString( AL_EXTENSIONS ) );
 	
-	//pMasterVoice->SetVolume( DBtoLinear( s_volume_dB.GetFloat() ) );
-	
-	//outputChannels = deviceDetails.OutputFormat.Format.nChannels;
-	//channelMask = deviceDetails.OutputFormat.dwChannelMask;
-	
-	//idSoundVoice::InitSurround( outputChannels, channelMask );
-	
 	// ---------------------
 	// Initialize the Doom classic sound system.
 	// ---------------------
 	I_InitSoundHardware(voices.Max(), 0);
-	
-	// ---------------------
-	// Create VU Meter Effect
-	// ---------------------
-	/*
-	IUnknown* vuMeter = NULL;
-	XAudio2CreateVolumeMeter( &vuMeter, 0 );
-	
-	XAUDIO2_EFFECT_DESCRIPTOR descriptor;
-	descriptor.InitialState = true;
-	descriptor.OutputChannels = outputChannels;
-	descriptor.pEffect = vuMeter;
-	
-	XAUDIO2_EFFECT_CHAIN chain;
-	chain.EffectCount = 1;
-	chain.pEffectDescriptors = &descriptor;
-	
-	pMasterVoice->SetEffectChain( &chain );
-	
-	vuMeter->Release();
-	*/
-	
-	// ---------------------
-	// Create VU Meter Graph
-	// ---------------------
-	
-	/*
-	vuMeterRMS = console->CreateGraph( outputChannels );
-	vuMeterPeak = console->CreateGraph( outputChannels );
-	vuMeterRMS->Enable( false );
-	vuMeterPeak->Enable( false );
-	
-	memset( vuMeterPeakTimes, 0, sizeof( vuMeterPeakTimes ) );
-	
-	vuMeterPeak->SetFillMode( idDebugGraph::GRAPH_LINE );
-	vuMeterPeak->SetBackgroundColor( idVec4( 0.0f, 0.0f, 0.0f, 0.0f ) );
-	
-	vuMeterRMS->AddGridLine( 0.500f, idVec4( 0.5f, 0.5f, 0.5f, 1.0f ) );
-	vuMeterRMS->AddGridLine( 0.250f, idVec4( 0.5f, 0.5f, 0.5f, 1.0f ) );
-	vuMeterRMS->AddGridLine( 0.125f, idVec4( 0.5f, 0.5f, 0.5f, 1.0f ) );
-	
-	const char* channelNames[] = { "L", "R", "C", "S", "Lb", "Rb", "Lf", "Rf", "Cb", "Ls", "Rs" };
-	for( int i = 0, ci = 0; ci < sizeof( channelNames ) / sizeof( channelNames[0] ); ci++ )
-	{
-		if( ( channelMask & BIT( ci ) ) == 0 )
-		{
-			continue;
-		}
-		vuMeterRMS->SetLabel( i, channelNames[ ci ] );
-		i++;
-	}
-	*/
-	
+		
 	// OpenAL doesn't really impose a maximum number of sources
 	voices.SetNum( voices.Max() );
 	freeVoices.SetNum( voices.Max() );

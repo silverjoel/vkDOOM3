@@ -33,7 +33,6 @@ If you have questions concerning this license or the applicable additional terms
 #include "../snd_local.h"
 #include <AL/efx.h>
 
-idCVar s_skipHardwareSets( "s_skipHardwareSets", "0", CVAR_BOOL, "Do all calculation, but skip XA2 calls" );
 idCVar s_debugHardware( "s_debugHardware", "0", CVAR_BOOL, "Print a message any time a hardware voice changes" );
 
 typedef LPALGENFILTERS			openalGenFilters_t;
@@ -131,7 +130,7 @@ idSoundVoice_OpenAL::idSoundVoice_OpenAL()
 	loopingSample(NULL),
 	numChannels(0),
 	sampleRate(0),
-	hasVUMeter(false),
+	trackAmplitude(false),
 	paused(true)
 {
 }
@@ -301,7 +300,7 @@ void idSoundVoice_OpenAL::DestroyInternal()
 		
 		alDeleteSources( 1, &openalSource );
 		openalSource = 0;
-		hasVUMeter = false;
+		trackAmplitude = false;
 	}
 
 	DestroyOcclusionFilter();
@@ -470,40 +469,7 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 		idLib::Warning( "Starting defaulted sound sample %s", leadinSample->GetName() );
 	}
 	
-	bool flicker = ( ssFlags & SSF_NO_FLICKER ) == 0;
-	
-	if( flicker != hasVUMeter )
-	{
-		hasVUMeter = flicker;
-		
-		/*
-		if( flicker )
-		{
-			IUnknown* vuMeter = NULL;
-		
-			if( XAudio2CreateVolumeMeter( &vuMeter, 0 ) == S_OK )
-			{
-		
-				XAUDIO2_EFFECT_DESCRIPTOR descriptor;
-				descriptor.InitialState = true;
-				descriptor.OutputChannels = leadinSample->NumChannels();
-				descriptor.pEffect = vuMeter;
-		
-				XAUDIO2_EFFECT_CHAIN chain;
-				chain.EffectCount = 1;
-				chain.pEffectDescriptors = &descriptor;
-		
-				pSourceVoice->SetEffectChain( &chain );
-		
-				vuMeter->Release();
-			}
-		}
-		else
-		{
-			pSourceVoice->SetEffectChain( NULL );
-		}
-		*/
-	}
+	trackAmplitude = ( ssFlags & SSF_NO_FLICKER ) == 0;
 	
 	assert( offsetMS >= 0 );
 	int offsetSamples = MsecToSamples( offsetMS, leadinSample->SampleRate() );
@@ -512,7 +478,7 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 		return;
 	}
 
-	if (RestartAt(offsetSamples) <= 0)
+	if( RestartAt( offsetSamples ) <= 0 )
 	{
 		return;
 	}
@@ -528,9 +494,9 @@ idSoundVoice_OpenAL::RestartAt
 */
 int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 {
-	offsetSamples = Max(0, offsetSamples);
+	offsetSamples = Max( 0, offsetSamples );
 	
-	if (leadinSample == NULL || leadinSample->playLength <= 0)
+	if( leadinSample == NULL || leadinSample->playLength <= 0 )
 	{
 		return 0;
 	}
@@ -538,12 +504,12 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 	idSoundSample_OpenAL* sample = leadinSample;
 	if( offsetSamples >= leadinSample->playLength )
 	{
-		if (loopingSample == NULL || loopingSample->playLength <= 0)
+		if( loopingSample == NULL || loopingSample->playLength <= 0 )
 		{
 			return 0;
 		}
 		
-		if (loopingSample == leadinSample)
+		if( loopingSample == leadinSample )
 		{
 			offsetSamples %= loopingSample->playLength;
 		}
@@ -577,7 +543,7 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
 		leadinSample->SampleRate() == loopingSample->SampleRate();
 
-	if ( queueLeadinAndLoop )
+	if( queueLeadinAndLoop )
 	{
 		FlushSourceBuffers();
 	
@@ -595,12 +561,12 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 		// of the complete queue, so an offset inside the lead-in can be
 		// applied directly here.
 		const int queueOffset = leadinSample->playBegin + offsetSamples;
-		if ( queueOffset > 0 )
+		if( queueOffset > 0 )
 		{
 			alSourcei( openalSource, AL_SAMPLE_OFFSET, queueOffset );
 		}
 	
-		if ( CheckALErrors() != AL_NO_ERROR )
+		if( CheckALErrors() != AL_NO_ERROR )
 		{
 			FlushSourceBuffers();
 			return 0;
@@ -663,7 +629,7 @@ idSoundVoice_OpenAL::Update
 */
 bool idSoundVoice_OpenAL::Update()
 {
-	if (!alIsSource(openalSource) || leadinSample == NULL)
+	if( !alIsSource( openalSource ) || leadinSample == NULL )
 	{
 		return false;
 	}
@@ -671,14 +637,14 @@ bool idSoundVoice_OpenAL::Update()
 	ALint state = AL_INITIAL;
 	ALint sourceType = AL_UNDETERMINED;
 	
-	alGetSourcei(openalSource, AL_SOURCE_STATE, &state);
-	alGetSourcei(openalSource, AL_SOURCE_TYPE, &sourceType);
-	if (CheckALErrors() != AL_NO_ERROR)
+	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
+	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
+	if( CheckALErrors() != AL_NO_ERROR )
 	{
 		return false;
 	}
 
-	if (loopingSample != NULL && loopingSample != leadinSample)
+	if( loopingSample != NULL && loopingSample != leadinSample )
 	{
 		const bool compatibleQueuedPair =
 		leadinSample->openalBuffer != 0 &&
@@ -686,25 +652,25 @@ bool idSoundVoice_OpenAL::Update()
 		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
 		leadinSample->SampleRate() == loopingSample->SampleRate();
 		
-		if (compatibleQueuedPair && sourceType == AL_STREAMING)
+		if( compatibleQueuedPair && sourceType == AL_STREAMING )
 		{
 			ALint processedBuffers = 0;
-			alGetSourcei(openalSource, AL_BUFFERS_PROCESSED, &processedBuffers);
-			if (CheckALErrors() != AL_NO_ERROR)
+			alGetSourcei( openalSource, AL_BUFFERS_PROCESSED, &processedBuffers );
+			if( CheckALErrors() != AL_NO_ERROR )
 			{
 				return false;
 			}
 			
-			if (processedBuffers > 0)
+			if( processedBuffers > 0 )
 			{
 				ALuint processedBuffer = 0;
 				alSourceUnqueueBuffers(openalSource, 1, &processedBuffer);
-				if (CheckALErrors() != AL_NO_ERROR)
+				if( CheckALErrors() != AL_NO_ERROR )
 				{
 					return false;
 				}
 				
-				if (processedBuffer == leadinSample->openalBuffer)
+				if( processedBuffer == leadinSample->openalBuffer )
 				{
 					// The queue now contains only the loop buffer.  Enabling
 					// source looping here repeats only that remaining buffer,
@@ -712,7 +678,7 @@ bool idSoundVoice_OpenAL::Update()
 					alSourcei(openalSource, AL_LOOPING, AL_TRUE);
 					
 					alGetSourcei(openalSource, AL_SOURCE_STATE, &state);
-					if (CheckALErrors() != AL_NO_ERROR)
+					if( CheckALErrors() != AL_NO_ERROR )
 					{
 						return false;
 					}
@@ -720,10 +686,10 @@ bool idSoundVoice_OpenAL::Update()
 					// If both buffers finished between engine updates, the
 					// source is stopped but the loop buffer is still queued.
 					// Restart it; it will now loop indefinitely.
-					if (!paused && state != AL_PLAYING)
+					if( !paused && state != AL_PLAYING )
 					{
 						alSourcePlay(openalSource);
-						if (CheckALErrors() != AL_NO_ERROR)
+						if( CheckALErrors() != AL_NO_ERROR )
 						{
 							return false;
 						}
@@ -731,25 +697,25 @@ bool idSoundVoice_OpenAL::Update()
 				}
 			}
 		}
-		else if (sourceType == AL_STATIC && state == AL_STOPPED && !paused)
+		else if( sourceType == AL_STATIC && state == AL_STOPPED && !paused )
 		{
 			// Different buffer attributes cannot share an OpenAL queue.
 			// Fall back to switching to the loop after the lead-in stops.
 			ALint currentBuffer = 0;
 			alGetSourcei(openalSource, AL_BUFFER, &currentBuffer);
-			if (CheckALErrors() != AL_NO_ERROR)
+			if( CheckALErrors() != AL_NO_ERROR )
 			{
 				return false;
 			}
 			
-			if ((ALuint)currentBuffer == leadinSample->openalBuffer)
+			if( (ALuint)currentBuffer == leadinSample->openalBuffer )
 			{
-				if (SubmitBuffer(loopingSample, 0, loopingSample->playBegin) <= 0)
+				if( SubmitBuffer( loopingSample, 0, loopingSample->playBegin ) <= 0 )
 				{
 					return false;
 				}
 				
-				alSourcePlay(openalSource);
+				alSourcePlay( openalSource );
 				paused = false;
 				return CheckALErrors() == AL_NO_ERROR;
 			}
@@ -775,12 +741,12 @@ bool idSoundVoice_OpenAL::IsPlaying()
 	
 	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
 	
-	if (CheckALErrors() != AL_NO_ERROR)
+	if( CheckALErrors() != AL_NO_ERROR )
 	{
 		return false;
 	}
 	
-	return (state == AL_PLAYING || state == AL_PAUSED);
+	return ( state == AL_PLAYING || state == AL_PAUSED );
 }
 
 /*
@@ -790,7 +756,7 @@ idSoundVoice_OpenAL::FlushSourceBuffers
 */
 void idSoundVoice_OpenAL::FlushSourceBuffers()
 {
-	if (!alIsSource(openalSource))
+	if( !alIsSource( openalSource ) )
 	{
 		return;
 	}
@@ -799,9 +765,9 @@ void idSoundVoice_OpenAL::FlushSourceBuffers()
 	// the complete source queue, including a streaming queue.  This is both
 	// simpler and safer than manually unqueueing every processed buffer.
 	CheckALErrors();
-	alSourceStop(openalSource);
-	alSourcei(openalSource, AL_BUFFER, 0);
-	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
+	alSourceStop( openalSource );
+	alSourcei( openalSource, AL_BUFFER, 0 );
+	alSourcei( openalSource, AL_LOOPING, AL_FALSE );
 
 	CheckALErrors();
 
@@ -848,7 +814,6 @@ void idSoundVoice_OpenAL::UnPause()
 	}
 	
 	alSourcePlay( openalSource );
-	//pSourceVoice->Start( 0, OPERATION_SET );
 	paused = false;
 }
 
@@ -864,9 +829,9 @@ void idSoundVoice_OpenAL::Stop()
 		return;
 	}
 	
-	if (s_debugHardware.GetBool())
+	if( s_debugHardware.GetBool() )
 	{
-		idLib::Printf("%dms: %i stopping %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>");
+		idLib::Printf( "%dms: %i stopping %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
 	}
 
 	// Flush even when our bookkeeping already says "paused".  A paused source
@@ -881,7 +846,7 @@ idSoundVoice_OpenAL::GetAmplitude
 */
 float idSoundVoice_OpenAL::GetAmplitude()
 {
-	if( !hasVUMeter )
+	if( !trackAmplitude )
 	{
 		return 1.0f;
 	}
