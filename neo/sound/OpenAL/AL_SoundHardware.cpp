@@ -84,7 +84,7 @@ static const ALCchar * OpenAL_GetPlaybackDeviceList()
 }
 
 /*
-+========================
++=======================
 OpenAL_GetPlaybackDeviceName
 ========================
 */

@@ -88,21 +88,10 @@ typedef enum {
 
 #include "SoundVoice.h"
 
-
-#define OPERATION_SET 1
-
-#include <dxsdkver.h>
-
-#include <xaudio2.h>
-#include <xaudio2fx.h>
-#include <X3DAudio.h>
-#include <xma2defs.h>
-
 #if defined(USE_OPENAL)
 
 #include <AL/al.h>
 #include <AL/alc.h>
-//#include <AL/alext.h>
 
 #include "OpenAL/AL_SoundSample.h"
 #include "OpenAL/AL_SoundVoice.h"
@@ -131,6 +120,13 @@ ID_INLINE_EXTERN ALCenum CheckALCErrors_(ALCdevice* device, const char* filename
 #define CheckALCErrors(x) CheckALCErrors_((x), __FILE__, __LINE__)
 
 #else
+
+#define OPERATION_SET 1
+#include <dxsdkver.h>
+#include <xaudio2.h>
+#include <xaudio2fx.h>
+#include <X3DAudio.h>
+#include <xma2defs.h>
 
 #include "XAudio2/XA2_SoundSample.h"
 #include "XAudio2/XA2_SoundVoice.h"
