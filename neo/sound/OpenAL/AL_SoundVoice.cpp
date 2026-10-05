@@ -36,10 +36,6 @@ If you have questions concerning this license or the applicable additional terms
 idCVar s_skipHardwareSets( "s_skipHardwareSets", "0", CVAR_BOOL, "Do all calculation, but skip XA2 calls" );
 idCVar s_debugHardware( "s_debugHardware", "0", CVAR_BOOL, "Print a message any time a hardware voice changes" );
 
-// The whole system runs at this sample rate
-static int SYSTEM_SAMPLE_RATE = 44100;
-static float ONE_OVER_SYSTEM_SAMPLE_RATE = 1.0f / SYSTEM_SAMPLE_RATE;
-
 typedef LPALGENFILTERS			openalGenFilters_t;
 typedef LPALDELETEFILTERS		openalDeleteFilters_t;
 typedef LPALFILTERI				openalFilteri_t;
@@ -133,9 +129,7 @@ idSoundVoice_OpenAL::idSoundVoice_OpenAL()
 	openalLowPassFilter(0),
 	leadinSample(NULL),
 	loopingSample(NULL),
-	formatTag(0),
 	numChannels(0),
-	sourceVoiceRate(0),
 	sampleRate(0),
 	hasVUMeter(false),
 	paused(true)
@@ -257,10 +251,8 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	}
 	
 	// Keep these fields current even when an existing OpenAL source is reused.
-	formatTag = leadinSample->format.basic.formatTag;
 	numChannels = leadinSample->format.basic.numChannels;
 	sampleRate = leadinSample->format.basic.samplesPerSec;
-	sourceVoiceRate = sampleRate;
 
 	CheckALErrors();
 	
@@ -1009,81 +1001,4 @@ float idSoundVoice_OpenAL::GetAmplitude()
 	SamplesToMsec( relativeSample, currentSample->SampleRate() );
 	
 	return currentSample->GetAmplitude( timeMS );
-}
-
-/*
-========================
-idSoundVoice_OpenAL::ResetSampleRate
-========================
-*/
-void idSoundVoice_OpenAL::SetSampleRate( uint32 newSampleRate, uint32 operationSet )
-{
-	/*
-	if( pSourceVoice == NULL || leadinSample == NULL )
-	{
-		return;
-	}
-	
-	sampleRate = newSampleRate;
-	
-	XAUDIO2_FILTER_PARAMETERS filter;
-	filter.Type = LowPassFilter;
-	filter.OneOverQ = 1.0f;			// [0.0f, XAUDIO2_MAX_FILTER_ONEOVERQ]
-	float cutoffFrequency = 1000.0f / Max( 0.01f, occlusion );
-	if( cutoffFrequency * 6.0f >= ( float )sampleRate )
-	{
-		filter.Frequency = XAUDIO2_MAX_FILTER_FREQUENCY;
-	}
-	else
-	{
-		filter.Frequency = 2.0f * idMath::Sin( idMath::PI * cutoffFrequency / ( float )sampleRate );
-	}
-	assert( filter.Frequency >= 0.0f && filter.Frequency <= XAUDIO2_MAX_FILTER_FREQUENCY );
-	filter.Frequency = idMath::ClampFloat( 0.0f, XAUDIO2_MAX_FILTER_FREQUENCY, filter.Frequency );
-	
-	pSourceVoice->SetFilterParameters( &filter, operationSet );
-	
-	float freqRatio = pitch * ( float )sampleRate / ( float )sourceVoiceRate;
-	assert( freqRatio >= XAUDIO2_MIN_FREQ_RATIO && freqRatio <= XAUDIO2_MAX_FREQ_RATIO );
-	freqRatio = idMath::ClampFloat( XAUDIO2_MIN_FREQ_RATIO, XAUDIO2_MAX_FREQ_RATIO, freqRatio );
-	
-	// if the value specified for maxFreqRatio is too high for the specified format, the call to CreateSourceVoice will fail
-	if( numChannels == 1 )
-	{
-		assert( freqRatio * ( float )SYSTEM_SAMPLE_RATE <= XAUDIO2_MAX_RATIO_TIMES_RATE_XMA_MONO );
-	}
-	else
-	{
-		assert( freqRatio * ( float )SYSTEM_SAMPLE_RATE <= XAUDIO2_MAX_RATIO_TIMES_RATE_XMA_MULTICHANNEL );
-	}
-	
-	pSourceVoice->SetFrequencyRatio( freqRatio, operationSet );
-	*/
-}
-
-/*
-========================
-idSoundVoice_OpenAL::OnBufferStart
-========================
-*/
-void idSoundVoice_OpenAL::OnBufferStart( idSoundSample_OpenAL* sample, int bufferNumber )
-{
-	//SetSampleRate( sample->SampleRate(), XAUDIO2_COMMIT_NOW );
-	
-	idSoundSample_OpenAL* nextSample = sample;
-	int nextBuffer = bufferNumber + 1;
-	if( nextBuffer == sample->buffers.Num() )
-	{
-		if( sample == leadinSample )
-		{
-			if( loopingSample == NULL )
-			{
-				return;
-			}
-			nextSample = loopingSample;
-		}
-		nextBuffer = 0;
-	}
-	
-	SubmitBuffer( nextSample, nextBuffer, 0 );
 }

@@ -106,9 +106,6 @@ public:
 		return sampleRate;
 	}
 	
-	// callback function
-	void					OnBufferStart( idSoundSample_OpenAL* sample, int bufferNumber );
-	
 private:
 	friend class idSoundHardware_OpenAL;
 	
@@ -136,20 +133,15 @@ private:
 	// Helper function to submit a buffer
 	int						SubmitBuffer( idSoundSample_OpenAL* sample, int bufferNumber, int offset );
 	
-	// Adjust the voice frequency based on the new sample rate for the buffer
-	void					SetSampleRate( uint32 newSampleRate, uint32 operationSet );
-	
 	ALuint					openalSource;
 	ALuint					openalLowPassFilter;
 	
 	idSoundSample_OpenAL*	leadinSample;
 	idSoundSample_OpenAL*	loopingSample;
 	
-	// These are the fields from the sample format that matter to us for voice reuse
-	uint16					formatTag;
+	// Sample format state used by the OpenAL source.
 	uint16					numChannels;
-	
-	uint32					sourceVoiceRate;
+
 	uint32					sampleRate;
 	
 	bool					hasVUMeter;

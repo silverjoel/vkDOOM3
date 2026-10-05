@@ -57,16 +57,61 @@ idSoundHardware_OpenAL::idSoundHardware_OpenAL()
 	openalDevice = NULL;
 	openalContext = NULL;
 	
-	//vuMeterRMS = NULL;
-	//vuMeterPeak = NULL;
-	
-	//outputChannels = 0;
-	//channelMask = 0;
-	
 	voices.SetNum( 0 );
 	freeVoices.SetNum( 0 );
 	
 	lastResetTime = 0;
+}
+
+/*
+========================
+OpenAL_GetPlaybackDeviceList
+========================
+*/
+static const ALCchar * OpenAL_GetPlaybackDeviceList()
+{
+	if( alcIsExtensionPresent( NULL, "ALC_ENUMERATE_ALL_EXT" ) != ALC_FALSE )
+	{
+		return alcGetString( NULL, ALC_ALL_DEVICES_SPECIFIER );
+	}
+	
+	if( alcIsExtensionPresent( NULL, "ALC_ENUMERATION_EXT" ) != ALC_FALSE )
+	{
+		return alcGetString( NULL, ALC_DEVICE_SPECIFIER );
+	}
+	
+	return NULL;
+}
+
+/*
++========================
+OpenAL_GetPlaybackDeviceName
+========================
+*/
+static const ALCchar * OpenAL_GetPlaybackDeviceName( int deviceIndex )
+{
+	if( deviceIndex < 0 )
+	{
+		return NULL;
+	}
+	
+	const ALCchar * deviceList = OpenAL_GetPlaybackDeviceList();
+	if( deviceList == NULL || *deviceList == '\0' )
+	{
+		return NULL;
+	}
+	
+	for( int index = 0; *deviceList != '\0'; index++ )
+	{
+		if( index == deviceIndex )
+		{
+			return deviceList;
+		}
+		
+		deviceList += strlen(deviceList) + 1;
+	}
+	
+	return NULL;
 }
 
 void idSoundHardware_OpenAL::PrintDeviceList( const char* list )
@@ -77,10 +122,12 @@ void idSoundHardware_OpenAL::PrintDeviceList( const char* list )
 	}
 	else
 	{
+		int deviceIndex = 0;
 		do
 		{
-			idLib::Printf( "    %s\n", list );
+			idLib::Printf("    %d: %s\n", deviceIndex, list);
 			list += strlen( list ) + 1;
+			deviceIndex++;
 		}
 		while( *list != '\0' );
 	}
@@ -135,17 +182,7 @@ void idSoundHardware_OpenAL::PrintALInfo()
 void listDevices_f( const idCmdArgs& args )
 {
 	idLib::Printf( "Available playback devices:\n" );
-	if( alcIsExtensionPresent( NULL, "ALC_ENUMERATE_ALL_EXT" ) != AL_FALSE )
-	{
-		idSoundHardware_OpenAL::PrintDeviceList( alcGetString( NULL, ALC_ALL_DEVICES_SPECIFIER ) );
-	}
-	else
-	{
-		idSoundHardware_OpenAL::PrintDeviceList( alcGetString( NULL, ALC_DEVICE_SPECIFIER ) );
-	}
-	
-	//idLib::Printf("Available capture devices:\n");
-	//printDeviceList(alcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER));
+	idSoundHardware_OpenAL::PrintDeviceList(OpenAL_GetPlaybackDeviceList());
 	
 	if( alcIsExtensionPresent( NULL, "ALC_ENUMERATE_ALL_EXT" ) != AL_FALSE )
 	{
@@ -174,7 +211,26 @@ void idSoundHardware_OpenAL::Init()
 	
 	common->Printf( "Setup OpenAL device and context... " );
 	
-	openalDevice = alcOpenDevice( NULL );
+	const int requestedDeviceIndex = s_device.GetInteger();
+	const ALCchar * requestedDeviceName = NULL;
+	
+	if( requestedDeviceIndex >= 0 )
+	{
+		requestedDeviceName = OpenAL_GetPlaybackDeviceName( requestedDeviceIndex );
+		if( requestedDeviceName == NULL )
+		{
+			idLib::Warning( "OpenAL device index %d is unavailable; using the default playback device", requestedDeviceIndex );
+		}
+	}
+	
+	openalDevice = alcOpenDevice( requestedDeviceName );
+
+	if( openalDevice == NULL && requestedDeviceName != NULL )
+	{
+		idLib::Warning( "Could not open OpenAL device %d (\"%s\"); using the default playback device", requestedDeviceIndex, requestedDeviceName );
+		openalDevice = alcOpenDevice(NULL);
+	}
+
 	if( openalDevice == NULL )
 	{
 		common->FatalError( "idSoundHardware_OpenAL::Init: alcOpenDevice() failed\n" );
