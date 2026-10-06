@@ -255,6 +255,7 @@ static Instrument *load_instrument(char *name, int percussion,
 													differences are */
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: not an instrument", name);
+		close_file(fp);
 		return 0;
 	}
 
@@ -263,6 +264,7 @@ static Instrument *load_instrument(char *name, int percussion,
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, 
 			"Can't handle patches with %d instruments", tmp[82]);
+		close_file(fp);
 		return 0;
 	}
 
@@ -270,12 +272,31 @@ static Instrument *load_instrument(char *name, int percussion,
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, 
 			"Can't handle instruments with %d layers", tmp[151]);
+		close_file(fp);
+		return 0;
+	}
+	
+	const int sampleCount = tmp[198];
+	if (sampleCount <= 0) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: instrument has no samples", name);
+		close_file(fp);
 		return 0;
 	}
 
 	ip=(Instrument *)safe_malloc(sizeof(Instrument));
-	ip->samples = tmp[198];
+	if (ip == NULL) {
+		close_file(fp);
+		return 0;
+	}
+	memset(ip, 0, sizeof(*ip));
+	ip->samples = sampleCount;
 	ip->sample = (Sample *)safe_malloc(sizeof(Sample) * ip->samples);
+	if (ip->sample == NULL) {
+		Real_Tim_Free(ip);
+		close_file(fp);
+		return 0;
+	}
+	memset(ip->sample, 0, sizeof(Sample) * ip->samples);
 	for (i=0; i<ip->samples; i++)
 	{
 
@@ -300,10 +321,15 @@ static Instrument *load_instrument(char *name, int percussion,
 		{
 fail:
 			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "Error reading sample %d", i);
-			for (j=0; j<i; j++)
-				Real_Tim_Free(ip->sample[j].data);
+			for (j = 0; j < ip->samples; j++) {
+				if (ip->sample[j].data != NULL) {
+					Real_Tim_Free(ip->sample[j].data);
+					ip->sample[j].data = NULL;
+				}
+			}
 			Real_Tim_Free(ip->sample);
 			Real_Tim_Free(ip);
+			close_file(fp);
 			return 0;
 		}
 
@@ -368,6 +394,42 @@ fail:
 
 		skip(fp, 40); /* skip the useless scale frequency, scale factor
 					  (what's it mean?), and reserved space */
+
+		// Sample positions are stored as signed 32-bit fixed-point values.
+		// Reject data that cannot survive the byte-to-sample conversion and
+		// FRACTION_BITS shift used below.
+		const int32_t maxSampleCount = 0x7FFFFFFF >> FRACTION_BITS;
+		if (sp->data_length <= 0 || sp->sample_rate <= 0 || sp->root_freq <= 0 ||
+			sp->loop_start < 0 || sp->loop_end < sp->loop_start ||
+			sp->loop_end > sp->data_length) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: invalid sample metadata in sample %d", name, i);
+			goto fail;
+		}
+		
+		int32_t decodedSampleCount = sp->data_length;
+		if (sp->modes & MODES_16BIT) {
+			if ((sp->data_length & 1) || (sp->loop_start & 1) || (sp->loop_end & 1)) {
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: unaligned 16-bit sample metadata in sample %d", name, i);
+				goto fail;
+			}
+			decodedSampleCount /= 2;
+		}
+		if (decodedSampleCount <= 0 || decodedSampleCount > maxSampleCount) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: sample %d is too large for fixed-point playback", name, i);
+			goto fail;
+		}
+		
+		const int filePosition = fp->Tell();
+		const int fileLength = fp->Length();
+		if (filePosition < 0 || fileLength < filePosition ||
+			sp->data_length > fileLength - filePosition) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: truncated sample data in sample %d", name, i);
+			goto fail;
+		}
 
 		/* Mark this as a fixed-pitch instrument if such a deed is desired. */
 		if (note_to_use!=-1)
@@ -439,7 +501,9 @@ fail:
 		}
 
 		/* Then read the sample data */
-		sp->data = (sample_t*)safe_malloc(sp->data_length);
+		sp->data = (sample_t*)safe_malloc((size_t)sp->data_length);
+		if (sp->data == NULL)
+			goto fail;
 		if ( static_cast< size_t >( sp->data_length ) != fp->Read(sp->data, sp->data_length ))
 			goto fail;
 
@@ -448,10 +512,12 @@ fail:
 			 int32_t i=sp->data_length;
 			uint8_t *cp=(uint8_t *)(sp->data);
 			uint16_t *tmp,*anew;
-			tmp=anew=(uint16*)safe_malloc(sp->data_length*2);
+			anew = (uint16*)safe_malloc((size_t)sp->data_length * 2u);
+			if (anew == NULL)
+				goto fail;
+			tmp = anew;
 			while (i--)
 				*tmp++ = (uint16)(*cp++) << 8;
-			cp=(uint8_t *)(sp->data);
 			sp->data = (sample_t *)anew;
 			Real_Tim_Free(cp);
 			sp->data_length *= 2;
@@ -511,17 +577,17 @@ fail:
 			/* Try to determine a volume scaling factor for the sample.
 			This is a very crude adjustment, but things sound more
 			balanced with it. Still, this should be a runtime option. */
-			 int32_t i=sp->data_length/2;
-			int16_t maxamp=0,a;
+			int32_t i=sp->data_length/2;
+			int maxamp = 0;
 			int16_t *tmp=(int16_t *)sp->data;
 			while (i--)
 			{
-				a=*tmp++;
+				int a = *tmp++;
 				if (a<0) a=-a;
 				if (a>maxamp)
 					maxamp=a;
 			}
-			sp->volume=(float)(32768.0 / maxamp);
+			sp->volume = (maxamp > 0) ? (float)(32768.0 / maxamp) : 1.0f;
 			ctl->cmsg(CMSG_INFO, VERB_DEBUG, " * volume comp: %f", sp->volume);
 		}
 #else
@@ -575,7 +641,7 @@ fail:
 		}
 	}
 
-	delete fp;
+	close_file(fp);
 
 	return ip;
 }
