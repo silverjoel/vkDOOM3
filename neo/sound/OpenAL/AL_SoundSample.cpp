@@ -52,6 +52,78 @@ static ALenum openal71Chn16Format = AL_NONE;
 
 /*
 ========================
+OpenAL_ValidateExtensibleChannelMask
+
+WAVE_FORMAT_EXTENSIBLE stores interleaved channels in ascending speaker-bit
+order. Only accept layouts whose ordering matches AL_EXT_MCFORMATS directly.
+For 5.1, OpenAL treats rear/surround pairs equivalently, so both common WAVE
+masks are safe without reordering.
+========================
+*/
+static bool OpenAL_ValidateExtensibleChannelMask(const idWaveFile::waveFmt_t & waveFormat)
+{
+	if (waveFormat.basic.formatTag != idWaveFile::FORMAT_EXTENSIBLE)
+	{
+		return true;
+	}
+	
+	const uint32 mask = waveFormat.extra.extensible.channelMask;
+	const uint32 frontStereo =
+		idWaveFile::CHANNEL_MASK_FRONT_LEFT |
+		idWaveFile::CHANNEL_MASK_FRONT_RIGHT;
+	const uint32 frontCenterLFE =
+		frontStereo |
+		idWaveFile::CHANNEL_MASK_FRONT_CENTER |
+		idWaveFile::CHANNEL_MASK_LOW_FREQUENCY;
+	
+	switch (waveFormat.basic.numChannels)
+	{
+		case 1:
+		case 2:
+			// Standard OpenAL mono/stereo formats do not need MCFORMATS.
+			return true;
+			
+		case 4:
+			return mask == (
+				frontStereo |
+				idWaveFile::CHANNEL_MASK_BACK_LEFT |
+				idWaveFile::CHANNEL_MASK_BACK_RIGHT);
+			
+		case 6:
+		{
+			const uint32 rear51 =
+				frontCenterLFE |
+				idWaveFile::CHANNEL_MASK_BACK_LEFT |
+				idWaveFile::CHANNEL_MASK_BACK_RIGHT;
+			const uint32 side51 =
+				frontCenterLFE |
+				idWaveFile::CHANNEL_MASK_SIDE_LEFT |
+				idWaveFile::CHANNEL_MASK_SIDE_RIGHT;
+			return mask == rear51 || mask == side51;
+		}
+		
+		case 7:
+			return mask == (
+				frontCenterLFE |
+				idWaveFile::CHANNEL_MASK_BACK_CENTER |
+				idWaveFile::CHANNEL_MASK_SIDE_LEFT |
+				idWaveFile::CHANNEL_MASK_SIDE_RIGHT);
+			
+		case 8:
+			return mask == (
+				frontCenterLFE |
+				idWaveFile::CHANNEL_MASK_BACK_LEFT |
+				idWaveFile::CHANNEL_MASK_BACK_RIGHT |
+				idWaveFile::CHANNEL_MASK_SIDE_LEFT |
+				idWaveFile::CHANNEL_MASK_SIDE_RIGHT);
+			
+		default:
+			return false;
+	}
+}
+
+/*
+========================
 OpenAL_ResetSampleContextCaches
 ========================
 */
@@ -266,6 +338,21 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 		fileIn->ReadBig( playBegin );
 		fileIn->ReadBig( playLength );
 		idWaveFile::ReadWaveFormatDirect( format, fileIn );
+
+		// New generated multichannel samples retain their extensible channel
+		// mask. Older generated PCM samples have no mask to validate, so keep
+		// accepting them for backward compatibility.
+		if (format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE && !OpenAL_ValidateExtensibleChannelMask(format))
+		{
+			idLib::Warning(
+				"LoadGeneratedSample( %s ): unsupported %d-channel mask 0x%08x",
+				filename.c_str(),
+				format.basic.numChannels,
+				format.extra.extensible.channelMask);
+			loaded = false;
+			return false;
+		}
+
 		int num;
 		fileIn->ReadBig( num );
 		amplitude.Clear();
@@ -452,8 +539,11 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		}
 		else if( format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE )
 		{
-			// RB: not used in the PC version of the BFG edition
-			common->Error( "idSoundSample_OpenAL::CreateOpenALBuffer: could not decode extensible WAV format '%s' to 16 bit format", GetName() );
+			// Extensible PCM has already been validated by the loader. Its
+			// sample payload is ordinary interleaved 16-bit PCM.
+			assert(buffers.Num() == 1);
+			buffer = buffers[0].buffer;
+			bufferSize = buffers[0].bufferSize;
 		}
 		else
 		{
@@ -536,6 +626,25 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		MakeDefault();
 		return false;
 	}
+
+	if (format.basic.formatTag == idWaveFile::FORMAT_PCM && format.basic.numChannels > 2)
+	{
+		idLib::Warning( "LoadWav( %s ): multichannel PCM requires WAVE_FORMAT_EXTENSIBLE channel-mask metadata", filename.c_str());
+		MakeDefault();
+		return false;
+	}
+	
+	if (format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE && !OpenAL_ValidateExtensibleChannelMask(format))
+	{
+		idLib::Warning(
+			"LoadWav( %s ): unsupported %d-channel mask 0x%08x",
+			filename.c_str(),
+			format.basic.numChannels,
+			format.extra.extensible.channelMask);
+		MakeDefault();
+		return false;
+	}
+
 	timestamp = wave.Timestamp();
 	
 	totalBufferSize = wave.SeekToChunk( 'data' );
@@ -669,13 +778,6 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	
 	wave.Close();
 	
-	if( format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE )
-	{
-		// Normalize WAVE_FORMAT_EXTENSIBLE to its underlying sample format
-		// after retaining the channel count/layout information.
-		format.basic.formatTag = format.extra.extensible.subFormat.data1;
-	}
-	
 	// sanity check...
 	assert( buffers[buffers.Num() - 1].numSamples == playBegin + playLength );
 	
@@ -702,7 +804,7 @@ void idSoundSample_OpenAL::MakeDefault()
 	format.basic.formatTag = idWaveFile::FORMAT_PCM;
 	format.basic.numChannels = 1;
 	format.basic.bitsPerSample = 16;
-	format.basic.samplesPerSec = 22050; //44100; //XAUDIO2_MIN_SAMPLE_RATE;
+	format.basic.samplesPerSec = 22050;
 	format.basic.blockSize = format.basic.numChannels * format.basic.bitsPerSample / 8;
 	format.basic.avgBytesPerSec = format.basic.samplesPerSec * format.basic.blockSize;
 	
@@ -1100,9 +1202,7 @@ ALenum idSoundSample_OpenAL::GetOpenALSoftFormat( ALenum channels, ALenum type )
 
 ALenum idSoundSample_OpenAL::GetOpenALBufferFormat() const
 {
-	ALenum alFormat;
-	
-	if( format.basic.formatTag == idWaveFile::FORMAT_PCM )
+	if (format.basic.formatTag == idWaveFile::FORMAT_PCM || format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE)
 	{
 		switch (NumChannels())
 		{
