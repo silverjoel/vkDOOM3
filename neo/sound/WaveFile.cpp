@@ -570,21 +570,27 @@ Reads a loop point from a 'smpl' chunk in a wave file, returns 0 if none are fou
 ========================
 */
 bool idWaveFile::ReadLoopData( int & start, int & end ) {
-	uint32 chunkSize = SeekToChunk( samplerChunk_t::id );
-	if ( chunkSize < sizeof( samplerChunk_t ) ) {
+	const uint32 chunkSize = SeekToChunk(samplerChunk_t::id);
+	const uint32 requiredSize = (uint32)sizeof(samplerChunk_t) + (uint32)sizeof(sampleData_t);
+	if (chunkSize < requiredSize) {
 		return false;
 	}
 
 	samplerChunk_t smpl;
-	Read( &smpl, sizeof( smpl ) );
+	if (Read(&smpl, sizeof(smpl)) != sizeof(smpl)) {
+		return false;
+	}
 	idSwap::Little( smpl.numSampleLoops );
 
 	if ( smpl.numSampleLoops < 1 ) {
-		return false; // this is possible returning false lets us know there are more then 1 sample look in the file and is not appropriate for traditional looping
+		return false;
 	}
 
 	sampleData_t smplData;
-	Read( &smplData, sizeof( smplData ) );
+	if (Read(&smplData, sizeof(smplData)) != sizeof(smplData)) {
+		return false;
+	}
+	idSwap::Little(smplData.type);
 	idSwap::Little( smplData.start );
 	idSwap::Little( smplData.end );
 
@@ -593,8 +599,13 @@ bool idWaveFile::ReadLoopData( int & start, int & end ) {
 		return false;
 	}
 
-	start = smplData.start;
-	end = smplData.end;
+	if (smplData.start > 0x7FFFFFFFu || smplData.end > 0x7FFFFFFFu || smplData.end < smplData.start) {
+		idLib::Warning("Invalid loop range in %s", file->GetName());
+		return false;
+	}
+	
+	start = (int)smplData.start;
+	end = (int)smplData.end;
 	return true;
 }
 
