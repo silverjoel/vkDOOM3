@@ -553,23 +553,43 @@ void I_ShutdownSound(void)
 	int done = 0;
 	int i;
 
-	if (S_initialized) {
-		// Stop all sounds
-		for (i = 0; i < NUM_SOUNDBUFFERS; i++) {
+	if (S_initialized) 
+	{
+		// Stop and detach every source. I_StopSound() filters by player, which
+		// can leave split-screen sounds active, and a stopped OpenAL source still
+		// keeps its buffer attached. The buffers are reused by I_InitSound(), so
+		// they must all be detached before alBufferData() repopulates them.
+
+		for (i = 0; i < NUM_SOUNDBUFFERS; i++)
+		{
 			activeSound_t* sound = &activeSounds[i];
 
-			if (!sound) {
-				continue;
+			if (soundHardwareInitialized && sound->alSourceVoice)
+			{
+				alSourceStop(sound->alSourceVoice);
+				alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
+
+				sound->id = 0;
+				sound->valid = 0;
+				sound->start = 0;
+				sound->player = -1;
+				sound->localSound = false;
+				sound->originator = NULL;
 			}
-
-			I_StopSound(sound->id, 0);
 		}
+		memset(soundEvents, 0, sizeof(soundEvents));
+			
+		// Free allocated sound memory and clear all data pointers, including
+		// aliases that point at one of the allocations freed above.
 
-		// Free allocated sound memory
-		for (i = 1; i < NUMSFX; i++) {
-			if (S_sfx[i].data && !(S_sfx[i].link)) {
+		for (i = 1; i < NUMSFX; i++) 
+		{
+			if (S_sfx[i].data && !(S_sfx[i].link)) 
+			{
 				free(S_sfx[i].data);
 			}
+			S_sfx[i].data = NULL;
+			lengths[i] = 0;
 		}
 	}
 
