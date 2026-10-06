@@ -443,7 +443,12 @@ void idSoundHardware_OpenAL::Update()
 		if( lastResetTime + 1000 < nowTime )
 		{
 			lastResetTime = nowTime;
-			Init();
+			// Never recreate the OpenAL context behind the sound system's
+			// back. Buffer names are context-local, so a hardware-only Init()
+			// would leave every resident idSoundSample with a stale buffer
+			// name. Request the normal sound-system restart instead; it
+			// invalidates and rebuilds all sample buffers for the new context.
+			soundSystemLocal.SetNeedsRestart();
 		}
 		return;
 	}
