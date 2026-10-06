@@ -446,6 +446,13 @@ I_StartSound
 */
 int I_StartSound(int id, mobj_t* origin, mobj_t* listener_origin, int vol, int pitch, int priority)
 {
+
+	// I_StartSound2() also validates the id, but split-screen event coalescing
+	// indexes soundEvents[id] before reaching that function.
+	if (id <= 0 || id >= NUMSFX) {
+		return 0;
+	}
+
 	// only allow player 0s sounds in intermission and finale screens
 	if (::g->gamestate != GS_LEVEL && DoomLib::GetPlayer() != 0) {
 		return 0;
@@ -673,11 +680,19 @@ void I_UpdateSound(void)
 				doom_Listener.Position.y, doom_Listener.Position.z);
 		} else {
 			if (sound->originator == NULL) {
+				// A non-local source without an originator cannot be positioned
+				// safely. Stop it before retiring the CPU-side channel so it
+				// cannot continue as an orphaned "ghost" sound.
+				alGetError();
+				alSourceStop(sound->alSourceVoice);
+				alGetError();
+
 				sound->id = 0;
 				sound->valid = 0;
 				sound->start = 0;
 				sound->player = -1;
 				sound->localSound = false;
+				sound->originator = NULL;
 				continue;
 			}
 			
