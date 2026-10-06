@@ -331,8 +331,12 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 	idFileLocal fileIn( fileSystem->OpenFileReadMemory( filename ) );
 	if( fileIn != NULL )
 	{
-		uint32 magic;
-		fileIn->ReadBig( magic );
+		uint32 magic = 0;
+		if (fileIn->ReadBig(magic) != sizeof(magic))
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): truncated generated sample header", filename.c_str());
+			return false;
+		}
 
 		if (magic != SOUND_MAGIC_IDMSA)
 		{
@@ -340,10 +344,15 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			return false;
 		}
 
-		fileIn->ReadBig( timestamp );
-		fileIn->ReadBig( loaded );
-		fileIn->ReadBig( playBegin );
-		fileIn->ReadBig( playLength );
+		if (fileIn->ReadBig(timestamp) != sizeof(timestamp) ||
+			fileIn->ReadBig(loaded) != sizeof(loaded) ||
+			fileIn->ReadBig(playBegin) != sizeof(playBegin) ||
+			fileIn->ReadBig(playLength) != sizeof(playLength))
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): truncated generated sample header", filename.c_str());
+			loaded = false;
+			return false;
+		}
 
 		if (!loaded)
 		{
