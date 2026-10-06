@@ -296,8 +296,16 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 			oldest = sound->start;
 		}
 
-		ALint sourceState;
+		ALint sourceState = AL_INITIAL;
+		alGetError();
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
+		const ALenum stateError = alGetError();
+		if (stateError != AL_NO_ERROR) {
+			// Do not reuse a source whose state cannot be queried. Leaving the
+			// channel valid prevents us from issuing additional setup calls to a
+			// source that OpenAL has already rejected.
+			continue;
+		}
 		if (sourceState == AL_STOPPED) {
 			break;
 		}
@@ -313,6 +321,10 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 		sound = &activeSounds[i];
 	}
 
+	// Isolate this start sequence from any sticky error left by an earlier
+	// OpenAL operation. CPU-side channel state is committed only after the
+	// complete source setup and alSourcePlay() succeed.
+	alGetError();
 	alSourceStop(sound->alSourceVoice);
 
 	// Attach the source voice to the correct buffer
@@ -335,20 +347,20 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	ALfloat x = 0.f;
 	ALfloat y = 0.f;
 	ALfloat z = 0.f;
+	bool localSound = false;
 	if (origin) {
 		if (origin == listener_origin) {
-			sound->localSound = true;
+			localSound = true;
 		}
 		else {
-			sound->localSound = false;
 			x = (ALfloat)(origin->x >> FRACBITS);
 			z = (ALfloat)(origin->y >> FRACBITS);
 		}
 	}
 	else {
-		sound->localSound = true;
+		localSound = true;
 	}
-	if (sound->localSound) {
+	if (localSound) {
 		x = doom_Listener.Position.x;
 		z = doom_Listener.Position.z;
 	}
@@ -356,11 +368,31 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 
 	alSourcePlay(sound->alSourceVoice);
 
-	// Set id, and start time
+	const ALenum startError = alGetError();
+	if (startError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to start SFX %d: 0x%X\n", id, startError);
+		
+		// The old sound was already stopped, so make the CPU-side slot free as
+		// well. Detach the buffer to ensure the next use performs a fresh bind.
+		alSourceStop(sound->alSourceVoice);
+		alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
+		alGetError();
+		
+		sound->id = 0;
+		sound->start = 0;
+		sound->valid = 0;
+		sound->player = -1;
+		sound->localSound = false;
+		sound->originator = NULL;
+		return id;
+	}
+	
+	// Publish the channel only after OpenAL accepted the complete start.
 	sound->id = id;
 	sound->start = ::g->gametic;
 	sound->valid = 1;
 	sound->player = player;
+	sound->localSound = localSound;
 	sound->originator = origin;
 
 	return id;
