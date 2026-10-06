@@ -162,13 +162,20 @@ static int dumpstring( int32_t len, char *label)
 
 /* Read a MIDI event, returning a freshly allocated element that can
 be linked to the event list */
-static MidiEventList *read_midi_event(void)
+static MidiEventList* read_midi_event(bool resetRunningStatus)
 {
-	static uint8_t laststatus, lastchan;
+	static uint8_t laststatus = 0, lastchan = 0;
+	static bool runningStatusValid = false;
 	static uint8_t nrpn=0, rpn_msb[16], rpn_lsb[16]; /* one per channel */
 	uint8_t me, type, a,b,c;
 	 int32_t len;
 	MidiEventList *newEventList;
+
+	if (resetRunningStatus) {
+		laststatus = 0;
+		lastchan = 0;
+		runningStatusValid = false;
+	}
 
 	for (;;)
 	{
@@ -202,12 +209,19 @@ static MidiEventList *read_midi_event(void)
 				static char *label[]={
 					"Text event: ", "Text: ", "Copyright: ", "Track name: ",
 						"Instrument: ", "Lyric: ", "Marker: ", "Cue point: "};
-					dumpstring(len, label[(type>7) ? 0 : type]);
+				if (dumpstring(len, label[(type > 7) ? 0 : type]) != 0) {
+					return 0;
+				}
 			}
 			else
 				switch(type)
 			{
 				case 0x2F: /* End of Track */
+					// Standard MIDI files require a zero-length EOT event.
+					if (len != 0) {
+						ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: invalid End-of-Track length %d", current_filename, len);
+						return 0;
+					}
 					return MAGIC_EOT;
 
 				case 0x51: /* Tempo */
@@ -233,12 +247,25 @@ static MidiEventList *read_midi_event(void)
 			a=me;
 			if (a & 0x80) /* status byte */
 			{
+				// Only channel voice messages participate in running status.
+				// Other system status bytes are unsupported in this parser and
+				// must not be reinterpreted as channel messages.
+				if ((a & 0xF0) == 0xF0) {ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: unsupported MIDI status 0x%02X", current_filename, a);
+					return 0;
+				}
 				lastchan=a & 0x0F;
 				laststatus=(a>>4) & 0x07;
+				runningStatusValid = true;
 				if (read_local(&a, 1, 1) != 1) {
 					return 0;
 				}
 				a &= 0x7F;
+			}
+			else if (!runningStatusValid)
+			{
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+					"%s: MIDI running status used before a status byte", current_filename);
+				return 0;
 			}
 			switch(laststatus)
 			{
@@ -395,10 +422,13 @@ static int read_track(int append)
 		return -2;
 	}
 
+	bool firstEvent = true;
+
 	for (;;)
 	{
-		if (!(newEventList=read_midi_event())) /* Some kind of error  */
+		if (!(newEventList = read_midi_event(firstEvent))) /* Some kind of error  */
 			return -2;
+		firstEvent = false;
 
 		if (newEventList==MAGIC_EOT) /* End-of-track Hack. */
 		{
@@ -648,6 +678,12 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 	}
 	else divisions=(int32_t)(divisions_tmp);
 
+	if (divisions <= 0) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+		"%s: Invalid MIDI timing division %d", current_filename, divisions);
+		return 0;
+	}
+
 	if (len > 6)
 	{
 		ctl->cmsg(CMSG_WARNING, VERB_NORMAL, 
@@ -747,6 +783,12 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 		divisions= (int32_t)(-(divisions_tmp/256)) * (int32_t)(divisions_tmp & 0xFF);
 	}
 	else divisions=(int32_t)(divisions_tmp);
+
+	if (divisions <= 0) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+		"%s: Invalid MIDI timing division %d", current_filename, divisions);
+		return 0;
+	}
 
 	if (len > 6)
 	{
