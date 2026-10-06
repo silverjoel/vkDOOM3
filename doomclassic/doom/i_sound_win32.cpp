@@ -1208,6 +1208,13 @@ void I_UpdateMusic(void)
 		return;
 	}
 
+	// A decoded song can be waiting for its OpenAL upload when the game is
+	// paused. Keep it pending rather than starting playback underneath the
+	// pause state; I_ResumeSong() leaves pending songs for this path to start.
+	if (DoomLib::GetPlayer() >= 0 && ::g->mus_paused) {
+		return;
+	}
+
 	if (alMusicSourceVoice) {
 		// Set the volume
 		alSourcef(alMusicSourceVoice, AL_GAIN, x_MusicVolume * GLOBAL_VOLUME_MULTIPLIER);
@@ -1271,6 +1278,12 @@ void I_PauseSong(int handle)
 		return;
 	}
 
+	// A pending song has not been attached or started yet. I_UpdateMusic()
+	// observes ::g->mus_paused and will leave it pending until resume.
+	if (waitingForMusic) {
+		return;
+	}
+
 	alSourcePause(alMusicSourceVoice);
 }
 
@@ -1285,6 +1298,12 @@ void I_ResumeSong(int handle)
 		return;
 	}
 
+	// Pending music will be started by I_UpdateMusic() once S_ResumeSound()
+	// clears ::g->mus_paused.
+	if (waitingForMusic) {
+		return;
+	}
+
 	alSourcePlay(alMusicSourceVoice);
 }
 
@@ -1295,7 +1314,16 @@ I_StopSong
 */
 void I_StopSong(int handle)
 {
-	if (!Music_initialized || !alMusicSourceVoice) {
+	if (!Music_initialized) {
+		return;
+	}
+	
+	// Cancel a decoded-but-not-yet-uploaded song as well as an already playing
+	// source. Otherwise a later I_UpdateMusic() could start music after Stop.
+	waitingForMusic = false;
+	musicReady = false;
+	
+	if (!alMusicSourceVoice) {
 		return;
 	}
 
