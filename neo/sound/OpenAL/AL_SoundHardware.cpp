@@ -37,6 +37,11 @@ If you have questions concerning this license or the applicable additional terms
 idCVar s_device( "s_device", "-1", CVAR_INTEGER | CVAR_ARCHIVE, "Which audio device to use (listDevices to list, -1 for default)" );
 extern idCVar s_volume_dB;
 
+// ALC_EXT_disconnect defines ALC_CONNECTED as 0x313. Keep the token local
+// instead of requiring AL/alext.h; the query is only used when the device
+// explicitly reports support for ALC_EXT_disconnect.
+static const ALCenum ALC_CONNECTED_EXT = 0x313;
+
 /*
 ========================
 idSoundHardware_OpenAL::idSoundHardware_OpenAL
@@ -46,6 +51,7 @@ idSoundHardware_OpenAL::idSoundHardware_OpenAL()
 {
 	openalDevice = NULL;
 	openalContext = NULL;
+	disconnectExtensionAvailable = false;
 	
 	voices.SetNum( 0 );
 	freeVoices.SetNum( 0 );
@@ -226,6 +232,8 @@ void idSoundHardware_OpenAL::Init()
 		common->FatalError( "idSoundHardware_OpenAL::Init: alcOpenDevice() failed\n" );
 		return;
 	}
+
+	disconnectExtensionAvailable = (alcIsExtensionPresent(openalDevice, "ALC_EXT_disconnect") != ALC_FALSE);
 	
 	openalContext = alcCreateContext( openalDevice, NULL );
 
@@ -351,6 +359,8 @@ void idSoundHardware_OpenAL::Shutdown()
 		alcCloseDevice( openalDevice );
 		openalDevice = NULL;
 	}
+
+	disconnectExtensionAvailable = false;
 }
 
 /*
@@ -451,6 +461,29 @@ void idSoundHardware_OpenAL::Update()
 			soundSystemLocal.SetNeedsRestart();
 		}
 		return;
+	}
+
+	if (disconnectExtensionAvailable)
+	{
+		ALCint connected = ALC_TRUE;
+		
+		// ALC errors are sticky. Isolate this query so an unrelated earlier
+		// error cannot make device-loss detection unreliable.
+		alcGetError(openalDevice);
+		alcGetIntegerv(openalDevice, ALC_CONNECTED_EXT, 1, &connected);
+		const ALCenum connectionError = alcGetError(openalDevice);
+		
+		if (connectionError == ALC_NO_ERROR && connected == ALC_FALSE)
+		{
+			const int nowTime = Sys_Milliseconds();
+			if (lastResetTime + 1000 < nowTime)
+			{
+				lastResetTime = nowTime;
+				idLib::Warning("OpenAL playback device disconnected; requesting sound restart");
+				soundSystemLocal.SetNeedsRestart();
+			}
+			return;
+		}
 	}
 	
 	if( soundSystem->IsMuted() )

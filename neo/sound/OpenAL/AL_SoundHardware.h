@@ -89,6 +89,7 @@ private:
 	
 	ALCdevice*			openalDevice;
 	ALCcontext*			openalContext;
+	bool				disconnectExtensionAvailable;
 	
 	int					lastResetTime;
 	
