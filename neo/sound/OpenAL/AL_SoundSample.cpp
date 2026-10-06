@@ -855,9 +855,32 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	}
 	else if( format.basic.formatTag == idWaveFile::FORMAT_ADPCM )
 	{
+
+		// The decoder operates on complete ADPCM blocks only. Reject a partial
+		// trailing block instead of silently ignoring truncated encoded data.
+		if ((totalBufferSize % format.basic.blockSize) != 0)
+		{
+			idLib::Warning("LoadWav( %s ): MS ADPCM data is not block aligned", filename.c_str());
+			MakeDefault();
+			return false;
+		}
+		
+		const uint64 blockCount = (uint64)totalBufferSize / (uint64)format.basic.blockSize;
+		const uint64 decodedSampleCount = blockCount * (uint64)format.extra.adpcm.samplesPerBlock;
+		const uint64 decodedByteCount = decodedSampleCount * (uint64)format.basic.numChannels * (uint64)sizeof(int16);
+		
+		// playLength, totalBufferSize, and the legacy decoder's encoded length
+		// are all represented with signed 32-bit engine fields. Keep both the
+		// sample count and decoded PCM allocation within that range.
+		if (decodedSampleCount == 0 || decodedSampleCount > 0x7FFFFFFFULL || decodedByteCount > 0x7FFFFFFFULL)
+		{
+			idLib::Warning("LoadWav( %s ): MS ADPCM sample is too large", filename.c_str());
+			MakeDefault();
+			return false;
+		}
 	
 		playBegin = 0;
-		playLength = ( ( totalBufferSize / format.basic.blockSize ) * format.extra.adpcm.samplesPerBlock );
+		playLength = (int)decodedSampleCount;
 		
 		buffers.SetNum( 1 );
 		buffers[0].bufferSize = totalBufferSize;
