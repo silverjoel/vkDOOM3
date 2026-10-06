@@ -153,15 +153,29 @@ getsfx
 //
 void* getsfx(const char* sfxname, int* len)
 {
+	if (len == NULL) {
+		return NULL;
+	}
+	*len = 0;
+	
+	if (sfxname == NULL || sfxname[0] == '\0') {
+		printf("[doomclassic] invalid empty SFX name\n");
+		return NULL;
+	}
+
 	unsigned char* sfx;
 	unsigned char* sfxmem;
-	int                 size;
-	char                name[20];
-	int                 sfxlump;
-	//float               scale = 1.0f;
+	char name[20];
+	int sfxlump;
+	//float scale = 1.0f;
 
-	// Get the sound data from the WAD
-	sprintf(name, "ds%s", sfxname);
+	// Get the sound data from the WAD. Doom SFX names are short, but keep
+	// this bounded so malformed metadata cannot overflow the stack buffer.
+	const int nameLength = idStr::snPrintf(name, static_cast<int>(sizeof(name)), "ds%s", sfxname);
+	if (nameLength < 0 || nameLength >= (int)sizeof(name)) {
+		printf("[doomclassic] SFX name is too long: '%s'\n", sfxname);
+		return NULL;
+	}
 
 	// Scale down the plasma gun, it clips
 	//if ( strcmp( sfxname, "plasma" ) == 0 ) {
@@ -180,27 +194,38 @@ void* getsfx(const char* sfxname, int* len)
 	// Sound lump headers are 8 bytes.
 	const int SOUND_LUMP_HEADER_SIZE_IN_BYTES = 8;
 
-	size = W_LumpLength(sfxlump) - SOUND_LUMP_HEADER_SIZE_IN_BYTES;
+	const int lumpLength = W_LumpLength(sfxlump);
+	if (lumpLength <= SOUND_LUMP_HEADER_SIZE_IN_BYTES) {
+		printf("[doomclassic] invalid SFX lump '%s' length: %d\n", name, lumpLength);
+		return NULL;
+	}
+
+	const int size = lumpLength - SOUND_LUMP_HEADER_SIZE_IN_BYTES;
 
 	sfx = (unsigned char*)W_CacheLumpNum(sfxlump, PU_CACHE_SHARED);
+	if (sfx == NULL) {
+		printf("[doomclassic] failed to cache SFX lump '%s'\n", name);
+		return NULL;
+	}
+
 	const unsigned char* sfxSampleStart = sfx + SOUND_LUMP_HEADER_SIZE_IN_BYTES;
 
-	// Allocate from zone memory.
-	//sfxmem = (float*)DoomLib::Z_Malloc( size*(sizeof(float)), PU_SOUND_SHARED, 0 );
-	sfxmem = (unsigned char*)malloc(size * sizeof(unsigned char));
-
-	// Now copy, and convert to Xbox360 native float samples, do initial volume ramp, and scale
-	for (int i = 0; i < size; i++) {
-		sfxmem[i] = sfxSampleStart[i];// * scale;
+	// Allocate the persistent copy used by Classic Doom sound playback.
+	sfxmem = (unsigned char*)malloc((size_t)size);
+	if (sfxmem == NULL) {
+		printf("[doomclassic] failed to allocate %d bytes for SFX '%s'\n", size, name);
+		Z_Free(sfx);
+		return NULL;
 	}
+
+	memcpy(sfxmem, sfxSampleStart, (size_t)size);
 
 	// Remove the cached lump.
 	Z_Free(sfx);
 
-	// Set length.
+	// Set length only after the complete copy succeeds.
 	*len = size;
 
-	// Return allocated padded data.
 	return (void*)(sfxmem);
 }
 
