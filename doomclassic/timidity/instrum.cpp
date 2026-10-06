@@ -160,17 +160,20 @@ static  int32_t convert_vibrato_rate(uint8_t rate)
 		(rate * 2 * VIBRATO_SAMPLE_INCREMENTS);
 }
 
-static void reverse_data(int16_t *sp,  int32_t ls,  int32_t le)
+static void reverse_data(int16_t* sp, int32_t ls, int32_t le)
 {
-	int16_t s, *ep=sp+le;
-	sp+=ls;
-	le-=ls;
-	le/=2;
-	while (le--)
+	if (sp == NULL || ls < 0 || le <= ls) {
+		return;
+	}
+	
+	int16_t * left = sp + ls;
+	int16_t * right = sp + le - 1;
+	
+	while (left < right)
 	{
-		s=*sp;
-		*sp++=*ep;
-		*ep--=s;
+		const int16_t s = *left;
+		*left++ = *right;
+		*right-- = s;
 	}
 }
 
