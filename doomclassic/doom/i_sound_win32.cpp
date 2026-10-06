@@ -568,15 +568,18 @@ void I_ShutdownSound(void)
 			{
 				alSourceStop(sound->alSourceVoice);
 				alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
-
-				sound->id = 0;
-				sound->valid = 0;
-				sound->start = 0;
-				sound->player = -1;
-				sound->localSound = false;
-				sound->originator = NULL;
 			}
+
+			// Always clear CPU-side channel state, even if the OpenAL hardware
+			// is already unavailable or this channel has no source handle.
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
 		}
+
 		memset(soundEvents, 0, sizeof(soundEvents));
 			
 		// Free allocated sound memory and clear all data pointers, including
