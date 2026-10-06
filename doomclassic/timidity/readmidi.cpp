@@ -422,6 +422,42 @@ static int read_track(int append)
 		return -2;
 	}
 
+	if (len < 0) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+		"%s: Invalid negative MIDI track length.", current_filename);
+		return -2;
+	}
+	
+	size_t trackStart = 0;
+	size_t sourceLength = 0;
+	
+	if (fp) {
+		const int filePosition = fp->Tell();
+		const int fileLength = fp->Length();
+		if (filePosition < 0 || fileLength < filePosition) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: Invalid MIDI file position.", current_filename);
+			return -2;
+		}
+		trackStart = (size_t)filePosition;
+		sourceLength = (size_t)fileLength;
+		
+	} else {
+		if (local_buffer == NULL || local_buffer_cur > local_buffer_length) {
+			return -2;
+		}
+		trackStart = local_buffer_cur;
+		sourceLength = local_buffer_length;
+	}
+	
+	if ((size_t)len > sourceLength - trackStart) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+		"%s: MIDI track length exceeds remaining input.", current_filename);
+		return -2;
+	}
+	
+	const size_t trackEnd = trackStart + (size_t)len;
+
 	bool firstEvent = true;
 
 	for (;;)
@@ -430,12 +466,41 @@ static int read_track(int append)
 			return -2;
 		firstEvent = false;
 
+		size_t currentPosition = 0;
+		if (fp) {
+			const int filePosition = fp->Tell();
+			if (filePosition < 0) {
+				return -2;
+			}
+			 currentPosition = (size_t)filePosition;
+		} else {
+			currentPosition = local_buffer_cur;
+		}
+		
+		if (currentPosition > trackEnd) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: MIDI event crosses track boundary.", current_filename);
+			return -2;
+		}
+
 		if (newEventList==MAGIC_EOT) /* End-of-track Hack. */
 		{
+			// A valid EOT may be followed by padding or unused bytes inside the
+			// declared MTrk payload. Position the reader at the next chunk.
+			if (currentPosition < trackEnd && !skip_local(trackEnd - currentPosition)) {
+				return -2;
+			}
 			return 0;
+		}
+		
+		if (currentPosition == trackEnd) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: MIDI track ended without End-of-Track event.", current_filename);
+			return -2;
 		}
 
 		next=(MidiEventList *)meep->next;
+
 		while (next && (next->event.time < newEventList->event.time))
 		{
 			meep=next;
