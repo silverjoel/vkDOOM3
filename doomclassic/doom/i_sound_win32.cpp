@@ -316,11 +316,6 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 		if (!sound->valid)
 			break;
 
-		if (!oldest || oldest > sound->start) {
-			oldestnum = i;
-			oldest = sound->start;
-		}
-
 		ALint sourceState = AL_INITIAL;
 		alGetError();
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
@@ -333,6 +328,14 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 		}
 		if (sourceState == AL_STOPPED) {
 			break;
+		}
+
+		// Only successfully queried, still-active sources are candidates for
+		// oldest-channel stealing. Use oldestnum as the initialization sentinel
+		// so a sound that started at gametic 0 is handled correctly.
+		if (oldestnum < 0 || sound->start < oldest) {
+			oldestnum = i;
+			oldest = sound->start;
 		}
 	}
 
