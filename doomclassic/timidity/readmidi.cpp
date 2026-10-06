@@ -342,7 +342,7 @@ static MidiEventList* read_midi_event(bool resetRunningStatus)
 					case 98: nrpn[lastchan] = true; rpn_lsb[lastchan] = b; break;
 
 					case 6:
-						if (nrpn)
+						if (nrpn[lastchan])
 						{
 							ctl->cmsg(CMSG_INFO, VERB_DEBUG, 
 								"(Data entry (MSB) for NRPN %02x,%02x: %ld)",
