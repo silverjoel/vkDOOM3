@@ -1185,7 +1185,7 @@ void I_PlaySong(const char* songname, int looping)
 	alSourcei(alMusicSourceVoice, AL_LOOPING, looping ? AL_TRUE : AL_FALSE);
 	const ALenum loopingError = alGetError();
 	if (loopingError != AL_NO_ERROR) {
-		printf("[doomclassic] failed to set music looping state: 0x%X\\n", loopingError);
+		printf("[doomclassic] failed to set music looping state: 0x%X\n", loopingError);
 	}
 
 	musicReady = false;
@@ -1213,18 +1213,51 @@ void I_UpdateMusic(void)
 		alSourcef(alMusicSourceVoice, AL_GAIN, x_MusicVolume * GLOBAL_VOLUME_MULTIPLIER);
 	}
 
-	if (waitingForMusic) {
-		if (musicReady && alMusicSourceVoice) {
-			if (musicBuffer) {
-				alSourcei(alMusicSourceVoice, AL_BUFFER, 0);
-				alBufferData(alMusicBuffer, MIDI_SAMPLETYPE, musicBuffer, totalBufferSize, MIDI_RATE);
-				alSourcei(alMusicSourceVoice, AL_BUFFER, alMusicBuffer);
-				alSourcePlay(alMusicSourceVoice);
-			}
-
-			waitingForMusic = false;
-		}
+	if (!waitingForMusic) {
+		return;
 	}
+
+	if (!musicReady || !alMusicSourceVoice || !alMusicBuffer || !musicBuffer || totalBufferSize <= 0) {
+		musicReady = false;
+		waitingForMusic = false;
+		return;
+	}
+	
+	// Keep each OpenAL operation isolated so a stale error cannot be
+	// misattributed to the music upload/start sequence.
+	alGetError();
+	alSourcei(alMusicSourceVoice, AL_BUFFER, 0);
+	ALenum alError = alGetError();
+	if (alError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to detach previous music buffer: 0x%X\n", alError);
+		musicReady = false;
+		waitingForMusic = false;
+		return;
+	}
+	
+	alBufferData(alMusicBuffer, MIDI_SAMPLETYPE, musicBuffer, totalBufferSize, MIDI_RATE);
+	alError = alGetError();
+	if (alError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to upload music buffer: 0x%X\n", alError);
+		musicReady = false;
+		waitingForMusic = false;
+		return;
+	}
+	
+	alSourcei(alMusicSourceVoice, AL_BUFFER, alMusicBuffer);
+	alSourcePlay(alMusicSourceVoice);
+	alError = alGetError();
+	if (alError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to start music playback: 0x%X\n", alError);
+		alSourceStop(alMusicSourceVoice);
+		alSourcei(alMusicSourceVoice, AL_BUFFER, 0);
+		alGetError();
+		musicReady = false;
+		waitingForMusic = false;
+		return;
+	}
+	
+	waitingForMusic = false;
 }
 
 /*
