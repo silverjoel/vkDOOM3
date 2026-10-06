@@ -199,7 +199,9 @@ const char * idWaveFile::ReadWaveFormat( waveFmt_t & format ) {
 		return "Format chunk too small";
 	}
 
-	Read( &format.basic, sizeof( format.basic ) );
+	if (Read(&format.basic, sizeof(format.basic)) != sizeof(format.basic)) {
+		return "Truncated basic wave format";
+	}
 
 	{
 		idSwapClass<waveFmt_t::basic_t> swap;
@@ -213,26 +215,51 @@ const char * idWaveFile::ReadWaveFormat( waveFmt_t & format ) {
 
 	if ( format.basic.formatTag == FORMAT_PCM ) {
 	} else if ( format.basic.formatTag == FORMAT_ADPCM ) {
-		Read( &format.extraSize, sizeof( format.extraSize ) );
+		const uint32 requiredSize =
+			(uint32)sizeof(format.basic) +
+			(uint32)sizeof(format.extraSize) +
+			(uint32)sizeof(format.extra.adpcm);
+		if (formatSize < requiredSize) {
+			return "Truncated ADPCM format chunk";
+		}
+		if (Read(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize)) {
+			return "Truncated ADPCM extra size";
+		}
 		idSwap::Little( format.extraSize );
 		if ( format.extraSize != sizeof( waveFmt_t::extra_t::adpcm_t ) ) {
 			return "Incorrect number of coefficients in ADPCM file";
 		}
-		Read( &format.extra.adpcm, sizeof( format.extra.adpcm ) );
+		if (Read(&format.extra.adpcm, sizeof(format.extra.adpcm)) != sizeof(format.extra.adpcm)) {
+			return "Truncated ADPCM format data";
+		}
 		idSwapClass<waveFmt_t::extra_t::adpcm_t> swap;
 		swap.Little( format.extra.adpcm.samplesPerBlock );
 		swap.Little( format.extra.adpcm.numCoef );
+		if (format.extra.adpcm.numCoef == 0 || format.extra.adpcm.numCoef > 7) {
+			return "Invalid number of coefficients in ADPCM file";
+		}
 		for ( int i = 0; i < format.extra.adpcm.numCoef; i++ ) {
 			swap.Little( format.extra.adpcm.aCoef[ i ].coef1 );
 			swap.Little( format.extra.adpcm.aCoef[ i ].coef2 );
 		}
 	} else if ( format.basic.formatTag == FORMAT_XMA2 ) {
-		Read( &format.extraSize, sizeof( format.extraSize ) );
+		const uint32 requiredSize =
+			(uint32)sizeof(format.basic) +
+			(uint32)sizeof(format.extraSize) +
+			(uint32)sizeof(format.extra.xma2);
+		if (formatSize < requiredSize) {
+			return "Truncated XMA2 format chunk";
+		}
+		if (Read(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize)) {
+			return "Truncated XMA2 extra size";
+		}
 		idSwap::Little( format.extraSize );
 		if ( format.extraSize != sizeof( waveFmt_t::extra_t::xma2_t ) ) {
 			return "Incorrect chunk size in XMA2 file";
 		}
-		Read( &format.extra.xma2, sizeof( format.extra.xma2 ) );
+		if (Read(&format.extra.xma2, sizeof(format.extra.xma2)) != sizeof(format.extra.xma2)) {
+			return "Truncated XMA2 format data";
+		}
 		idSwapClass<waveFmt_t::extra_t::xma2_t> swap;
 		swap.Little( format.extra.xma2.numStreams );
 		swap.Little( format.extra.xma2.channelMask );
@@ -246,12 +273,23 @@ const char * idWaveFile::ReadWaveFormat( waveFmt_t & format ) {
 		swap.Little( format.extra.xma2.encoderVersion );
 		swap.Little( format.extra.xma2.blockCount );
 	} else if ( format.basic.formatTag == FORMAT_EXTENSIBLE ) {
-		Read( &format.extraSize, sizeof( format.extraSize ) );
+		const uint32 requiredSize =
+			(uint32)sizeof(format.basic) +
+			(uint32)sizeof(format.extraSize) +
+			(uint32)sizeof(format.extra.extensible);
+		if (formatSize < requiredSize) {
+			return "Truncated extensible wave format chunk";
+		}
+		if (Read(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize)) {
+			return "Truncated extensible wave extra size";
+		}
 		idSwap::Little( format.extraSize );
 		if ( format.extraSize != sizeof( waveFmt_t::extra_t::extensible_t ) ) {
 			return "Incorrect chunk size in extensible wave file";
 		}
-		Read( &format.extra.extensible, sizeof( format.extra.extensible ) );
+		if (Read(&format.extra.extensible, sizeof(format.extra.extensible)) != sizeof(format.extra.extensible)) {
+			return "Truncated extensible wave format data";
+		}
 		idSwapClass<waveFmt_t::extra_t::extensible_t> swap;
 		swap.Little( format.extra.extensible.validBitsPerSample );
 		swap.Little( format.extra.extensible.channelMask );
@@ -286,7 +324,15 @@ Reads a wave format header from a file ptr,
 */
 bool idWaveFile::ReadWaveFormatDirect( waveFmt_t & format, idFile *file ) {
 	
-	file->Read( &format.basic, sizeof( format.basic ) );
+	if (file == NULL) {
+		return false;
+	}
+	
+	memset(&format, 0, sizeof(format));
+	
+	if (file->Read(&format.basic, sizeof(format.basic)) != sizeof(format.basic)) {
+		return false;
+	}
 
 	{
 		idSwapClass<waveFmt_t::basic_t> swap;
@@ -300,26 +346,37 @@ bool idWaveFile::ReadWaveFormatDirect( waveFmt_t & format, idFile *file ) {
 
 	if ( format.basic.formatTag == FORMAT_PCM ) {
 	} else if ( format.basic.formatTag == FORMAT_ADPCM ) {
-		file->Read( &format.extraSize, sizeof( format.extraSize ) );
+		if (file->Read(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize)) {
+			return false;
+		}
 		idSwap::Little( format.extraSize );
 		if ( format.extraSize != sizeof( waveFmt_t::extra_t::adpcm_t ) ) {
 			return false;
 		}
-		file->Read( &format.extra.adpcm, sizeof( format.extra.adpcm ) );
+		if (file->Read(&format.extra.adpcm, sizeof(format.extra.adpcm)) != sizeof(format.extra.adpcm)) {
+			return false;
+		}
 		idSwapClass<waveFmt_t::extra_t::adpcm_t> swap;
 		swap.Little( format.extra.adpcm.samplesPerBlock );
 		swap.Little( format.extra.adpcm.numCoef );
+		if (format.extra.adpcm.numCoef == 0 || format.extra.adpcm.numCoef > 7) {
+			return false;
+		}
 		for ( int i = 0; i < format.extra.adpcm.numCoef; i++ ) {
 			swap.Little( format.extra.adpcm.aCoef[ i ].coef1 );
 			swap.Little( format.extra.adpcm.aCoef[ i ].coef2 );
 		}
 	} else if ( format.basic.formatTag == FORMAT_XMA2 ) {
-		file->Read( &format.extraSize, sizeof( format.extraSize ) );
+		if (file->Read(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize)) {
+			return false;
+		}
 		idSwap::Little( format.extraSize );
 		if ( format.extraSize != sizeof( waveFmt_t::extra_t::xma2_t ) ) {
 			return false;
 		}
-		file->Read( &format.extra.xma2, sizeof( format.extra.xma2 ) );
+		if (file->Read(&format.extra.xma2, sizeof(format.extra.xma2)) != sizeof(format.extra.xma2)) {
+			return false;
+		}
 		idSwapClass<waveFmt_t::extra_t::xma2_t> swap;
 		swap.Little( format.extra.xma2.numStreams );
 		swap.Little( format.extra.xma2.channelMask );
@@ -333,12 +390,16 @@ bool idWaveFile::ReadWaveFormatDirect( waveFmt_t & format, idFile *file ) {
 		swap.Little( format.extra.xma2.encoderVersion );
 		swap.Little( format.extra.xma2.blockCount );
 	} else if ( format.basic.formatTag == FORMAT_EXTENSIBLE ) {
-		file->Read( &format.extraSize, sizeof( format.extraSize ) );
+		if (file->Read(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize)) {
+			return false;
+		}
 		idSwap::Little( format.extraSize );
 		if ( format.extraSize != sizeof( waveFmt_t::extra_t::extensible_t ) ) {
 			return false;
 		}
-		file->Read( &format.extra.extensible, sizeof( format.extra.extensible ) );
+		if (file->Read(&format.extra.extensible, sizeof(format.extra.extensible)) != sizeof(format.extra.extensible)) {
+			return false;
+		}
 		idSwapClass<waveFmt_t::extra_t::extensible_t> swap;
 		swap.Little( format.extra.extensible.validBitsPerSample );
 		swap.Little( format.extra.extensible.channelMask );
