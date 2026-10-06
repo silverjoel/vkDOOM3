@@ -373,23 +373,96 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 		}
 
 		int num;
-		fileIn->ReadBig( num );
+
+		if (fileIn->ReadBig(num) != sizeof(num) || num < 0 || num > fileIn->Length() - fileIn->Tell())
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): invalid amplitude byte count", filename.c_str());
+			FreeData();
+			return false;
+		}
+
 		amplitude.Clear();
 		amplitude.SetNum( num );
-		fileIn->Read( amplitude.Ptr(), amplitude.Num() );
-		fileIn->ReadBig( totalBufferSize );
-		fileIn->ReadBig( num );
-		buffers.SetNum( num );
-		for( int i = 0; i < num; i++ )
+
+		if (num > 0 && fileIn->Read(amplitude.Ptr(), num) != num)
 		{
-			fileIn->ReadBig( buffers[ i ].numSamples );
-			fileIn->ReadBig( buffers[ i ].bufferSize );
-			buffers[ i ].buffer = AllocBuffer( buffers[ i ].bufferSize, GetName() );
-			fileIn->Read( buffers[ i ].buffer, buffers[ i ].bufferSize );
-			buffers[ i ].buffer = GPU_CONVERT_CPU_TO_CPU_CACHED_READONLY_ADDRESS( buffers[ i ].buffer );
+			idLib::Warning("LoadGeneratedSample( %s ): truncated amplitude data", filename.c_str());
+			FreeData();
+			return false;
+		}
+		
+		if (fileIn->ReadBig(totalBufferSize) != sizeof(totalBufferSize) || totalBufferSize <= 0)
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): invalid total buffer size", filename.c_str());
+			FreeData();
+			return false;
+		}
+		
+		int numBuffers;
+		if (fileIn->ReadBig(numBuffers) != sizeof(numBuffers) || numBuffers <= 0 || numBuffers > (fileIn->Length() - fileIn->Tell()) / (2 * sizeof(int)))
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): invalid buffer count", filename.c_str());
+			FreeData();
+			return false;
+		}
+		
+		if (playBegin < 0 || playLength <= 0 || format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.blockSize == 0)
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): invalid sample metadata", filename.c_str());
+			FreeData();
+			return false;
+		}
+		
+		buffers.Clear();
+		uint64 accumulatedBufferSize = 0;
+		
+		for (int i = 0; i < numBuffers; i++)
+		{
+			sampleBuffer_t sampleBuffer;
+			memset(&sampleBuffer, 0, sizeof(sampleBuffer));
+			
+			if (fileIn->ReadBig(sampleBuffer.numSamples) != sizeof(sampleBuffer.numSamples) ||
+				fileIn->ReadBig(sampleBuffer.bufferSize) != sizeof(sampleBuffer.bufferSize) ||
+				sampleBuffer.numSamples <= 0 ||
+				sampleBuffer.bufferSize <= 0 ||
+				sampleBuffer.bufferSize > fileIn->Length() - fileIn->Tell())
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): invalid buffer %d metadata", filename.c_str(), i);
+				FreeData();
+				return false;
+			}
+			
+			accumulatedBufferSize += static_cast<uint64>(sampleBuffer.bufferSize);
+			if (accumulatedBufferSize > 0x7FFFFFFFULL)
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): generated sample is too large", filename.c_str());
+				FreeData();
+				return false;
+			}
+			
+			sampleBuffer.buffer = AllocBuffer(sampleBuffer.bufferSize, GetName());
+			if (fileIn->Read(sampleBuffer.buffer, sampleBuffer.bufferSize) != sampleBuffer.bufferSize)
+			{
+				FreeBuffer(sampleBuffer.buffer);
+				idLib::Warning("LoadGeneratedSample( %s ): truncated buffer %d data", filename.c_str(), i);
+				FreeData();
+				return false;
+			}
+			
+			sampleBuffer.buffer = GPU_CONVERT_CPU_TO_CPU_CACHED_READONLY_ADDRESS(sampleBuffer.buffer);
+			buffers.Append(sampleBuffer);
+			
+		}
+		
+		if (accumulatedBufferSize != static_cast<uint64>(totalBufferSize))
+		{
+			idLib::Warning( "LoadGeneratedSample( %s ): buffer sizes do not match declared total", filename.c_str());
+			FreeData();
+			return false;
 		}
 		return true;
 	}
+
 #endif
 	
 	return false;
