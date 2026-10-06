@@ -754,9 +754,61 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		return false;
 	}
 
+	// These fields drive divisions, buffer sizing, and OpenAL upload. Reject
+	// malformed format headers before using them for any arithmetic.
+	if (format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.blockSize == 0)
+	{
+		idLib::Warning("LoadWav( %s ): invalid zero-valued wave format field", filename.c_str());
+		MakeDefault();
+		return false;
+	}
+	
+	if (format.basic.formatTag == idWaveFile::FORMAT_ADPCM)
+	{
+		const uint32 channels = format.basic.numChannels;
+		const uint32 headerBytes = 7u * channels;
+		
+		if ((channels != 1 && channels != 2) || 
+			format.basic.bitsPerSample != 4 ||
+			format.extra.adpcm.numCoef == 0 ||
+			format.extra.adpcm.numCoef > 7 ||
+			format.extra.adpcm.samplesPerBlock < 2 ||
+			format.basic.blockSize < headerBytes)
+		{
+			idLib::Warning("LoadWav( %s ): invalid MS ADPCM format metadata", filename.c_str());
+			MakeDefault();
+			return false;
+		}
+	
+		// MS ADPCM stores a 7-byte header per channel followed by packed
+		// 4-bit samples. The decoder advances through each block according to
+		// samplesPerBlock, so this relationship must be exact or the next block
+		// would begin at the wrong byte.
+		const uint32 payloadBytes = format.basic.blockSize - headerBytes;
+		const uint32 expectedSamplesPerBlock = 2u + ((payloadBytes * 2u) / channels);
+	
+		if (format.extra.adpcm.samplesPerBlock != expectedSamplesPerBlock)
+		{
+			idLib::Warning(
+				"LoadWav( %s ): inconsistent MS ADPCM block metadata (%u samples, expected %u)",
+				filename.c_str(),
+				format.extra.adpcm.samplesPerBlock,
+				expectedSamplesPerBlock);
+			MakeDefault();
+			return false;
+		}
+	}
+
 	timestamp = wave.Timestamp();
 	
 	totalBufferSize = wave.SeekToChunk( 'data' );
+
+	if (totalBufferSize <= 0)
+	{
+		idLib::Warning("LoadWav( %s ): missing or empty data chunk", filename.c_str());
+		MakeDefault();
+		return false;
+	}
 	
 	if( format.basic.formatTag == idWaveFile::FORMAT_PCM || format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE )
 	{
@@ -764,6 +816,15 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if( format.basic.bitsPerSample != 16 )
 		{
 			idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), "Not a 16 bit PCM wav file" );
+			MakeDefault();
+			return false;
+		}
+
+		const uint32 expectedBlockSize =
+		(uint32)format.basic.numChannels * (uint32)sizeof(int16);
+		if (format.basic.blockSize != expectedBlockSize || (totalBufferSize % format.basic.blockSize) != 0)
+		{
+			idLib::Warning("LoadWav( %s ): invalid PCM block alignment", filename.c_str());
 			MakeDefault();
 			return false;
 		}
@@ -777,7 +838,12 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		buffers[0].buffer = AllocBuffer( totalBufferSize, GetName() );
 		
 		
-		wave.Read( buffers[0].buffer, totalBufferSize );
+		if (wave.Read(buffers[0].buffer, totalBufferSize) != (size_t)totalBufferSize)
+		{
+			idLib::Warning("LoadWav( %s ): truncated PCM sample data", filename.c_str());
+			MakeDefault();
+			return false;
+		}
 		
 		if( format.basic.bitsPerSample == 16 )
 		{
@@ -798,7 +864,12 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		buffers[0].numSamples = playLength;
 		buffers[0].buffer  = AllocBuffer( totalBufferSize, GetName() );
 		
-		wave.Read( buffers[0].buffer, totalBufferSize );
+		if (wave.Read(buffers[0].buffer, totalBufferSize) != (size_t)totalBufferSize)
+		{
+			idLib::Warning("LoadWav( %s ): truncated MS ADPCM sample data", filename.c_str());
+			MakeDefault();
+			return false;
+		}
 		
 		buffers[0].buffer = GPU_CONVERT_CPU_TO_CPU_CACHED_READONLY_ADDRESS( buffers[0].buffer );
 		
