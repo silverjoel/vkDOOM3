@@ -60,7 +60,8 @@ bool idWaveFile::Open( const char * filename ) {
 		}
 	}
 
-	if ( file->Length() == 0 ) {
+	const int fileLength = file->Length();
+	if (fileLength < (int)sizeof(uint32) * 3) {
 		Close();
 		return false;
 	}
@@ -71,7 +72,11 @@ bool idWaveFile::Open( const char * filename ) {
 		uint32 format;
 	} header;
 
-	file->Read( &header, sizeof( header ) );
+	if (file->Read(&header, sizeof(header)) != sizeof(header)) {
+		Close();
+		idLib::Warning("Truncated RIFF WAVE header in %s", filename);
+		return false;
+	}
 	idSwap::Big( header.id );
 	idSwap::Little( header.size );
 	idSwap::Big( header.format );
@@ -82,23 +87,48 @@ bool idWaveFile::Open( const char * filename ) {
 		return false;
 	}
 
-	uint32 riffSize = header.size + 8;
-	uint32 offset = sizeof( header );
+	// RIFF size excludes the first 8 bytes. Use 64-bit arithmetic so a
+	// malicious 32-bit size cannot wrap the declared end back into the file.
+	const uint64 riffEnd = (uint64)header.size + 8u;
+	if (riffEnd < sizeof(header) || riffEnd >(uint64)fileLength) {
+		Close();
+		idLib::Warning("RIFF WAVE size extends past end of file in %s", filename);
+		return false;
+	}
 
-	// Scan the file collecting chunks
-	while ( offset < riffSize ) {
+	uint64 offset = sizeof(header);
+	
+	// Scan the file collecting chunks. RIFF chunks are padded to an even byte
+	// boundary, but the pad byte is not included in the chunk's declared size.
+	while (offset < riffEnd) {
 		struct chuckHeader_t {
 			uint32 id;
 			uint32 size;
 		} chunkHeader;
+		if (riffEnd - offset < sizeof(chunkHeader)) {
+			Close();
+			idLib::Warning("Truncated RIFF chunk header in %s", filename);
+			return false;
+		}
 		if ( file->Read( &chunkHeader, sizeof( chunkHeader ) ) != sizeof( chunkHeader ) ) {
-			// It seems like some tools have extra data after the last chunk for no apparent reason
-			// so don't treat this as an error
-			return true;
+			Close();
+			idLib::Warning("Truncated RIFF chunk header in %s", filename);
+			return false;
 		}
 		idSwap::Big( chunkHeader.id );
 		idSwap::Little( chunkHeader.size );
 		offset += sizeof( chunkHeader );
+
+		const uint64 chunkDataEnd = offset + (uint64)chunkHeader.size;
+		const uint64 paddedChunkEnd = chunkDataEnd + (chunkHeader.size & 1u);
+		if (chunkDataEnd < offset ||
+			paddedChunkEnd < chunkDataEnd ||
+			paddedChunkEnd > riffEnd ||
+			paddedChunkEnd >(uint64)fileLength) {
+			Close();
+			idLib::Warning("RIFF chunk extends past declared file bounds in %s", filename);
+			return false;
+		}
 
 		if ( chunks.Num() >= chunks.Max() ) {
 			Close();
@@ -109,10 +139,10 @@ bool idWaveFile::Open( const char * filename ) {
 		chunk_t * chunk = chunks.Alloc();
 		chunk->id = chunkHeader.id;
 		chunk->size = chunkHeader.size;
-		chunk->offset = offset;
-		offset += chunk->size;
+		chunk->offset = (uint32)offset;
+		offset = paddedChunkEnd;
 
-		file->Seek( offset, FS_SEEK_SET );
+		file->Seek((long)offset, FS_SEEK_SET);
 	}
 
 	return true;
