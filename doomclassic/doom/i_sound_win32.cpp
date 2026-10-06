@@ -40,6 +40,7 @@ If you have questions concerning this license or the applicable additional terms
 #include <stdlib.h>
 #include <stdarg.h>
 #include <math.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <fcntl.h>
 // Timer stuff. Experimental.
@@ -53,8 +54,6 @@ If you have questions concerning this license or the applicable additional terms
 #include "w_wad.h"
 #include "d_main.h"
 #include "doomdef.h"
-//#include "timidity/timidity.h"
-//#include "timidity/controls.h"
 #include "../timidity/timidity.h"
 #include "../timidity/controls.h"
 
@@ -953,11 +952,11 @@ void I_ShutdownMusic(void)
 	Music_initialized = false;
 }
 
-int Mus2Midi(const unsigned char* bytes, int inputLength, unsigned char* out, int outputCapacity, int* len);
-
 namespace {
 	const int MaxMidiConversionSize = 1024 * 1024;
 	unsigned char midiConversionBuffer[MaxMidiConversionSize];
+	const int MusicBytesPerFrame = MIDI_CHANNELS * MIDI_FORMAT_BYTES;
+	const int MusicRenderChunkBytes = MIDI_RATE * MusicBytesPerFrame;
 }
 
 /*
@@ -985,22 +984,86 @@ void I_LoadSong(const char* songname)
 
 	doomMusic = Timidity_LoadSongMem(midiConversionBuffer, length);
 
-	if (doomMusic) {
-		musicBuffer = (byte*)malloc(MIDI_CHANNELS * MIDI_FORMAT_BYTES * doomMusic->samples);
-		totalBufferSize = doomMusic->samples * MIDI_CHANNELS * MIDI_FORMAT_BYTES;
-		Timidity_Start(doomMusic);
+	if (doomMusic == NULL)
+	{
+		printf("[doomclassic] Timidity failed to load converted MIDI for '%s'\n", lumpName.c_str());
+		totalBufferSize = 0;
+		musicReady = false;
+		return;
+	}
 
-		int rc = RC_NO_RETURN_VALUE;
-		int num_bytes = 0;
-		int offset = 0;
-
-		do {
-			rc = Timidity_PlaySome(musicBuffer + offset, MIDI_RATE, &num_bytes);
-			offset += num_bytes;
-		} while (rc != RC_TUNE_END);
-
-		Timidity_Stop();
+	if (doomMusic->samples <= 0 || doomMusic->samples > INT_MAX / MusicBytesPerFrame)
+	{
+		printf("[doomclassic] invalid decoded music length for '%s': %d samples\n", lumpName.c_str(), doomMusic->samples);
 		Timidity_FreeSong(doomMusic);
+		doomMusic = NULL;
+		totalBufferSize = 0;
+		musicReady = false;
+		return;
+	}
+
+	totalBufferSize = doomMusic->samples * MusicBytesPerFrame;
+	musicBuffer = static_cast<byte*>(malloc(totalBufferSize));
+	if (musicBuffer == NULL)
+	{
+		printf("[doomclassic] failed to allocate %d bytes for music '%s'\n", totalBufferSize, lumpName.c_str());
+		Timidity_FreeSong(doomMusic);
+		doomMusic = NULL;
+		totalBufferSize = 0;
+		musicReady = false;
+		return;
+	}
+
+	byte renderChunk[MusicRenderChunkBytes];
+	int rc = RC_NO_RETURN_VALUE;
+	int offset = 0;
+	bool decodeFailed = false;
+	
+	Timidity_Start(doomMusic);
+	
+	do
+	{
+		int numBytes = 0;
+		rc = Timidity_PlaySome(renderChunk, MIDI_RATE, &numBytes);
+		
+		if (numBytes < 0 || numBytes > MusicRenderChunkBytes || numBytes > totalBufferSize - offset)
+		{
+			printf("[doomclassic] Timidity produced an invalid byte count for '%s': %d\n", lumpName.c_str(), numBytes);
+			decodeFailed = true;
+			break;
+		}
+		
+		if (numBytes > 0)
+		{
+			memcpy(musicBuffer + offset, renderChunk, numBytes);
+			offset += numBytes;
+		}
+		
+		if (rc != RC_NO_RETURN_VALUE && rc != RC_JUMP && rc != RC_TUNE_END)
+		{
+			printf("[doomclassic] Timidity decode failed for '%s' with code %d\n", lumpName.c_str(), rc);
+			decodeFailed = true;
+			break;
+		}
+	} while (rc != RC_TUNE_END);
+	
+	Timidity_Stop();
+	Timidity_FreeSong(doomMusic);
+	doomMusic = NULL;
+	
+	if (decodeFailed || offset != totalBufferSize)
+	{
+		if (!decodeFailed)
+		{
+			printf("[doomclassic] decoded music size mismatch for '%s': expected %d, got %d\n",
+			lumpName.c_str(), totalBufferSize, offset);
+		}
+		
+		free(musicBuffer);
+		musicBuffer = NULL;
+		totalBufferSize = 0;
+		musicReady = false;
+		return;
 	}
 
 	musicReady = true;
@@ -1025,9 +1088,11 @@ void I_PlaySong(const char* songname, int looping)
 		musicBuffer = 0;
 	}
 
+	totalBufferSize = 0;
+
 	musicReady = false;
 	I_LoadSong(songname);
-	waitingForMusic = true;
+	waitingForMusic = musicReady;
 
 	if (DoomLib::GetPlayer() >= 0) {
 		::g->mus_looping = looping;

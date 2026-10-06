@@ -124,7 +124,7 @@ unsigned char* Midi_WriteTempo(unsigned char* buffer, int tempo)
 
 int Midi_UpdateBytesWritten(int* bytes_written, int to_add, int max)
 {
-	if (bytes_written == NULL || to_add < 0 || max < 0 || *bytes_written < 0 || +*bytes_written > max - to_add)
+	if (bytes_written == NULL || to_add < 0 || max < 0 || *bytes_written < 0 || *bytes_written > max - to_add)
 	{
 		return 0;
 	}

@@ -108,7 +108,7 @@ void I_UnRegisterSong(int handle);
 // Update Music (XMP), check for notifications
 void I_UpdateMusic(void);
 
-int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len);
+int Mus2Midi(const unsigned char* bytes, int inputLength, unsigned char* out, int outputCapacity, int* len);
 
 #endif
 
