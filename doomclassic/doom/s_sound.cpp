@@ -567,6 +567,8 @@ void S_StopChannel(int cnum)
 		c->sfxinfo->usefulness--;
 
 		c->sfxinfo = 0;
+		c->handle = 0;
+		c->origin = 0;
 	}
 }
 
@@ -639,8 +641,7 @@ S_getChannel
 	{
 		if (!::g->channels[cnum].sfxinfo)
 			break;
-		else if ( origin && ::g->channels[cnum].origin == origin && 
-				(::g->channels[cnum].handle == sfx_sawidl || ::g->channels[cnum].handle == sfx_sawful) )
+		else if (origin && ::g->channels[cnum].origin == origin && (::g->channels[cnum].sfxinfo == &S_sfx[sfx_sawidl] || ::g->channels[cnum].sfxinfo == &S_sfx[sfx_sawful]))
 		{
 			S_StopChannel(cnum);
 			break;
