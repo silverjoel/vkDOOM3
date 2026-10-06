@@ -889,7 +889,7 @@ void I_InitSound()
 					}
 				}
 				else {
-					+printf("[doomclassic] warning: SFX buffer %d is unavailable\n", i);
+					printf("[doomclassic] warning: SFX buffer %d is unavailable\n", i);
 				}
 			} else {
 				// Log missing sound data for debugging
@@ -976,7 +976,9 @@ void I_InitMusic(void)
 	}
 
 	alSourcef(alMusicSourceVoice, AL_PITCH, 1.0f);
-	alSourcei(alMusicSourceVoice, AL_LOOPING, AL_TRUE);
+	// I_PlaySong() applies the requested per-song looping state before
+	// playback starts. Keep initialization neutral.
+	alSourcei(alMusicSourceVoice, AL_LOOPING, AL_FALSE);
 	alError = alGetError();
 	if (alError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to configure music source: 0x%X\n", alError);
@@ -1176,6 +1178,15 @@ void I_PlaySong(const char* songname, int looping)
 	}
 
 	totalBufferSize = 0;
+
+	// Honor the caller's per-song looping request. S_StartMusic() deliberately
+	// requests non-looping playback while normal level music can request loops.
+	alGetError();
+	alSourcei(alMusicSourceVoice, AL_LOOPING, looping ? AL_TRUE : AL_FALSE);
+	const ALenum loopingError = alGetError();
+	if (loopingError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to set music looping state: 0x%X\\n", loopingError);
+	}
 
 	musicReady = false;
 	I_LoadSong(songname);
