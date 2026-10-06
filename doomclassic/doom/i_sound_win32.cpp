@@ -95,6 +95,7 @@ typedef struct {
 
 typedef struct tagActiveSound_t {
 	ALuint alSourceVoice;
+	int handle;
 	int id;
 	int valid;
 	int start;
@@ -106,6 +107,7 @@ typedef struct tagActiveSound_t {
 // cheap little struct to hold a sound
 typedef struct {
 	int vol;
+	int handle;
 	int player;
 	int pitch;
 	int priority;
@@ -138,10 +140,60 @@ int			S_initialized = 0;
 bool			Music_initialized = false;
 static bool		soundHardwareInitialized = false;
 static int		numOutputChannels = 0;
+static uint32		nextSoundHandle = 1;
 
 doomListener_t		doom_Listener;
 
 void			I_InitSoundChannel(int channel, int numOutputChannels_);
+
+/*
+======================
+I_AllocateSoundHandle
+======================
+*/
+static int I_AllocateSoundHandle()
+{
+	// Handles are signed ints in the Doom sound API. Keep them positive and
+	// avoid collisions with active or pending sounds if the counter ever wraps.
+	for (int attempt = 0; attempt < NUM_SOUNDBUFFERS + 129; ++attempt)
+	{
+		if (nextSoundHandle == 0 || nextSoundHandle > 0x7FFFFFFFu)
+		{
+			nextSoundHandle = 1;
+		}
+		
+		const int candidate = (int)nextSoundHandle++;
+		bool inUse = false;
+		
+		for (int i = 0; i < NUM_SOUNDBUFFERS; ++i)
+		{
+			if (activeSounds[i].valid && activeSounds[i].handle == candidate)
+			{
+				inUse = true;
+				break;
+			}
+		}
+		
+		if (!inUse)
+		{
+			for (int i = 0; i < (int)(sizeof(soundEvents) / sizeof(soundEvents[0])); ++i)
+			{
+				if (soundEvents[i].handle == candidate)
+				{
+					inUse = true;
+					break;
+				}
+			}
+		}
+		
+		if (!inUse)
+		{
+			return candidate;
+		}
+	}
+	
+	return 0;
+}
 
 /*
 ======================
@@ -280,10 +332,10 @@ I_StartSound2
 //  priority, it is ignored.
 // Pitching (that is, increased speed of playback) is set
 //
-int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, int pitch, int priority)
+int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, int pitch, int priority, int handle)
 {
-	if (!soundHardwareInitialized || id <= 0 || id >= NUMSFX || alBuffers[id] == 0) {
-		return id;
+	if (!soundHardwareInitialized || id <= 0 || id >= NUMSFX || alBuffers[id] == 0 || handle <= 0) {
+		return 0;
 	}
 
 	int i;
@@ -298,7 +350,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 			sound = &activeSounds[i];
 
 			if (sound->valid && (sound->id == id && sound->player == player)) {
-				I_StopSound(sound->id, player);
+				I_StopSound(sound->handle, player);
 				break;
 			}
 		}
@@ -342,7 +394,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	// none found, so use the oldest one
 	if (i == NUM_SOUNDBUFFERS) {
 		if (oldestnum < 0) {
-			return id;
+			return 0;
 		}
 
 		i = oldestnum;
@@ -406,16 +458,18 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 		alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
 		alGetError();
 		
+		sound->handle = 0;
 		sound->id = 0;
 		sound->start = 0;
 		sound->valid = 0;
 		sound->player = -1;
 		sound->localSound = false;
 		sound->originator = NULL;
-		return id;
+		return 0;
 	}
 	
 	// Publish the channel only after OpenAL accepted the complete start.
+	sound->handle = handle;
 	sound->id = id;
 	sound->start = ::g->gametic;
 	sound->valid = 1;
@@ -423,7 +477,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	sound->localSound = localSound;
 	sound->originator = origin;
 
-	return id;
+	return handle;
 }
 
 /*
@@ -434,9 +488,9 @@ I_ProcessSoundEvents
 void I_ProcessSoundEvents(void)
 {
 	for (int i = 0; i < 128; i++) {
-		if (soundEvents[i].pitch) {
+		if (soundEvents[i].handle != 0) {
 			I_StartSound2(i, soundEvents[i].player, soundEvents[i].originator, soundEvents[i].listener,
-				soundEvents[i].pitch, soundEvents[i].priority);
+				soundEvents[i].pitch, soundEvents[i].priority, soundEvents[i].handle);
 		}
 	}
 	memset(soundEvents, 0, sizeof(soundEvents));
@@ -460,14 +514,20 @@ int I_StartSound(int id, mobj_t* origin, mobj_t* listener_origin, int vol, int p
 	if (::g->gamestate != GS_LEVEL && DoomLib::GetPlayer() != 0) {
 		return 0;
 	}
+	
+	const int handle = I_AllocateSoundHandle();
+	if (handle == 0) {
+		return 0;
+	}
 
 	// if we're only one player or we're trying to play the chainsaw sound, do it normal
 	// otherwise only allow one sound of each type per frame
 	if (PLAYERCOUNT == 1 || id == sfx_sawup || id == sfx_sawidl || id == sfx_sawful || id == sfx_sawhit) {
-		return I_StartSound2(id, ::g->consoleplayer, origin, listener_origin, pitch, priority);
+		return I_StartSound2(id, ::g->consoleplayer, origin, listener_origin, pitch, priority, handle);
 	}
 	else {
 		if (soundEvents[id].vol < vol) {
+			soundEvents[id].handle = handle;
 			soundEvents[id].player = DoomLib::GetPlayer();
 			soundEvents[id].pitch = pitch;
 			soundEvents[id].priority = priority;
@@ -475,7 +535,7 @@ int I_StartSound(int id, mobj_t* origin, mobj_t* listener_origin, int vol, int p
 			soundEvents[id].originator = origin;
 			soundEvents[id].listener = listener_origin;
 		}
-		return id;
+		return handle;
 	}
 }
 
@@ -495,7 +555,7 @@ void I_StopSound(int handle, int player)
 
 	for (i = 0; i < NUM_SOUNDBUFFERS; ++i) {
 		sound = &activeSounds[i];
-		if (!sound->valid || sound->id != handle || (player >= 0 && sound->player != player))
+		if (!sound->valid || sound->handle != handle || (player >= 0 && sound->player != player))
 			continue;
 		break;
 	}
@@ -511,6 +571,7 @@ void I_StopSound(int handle, int player)
 		alGetError();
 	}
 
+	sound->handle = 0;
 	sound->id = 0;
 	sound->valid = 0;
 	sound->start = 0;
@@ -535,7 +596,7 @@ int I_SoundIsPlaying(int handle)
 
 	for (i = 0; i < NUM_SOUNDBUFFERS; ++i) {
 		sound = &activeSounds[i];
-		if (!sound->valid || sound->id != handle)
+		if (!sound->valid || sound->handle != handle)
 			continue;
 
 		if(sound->alSourceVoice == 0) {
