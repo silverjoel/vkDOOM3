@@ -731,10 +731,6 @@ void idSoundSample_OpenAL::MakeDefault()
 	playBegin = 0;
 	playLength = DEFAULT_NUM_SAMPLES;
 	
-	
-	CheckALErrors();
-	alGenBuffers( 1, &openalBuffer );
-	
 	// Use the same context-aware upload path as normal samples. In s_noSound
 	// mode this leaves openalBuffer at zero while retaining the CPU-side beep.
 	CreateOpenALBuffer();
