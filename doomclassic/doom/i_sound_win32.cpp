@@ -634,27 +634,36 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 
 	// Create OpenAL buffers for all sounds
 	for (int i = 1; i < NUMSFX; i++) {
-		alGenBuffers((ALuint)1, &alBuffers[i]);
+		alBuffers[i] = 0;
+		
+		// Isolate each buffer creation so one failure cannot contaminate the
+		// diagnostics for every buffer generated after it.
+		alGetError();
+		alGenBuffers(1, &alBuffers[i]);
+		
+		const ALenum bufferError = alGetError();
+		if (bufferError != AL_NO_ERROR || alBuffers[i] == 0) {
+			printf("[doomclassic] failed to create SFX buffer %d: 0x%X\n", i, bufferError);
+			alBuffers[i] = 0;
+		}
 	}
 
-	// Check for AL errors after buffer generation
+	// Print the active OpenAL implementation independently of individual
+	// source/buffer creation failures.
 	{
-		ALenum err = alGetError();
-		if (err != AL_NO_ERROR) {
-			printf("[doomclassic] alGenBuffers produced AL error: 0x%X\n", err);
+		const char* vendor = (const char*)alGetString(AL_VENDOR);
+		const char* version = (const char*)alGetString(AL_VERSION);
+		if (vendor) {
+			printf("[doomclassic] OpenAL vendor: %s\n", vendor);
 		} else {
-			const char *vendor = (const char *)alGetString(AL_VENDOR);
-			const char *version = (const char *)alGetString(AL_VERSION);
-			if (vendor) {
-				printf("[doomclassic] OpenAL vendor: %s\n", vendor);
-			} else {
-				printf("[doomclassic] alGetString(AL_VENDOR) returned NULL\n");
-			}
-			if (version) {
-				printf("[doomclassic] OpenAL version: %s\n", version);
-			} else {
-				printf("[doomclassic] alGetString(AL_VERSION) returned NULL\n");
-			}
+			printf("[doomclassic] alGetString(AL_VENDOR) returned NULL\n");
+		
+		}
+		if (version) {
+			printf("[doomclassic] OpenAL version: %s\n", version);
+		}
+		else {
+			printf("[doomclassic] alGetString(AL_VERSION) returned NULL\n");
 		}
 	}
 
@@ -668,12 +677,15 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 		{
 			if( S_sfx[i].data && alBuffers[i] != 0 ) 
 			{
+				alGetError();
 				alBufferData( alBuffers[i], SFX_SAMPLETYPE, (byte*)S_sfx[i].data, lengths[i], SFX_RATE );
 				
 				ALenum aerr = alGetError();
 				if( aerr != AL_NO_ERROR ) 
 				{
-					printf( "[doomclassic] alBufferData restart error for buffer %d: 0x%X\n", i, aerr );		
+					printf("[doomclassic] alBufferData restart error for buffer %d: 0x%X\n", i, aerr);
+					alDeleteBuffers(1, &alBuffers[i]);
+					alBuffers[i] = 0;
 				}
 			}
 		}
@@ -865,10 +877,19 @@ void I_InitSound()
 				lengths[i] = lengths[S_sfx[i].link - S_sfx];
 			}
 			if (S_sfx[i].data) {
-				alBufferData(alBuffers[i], SFX_SAMPLETYPE, (byte*)S_sfx[i].data, lengths[i], SFX_RATE);
-				ALenum aerr = alGetError();
-				if (aerr != AL_NO_ERROR) {
-					printf("[doomclassic] alBufferData error for buffer %d: 0x%X\n", i, aerr);
+				if (alBuffers[i] != 0) {
+					alGetError();
+					alBufferData(alBuffers[i], SFX_SAMPLETYPE, (byte*)S_sfx[i].data, lengths[i], SFX_RATE);
+					
+					ALenum aerr = alGetError();
+					if (aerr != AL_NO_ERROR) {
+						printf("[doomclassic] alBufferData error for buffer %d: 0x%X\n", i, aerr);
+						alDeleteBuffers(1, &alBuffers[i]);
+						alBuffers[i] = 0;
+					}
+				}
+				else {
+					+printf("[doomclassic] warning: SFX buffer %d is unavailable\n", i);
 				}
 			} else {
 				// Log missing sound data for debugging
