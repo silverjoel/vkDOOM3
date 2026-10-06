@@ -287,6 +287,16 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		return;
 	}
 
+	// Resource loading can legitimately happen while sound hardware is
+	// disabled (s_noSound) or before an OpenAL context is available. Keep the
+	// CPU sample data resident and defer the hardware upload until a context
+	// exists; Restart() will rebuild loaded samples when sound is enabled.
+	if( alcGetCurrentContext() == NULL )
+	{
+		openalBuffer = 0;
+		return;
+	}
+
 	// build OpenAL buffer
 	CheckALErrors();
 	alGenBuffers( 1, &openalBuffer );
@@ -616,20 +626,9 @@ void idSoundSample_OpenAL::MakeDefault()
 	CheckALErrors();
 	alGenBuffers( 1, &openalBuffer );
 	
-	if( CheckALErrors() != AL_NO_ERROR )
-	{
-		common->Error( "idSoundSample_OpenAL::MakeDefault: error generating OpenAL hardware buffer" );
-	}
-	
-	if( alIsBuffer( openalBuffer ) )
-	{
-		CheckALErrors();
-		alBufferData( openalBuffer, GetOpenALBufferFormat(), defaultBuffer, totalBufferSize, format.basic.samplesPerSec );
-		if( CheckALErrors() != AL_NO_ERROR )
-		{
-			common->Error( "idSoundSample_OpenAL::MakeDefault: error loading data into OpenAL hardware buffer" );
-		}
-	}
+	// Use the same context-aware upload path as normal samples. In s_noSound
+	// mode this leaves openalBuffer at zero while retaining the CPU-side beep.
+	CreateOpenALBuffer();
 }
 
 /*
@@ -660,7 +659,7 @@ void idSoundSample_OpenAL::FreeData()
 	playLength = 0;
 	openalDataDecoded = false;
 	
-	if( openalBuffer != 0 && alIsBuffer( openalBuffer ) )
+	if (openalBuffer != 0 && alcGetCurrentContext() != NULL && alIsBuffer(openalBuffer))
 	{
 		CheckALErrors();
 		
