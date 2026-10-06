@@ -118,6 +118,36 @@ static void compute_sample_increment( int32_t tempo,  int32_t divisions)
 		(int)sample_increment, (int)sample_correction);
 }
 
+static void compute_smpte_sample_increment(int frameRateCode, int ticksPerFrame)
+{
+	double framesPerSecond = 0.0;
+	
+	switch (frameRateCode)
+	{
+		case -24: framesPerSecond = 24.0; break;
+		case -25: framesPerSecond = 25.0; break;
+		case -29:
+			// Standard MIDI uses -29 for 29.97 fps drop-frame timing.
+			framesPerSecond = 30000.0 / 1001.0;
+			break;
+		case -30: framesPerSecond = 30.0; break;
+		default:
+			return;
+	}
+	
+	const double fixedSamplesPerTick =
+		(double)(play_mode->rate) * 65536.0 /
+		(framesPerSecond * (double)ticksPerFrame);
+	const int64_t fixedIncrement = (int64_t)fixedSamplesPerTick;
+	
+	sample_correction = fixedIncrement & 0xFFFF;
+	sample_increment = fixedIncrement >> 16;
+	
+	ctl->cmsg(CMSG_INFO, VERB_DEBUG,
+		"SMPTE samples per tick: %d (correction %d)",
+		(int)sample_increment, (int)sample_correction);
+}
+
 /* Read a standard MIDI variable-length quantity (maximum four bytes). */
 static bool getvl(int32_t & value)
 {
@@ -554,7 +584,8 @@ static void free_midi_list(void)
 events, marking used instruments for loading. Convert event times to
 samples: handle tempo changes. Strip unnecessary events from the list.
 Free the linked list. */
-static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samplesp)
+static MidiEvent* groom_list(int32_t divisions, bool smpteTiming, int smpteFrameRate,
+	int smpteTicksPerFrame, int32_t* eventsp, int32_t* samplesp)
 {
 	MidiEvent *groomed_list, *lp;
 	MidiEventList *meep;
@@ -573,7 +604,11 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 	}
 
 	tempo=500000;
-	compute_sample_increment(tempo, divisions);
+	if (smpteTiming) {
+		compute_smpte_sample_increment(smpteFrameRate, smpteTicksPerFrame);
+	} else {
+		compute_sample_increment(tempo, divisions);
+	}
 
 	/* This may allocate a bit more than we need */
 	groomed_list=lp=(MidiEvent*)safe_malloc(sizeof(MidiEvent) * (event_count+1));
@@ -595,7 +630,10 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		{
 			tempo=
 				meep->event.channel + meep->event.b * 256 + meep->event.a * 65536;
-			compute_sample_increment(tempo, divisions);
+			// Tempo meta-events do not affect SMPTE-timed MIDI files.
+			if (!smpteTiming) {
+				compute_sample_increment(tempo, divisions);
+			}
 			skip_local_this_event=1;
 		}
 		else if ((quietchannels & (1<<meep->event.channel)))
@@ -723,8 +761,12 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 
 MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 {
-	 int32_t len, divisions;
-	int16_t format, tracks, divisions_tmp;
+	int32_t len, divisions;
+	int16_t format, tracks_tmp, divisions_tmp;
+	int tracks;
+	bool smpteTiming = false;
+	int smpteFrameRate = 0;
+	int smpteTicksPerFrame = 0;
 	int i;
 	char tmp[4];
 
@@ -759,29 +801,44 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 	}
 
 	if (read_local(&format, 2, 1) != 1 ||
-		read_local(&tracks, 2, 1) != 1 ||
+		read_local(&tracks_tmp, 2, 1) != 1 ||
 		read_local(&divisions_tmp, 2, 1) != 1) {
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: Truncated MIDI header.", current_filename);
 		return 0;
 	}
 	format=BE_SHORT(format);
-	tracks=BE_SHORT(tracks);
+	tracks_tmp = BE_SHORT(tracks_tmp);
+	tracks = (int)(uint16_t)tracks_tmp;
 	divisions_tmp=BE_SHORT(divisions_tmp);
 
-	if (divisions_tmp<0)
+	if (divisions_tmp < 0)
 	{
-		/* SMPTE time -- totally untested. Got a MIDI file that uses this? */
-		divisions=
-			(int32_t)(-(divisions_tmp/256)) * (int32_t)(divisions_tmp & 0xFF);
-	}
-	else divisions=(int32_t)(divisions_tmp);
+		const uint16_t divisionBits = (uint16_t)divisions_tmp;
+		const int frameRateCode = (int)(int8_t)(divisionBits >> 8);
+		const int ticksPerFrame = (int)(divisionBits & 0xFF);
 
-	if (divisions <= 0) {
-		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
-		"%s: Invalid MIDI timing division %d", current_filename, divisions);
-		return 0;
-	}
+		if ((frameRateCode != -24 && frameRateCode != -25 &&
+			frameRateCode != -29 && frameRateCode != -30) ||
+			ticksPerFrame <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid SMPTE MIDI timing division 0x%04X",
+				current_filename, (unsigned int)divisionBits);
+			return 0;
+		}
 
+		smpteTiming = true;
+		smpteFrameRate = frameRateCode;
+		smpteTicksPerFrame = ticksPerFrame;
+		divisions = 0;
+	}
+	else {
+		divisions = (int32_t)(divisions_tmp);
+		if (divisions <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid MIDI timing division %d", current_filename, divisions);
+			return 0;
+		}
+	}
 	if (len > 6)
 	{
 		ctl->cmsg(CMSG_WARNING, VERB_NORMAL, 
@@ -795,6 +852,13 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, 
 			"%s: Unknown MIDI file format %d", current_filename, format);
+		return 0;
+	}
+	if (tracks <= 0 || (format == 0 && tracks != 1))
+	{
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: Invalid MIDI track count %d for format %d",
+			current_filename, tracks, format);
 		return 0;
 	}
 	//ctl->cmsg(CMSG_INFO, VERB_VERBOSE, 
@@ -835,13 +899,18 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 			}
 			break;
 	}
-	return groom_list(divisions, count, sp);
+	return groom_list(divisions, smpteTiming, smpteFrameRate,
+		smpteTicksPerFrame, count, sp);
 }
 
 MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *count,  int32_t *sp)
 {
-	 int32_t len, divisions;
-	int16_t format, tracks, divisions_tmp;
+	int32_t len, divisions;
+	int16_t format, tracks_tmp, divisions_tmp;
+	int tracks;
+	bool smpteTiming = false;
+	int smpteFrameRate = 0;
+	int smpteTicksPerFrame = 0;
 	int i;
 	char tmp[4];
 
@@ -867,25 +936,41 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 	}
 
 	if (read_local(&format, 2, 1) != 1 ||
-		read_local(&tracks, 2, 1) != 1 ||
+		read_local(&tracks_tmp, 2, 1) != 1 ||
 		read_local(&divisions_tmp, 2, 1) != 1) {
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: Truncated MIDI header.", current_filename);
 		return 0;
 	}
 	format=BE_SHORT(format);
-	tracks=BE_SHORT(tracks);
+	tracks_tmp = BE_SHORT(tracks_tmp);
+	tracks = (int)(uint16_t)tracks_tmp;
 	divisions_tmp=BE_SHORT(divisions_tmp);
 
 	if (divisions_tmp<0) {
-		/* SMPTE time -- totally untested. Got a MIDI file that uses this? */
-		divisions= (int32_t)(-(divisions_tmp/256)) * (int32_t)(divisions_tmp & 0xFF);
-	}
-	else divisions=(int32_t)(divisions_tmp);
-
-	if (divisions <= 0) {
-		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
-		"%s: Invalid MIDI timing division %d", current_filename, divisions);
-		return 0;
+		const uint16_t divisionBits = (uint16_t)divisions_tmp;
+		const int frameRateCode = (int)(int8_t)(divisionBits >> 8);
+		const int ticksPerFrame = (int)(divisionBits & 0xFF);
+		
+		if ((frameRateCode != -24 && frameRateCode != -25 &&
+			frameRateCode != -29 && frameRateCode != -30) ||
+			ticksPerFrame <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid SMPTE MIDI timing division 0x%04X",
+				current_filename, (unsigned int)divisionBits);
+			return 0;
+		}
+		
+		smpteTiming = true;
+		smpteFrameRate = frameRateCode;
+		smpteTicksPerFrame = ticksPerFrame;
+		divisions = 0;
+	} else {
+		divisions = (int32_t)(divisions_tmp);
+		if (divisions <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid MIDI timing division %d", current_filename, divisions);
+			return 0;
+		}
 	}
 
 	if (len > 6)
@@ -901,6 +986,13 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, 
 			"%s: Unknown MIDI file format %d", current_filename, format);
+		return 0;
+	}
+	if (tracks <= 0 || (format == 0 && tracks != 1))
+	{
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: Invalid MIDI track count %d for format %d",
+			current_filename, tracks, format);
 		return 0;
 	}
 	//ctl->cmsg(CMSG_INFO, VERB_VERBOSE, 
@@ -941,5 +1033,6 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 			}
 			break;
 	}
-	return groom_list(divisions, count, sp);
+	return groom_list(divisions, smpteTiming, smpteFrameRate,
+		smpteTicksPerFrame, count, sp);
 }
