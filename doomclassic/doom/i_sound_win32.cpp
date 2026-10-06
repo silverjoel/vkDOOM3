@@ -896,24 +896,62 @@ I_InitMusic
 */
 void I_InitMusic(void)
 {
-	if (!Music_initialized) {
-		// Initialize Timidity
-		Timidity_Init(MIDI_RATE, MIDI_FORMAT, MIDI_CHANNELS, MIDI_RATE, "classicmusic/gravis.cfg");
-
-		musicBuffer = NULL;
-		totalBufferSize = 0;
-		waitingForMusic = false;
-		musicReady = false;
-
-		alGenSources((ALuint)1, &alMusicSourceVoice);
-
-		alSourcef(alMusicSourceVoice, AL_PITCH, 1.f);
-		alSourcef(alMusicSourceVoice, AL_LOOPING, AL_TRUE);
-
-		alGenBuffers((ALuint)1, &alMusicBuffer);
-
-		Music_initialized = true;
+	if (Music_initialized) {
+		return;
 	}
+
+	musicBuffer = NULL;
+	totalBufferSize = 0;
+	waitingForMusic = false;
+	musicReady = false;
+	alMusicSourceVoice = 0;
+	alMusicBuffer = 0;
+
+	const int timidityResult = Timidity_Init(MIDI_RATE, MIDI_FORMAT, MIDI_CHANNELS, MIDI_RATE, "classicmusic/gravis.cfg");
+	if (timidityResult != 0) {
+		printf("[doomclassic] Timidity_Init failed: %d\n", timidityResult);
+		return;
+	}
+
+	// Isolate music initialization from any sticky OpenAL error left by
+	// earlier Classic Doom sound setup.
+	alGetError();
+
+	alGenSources(1, &alMusicSourceVoice);
+	ALenum alError = alGetError();
+	if (alError != AL_NO_ERROR || alMusicSourceVoice == 0) {
+		printf("[doomclassic] failed to create music source: 0x%X\n", alError);
+		alMusicSourceVoice = 0;
+		Timidity_Shutdown();
+		return;
+	}
+
+	alSourcef(alMusicSourceVoice, AL_PITCH, 1.0f);
+	alSourcei(alMusicSourceVoice, AL_LOOPING, AL_TRUE);
+	alError = alGetError();
+	if (alError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to configure music source: 0x%X\n", alError);
+		alDeleteSources(1, &alMusicSourceVoice);
+		alMusicSourceVoice = 0;
+		Timidity_Shutdown();
+		return;
+	}
+
+	alGenBuffers(1, &alMusicBuffer);
+	alError = alGetError();
+	if (alError != AL_NO_ERROR || alMusicBuffer == 0) {
+		printf("[doomclassic] failed to create music buffer: 0x%X\n", alError);
+		if (alMusicBuffer != 0) {
+			alDeleteBuffers(1, &alMusicBuffer);
+			alMusicBuffer = 0;
+		}
+		 alDeleteSources(1, &alMusicSourceVoice);
+		alMusicSourceVoice = 0;
+		Timidity_Shutdown();
+		return;
+	}
+	
+	Music_initialized = true;
 }
 
 /*

@@ -344,19 +344,21 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			return false;
 		}
 
+		// The serialized "loaded" flag is legacy metadata and is not a
+		// reliable validity indicator.  WriteAllSamples() historically builds
+		// generated samples from a temporary object via LoadWav(), while the
+		// object's loaded member may still be false.  The original sound
+		// backend therefore accepted generated files regardless of this bit
+		// and treated successful parsing of the payload as authoritative.
+		bool serializedLoaded = false;
+
 		if (fileIn->ReadBig(timestamp) != sizeof(timestamp) ||
-			fileIn->ReadBig(loaded) != sizeof(loaded) ||
+			fileIn->ReadBig(serializedLoaded) != sizeof(serializedLoaded) ||
 			fileIn->ReadBig(playBegin) != sizeof(playBegin) ||
 			fileIn->ReadBig(playLength) != sizeof(playLength))
 		{
 			idLib::Warning("LoadGeneratedSample( %s ): truncated generated sample header", filename.c_str());
 			loaded = false;
-			return false;
-		}
-
-		if (!loaded)
-		{
-			idLib::Warning( "LoadGeneratedSample( %s ): generated sample is marked unloaded", filename.c_str());
 			return false;
 		}
 		
@@ -469,6 +471,7 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			FreeData();
 			return false;
 		}
+		loaded = true;
 		return true;
 	}
 
