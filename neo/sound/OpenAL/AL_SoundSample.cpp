@@ -256,6 +256,7 @@ idSoundSample_OpenAL::idSoundSample_OpenAL()
 	
 	openalBuffer = 0;
 	openalDataDecoded = false;
+	defaultedForNoSound = false;
 }
 
 /*
