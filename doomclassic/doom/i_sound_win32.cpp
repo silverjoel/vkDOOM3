@@ -468,11 +468,20 @@ void I_StopSound(int handle, int player)
 	if (i == NUM_SOUNDBUFFERS)
 		return;
 
-	// Stop the sound
-	alSourceStop(sound->alSourceVoice);
+	// Stop the sound. CPU-side state is cleared regardless of whether the
+	// OpenAL stop succeeds so a stale source cannot remain logically active.
+	if (sound->alSourceVoice != 0) {
+		alGetError();
+		alSourceStop(sound->alSourceVoice);
+		alGetError();
+	}
 
+	sound->id = 0;
 	sound->valid = 0;
+	sound->start = 0;
 	sound->player = -1;
+	sound->localSound = false;
+	sound->originator = NULL;
 }
 
 /*
@@ -494,10 +503,42 @@ int I_SoundIsPlaying(int handle)
 		if (!sound->valid || sound->id != handle)
 			continue;
 
-		ALint sourceState;
+		if(sound->alSourceVoice == 0) {
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
+			continue;
+		}
+		
+		ALint sourceState = AL_STOPPED;
+		alGetError();
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
+		const ALenum stateError = alGetError();
+		if (stateError != AL_NO_ERROR) {
+			// A source whose state cannot be queried is no longer trustworthy.
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
+			continue;
+		}
+
 		if (sourceState == AL_PLAYING) {
 			return 1;
+		}
+
+		if (sourceState == AL_STOPPED || sourceState == AL_INITIAL) {
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
 		}
 	}
 
@@ -548,8 +589,11 @@ void I_UpdateSound(void)
 	ALfloat listenerOrientation[] = { doom_Listener.OrientFront.x, doom_Listener.OrientFront.y,
 		doom_Listener.OrientFront.z, doom_Listener.OrientTop.x, doom_Listener.OrientTop.y,
 		doom_Listener.OrientTop.z };
+	alGetError();
 	alListenerfv(AL_ORIENTATION, listenerOrientation);
 	alListener3f(AL_POSITION, doom_Listener.Position.x, doom_Listener.Position.y, doom_Listener.Position.z);
+	// Do not let a listener-update error contaminate the per-source queries.
+	alGetError();
 
 	// Update playing source voice positions
 	int i;
@@ -561,20 +605,62 @@ void I_UpdateSound(void)
 			continue;
 		}
 
-		ALint sourceState;
+		if (sound->alSourceVoice == 0) {
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
+			continue;
+		}
+		
+		ALint sourceState = AL_STOPPED;
+		alGetError();
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
-		if (sourceState == AL_PLAYING) {
-			if (sound->localSound) {
-				alSource3f(sound->alSourceVoice, AL_POSITION, doom_Listener.Position.x,
-					doom_Listener.Position.y, doom_Listener.Position.z);
-			}
-			else {
-				ALfloat x = (ALfloat)(sound->originator->x >> FRACBITS);
-				ALfloat y = 0.f;
-				ALfloat z = (ALfloat)(sound->originator->y >> FRACBITS);
+		const ALenum stateError = alGetError();
+		if (stateError != AL_NO_ERROR) {
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
+			continue;
+		}
 
-				alSource3f(sound->alSourceVoice, AL_POSITION, x, y, z);
+		if (sourceState == AL_STOPPED || sourceState == AL_INITIAL) {
+			sound->id = 0;
+			sound->valid = 0;
+			sound->start = 0;
+			sound->player = -1;
+			sound->localSound = false;
+			sound->originator = NULL;
+			continue;
+		}
+		
+		if (sourceState != AL_PLAYING) {
+			continue;
+		}
+		
+		if (sound->localSound) {
+			alSource3f(sound->alSourceVoice, AL_POSITION, doom_Listener.Position.x,
+				doom_Listener.Position.y, doom_Listener.Position.z);
+		} else {
+			if (sound->originator == NULL) {
+				sound->id = 0;
+				sound->valid = 0;
+				sound->start = 0;
+				sound->player = -1;
+				sound->localSound = false;
+				continue;
 			}
+			
+			ALfloat x = (ALfloat)(sound->originator->x >> FRACBITS);
+			ALfloat y = 0.f;
+			ALfloat z = (ALfloat)(sound->originator->y >> FRACBITS);
+			
+			alSource3f(sound->alSourceVoice, AL_POSITION, x, y, z);
 		}
 	}
 }
