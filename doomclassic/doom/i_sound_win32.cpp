@@ -796,7 +796,7 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	alGenSources((ALuint)1, &soundchannel->alSourceVoice);
 
 	alSource3f(soundchannel->alSourceVoice, AL_VELOCITY, 0.f, 0.f, 0.f);
-	alSourcef(soundchannel->alSourceVoice, AL_LOOPING, AL_FALSE);
+	alSourcei(soundchannel->alSourceVoice, AL_LOOPING, AL_FALSE);
 	alSourcef(soundchannel->alSourceVoice, AL_MAX_DISTANCE, SFX_MAX_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_REFERENCE_DISTANCE, SFX_REFERENCE_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_ROLLOFF_FACTOR, SFX_ROLLOFF_FACTOR);
