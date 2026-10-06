@@ -54,33 +54,48 @@ static  int32_t sample_increment, sample_correction; /*samples per MIDI delta-t*
 
 static  int32_t read_local(void* buffer, size_t len, size_t count)
 {
-	if (fp && len > 0) {
-		return (int32_t)fp->Read(buffer, len * count ) / len;
-	} else if( local_buffer != NULL ) {
-		if (len * count + local_buffer_cur > local_buffer_length) {
-			memcpy(buffer, &local_buffer[local_buffer_cur], local_buffer_length - local_buffer_cur);
-			return(int32_t)(local_buffer_length - local_buffer_cur)/len;
-		} else {
-			memcpy(buffer, &local_buffer[local_buffer_cur], len * count);
-			local_buffer_cur += len * count;
-			return(count);
+	if (buffer == NULL || len == 0 || count == 0) {
+		return 0;
+	}
+	if (count > ((size_t)-1) / len) {
+		return 0;
+	}
+	
+	const size_t requestedBytes = len * count;
+	
+	if (fp) {
+		return (int32_t)fp->Read(buffer, requestedBytes) / (int32_t)len;
+	}
+	else if (local_buffer != NULL) {
+		if (local_buffer_cur > local_buffer_length) {
+			return 0;
 		}
+
+		const size_t availableBytes = local_buffer_length - local_buffer_cur;
+		const size_t copyBytes = requestedBytes < availableBytes ? requestedBytes : availableBytes;
+		if (copyBytes > 0) {
+			memcpy(buffer, &local_buffer[local_buffer_cur], copyBytes);
+			local_buffer_cur += copyBytes;
+		}
+		return (int32_t)(copyBytes / len);
 	}
 
 	return 0;
 }
 
-static void skip_local(size_t len)
+static bool skip_local(size_t len)
 {
 	if (fp) {
 		skip(fp, len);
-	} else {
-		if (len + local_buffer_cur > local_buffer_length) {
-			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "skip_local failed on memory buffer");
-		} else {
-			local_buffer_cur += len;
-		}
+		return true;
 	}
+	if (local_buffer == NULL || local_buffer_cur > local_buffer_length ||
+		len > local_buffer_length - local_buffer_cur) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "skip_local failed on memory buffer");
+		return false;
+	}
+	local_buffer_cur += len;
+	return true;
 }
 
 /* Computes how many (fractional) samples one MIDI delta-time unit contains */
@@ -97,18 +112,23 @@ static void compute_sample_increment( int32_t tempo,  int32_t divisions)
 		sample_increment, sample_correction);
 }
 
-/* Read variable-length number (7 bits per byte, MSB first) */
-static  int32_t getvl(void)
+/* Read a standard MIDI variable-length quantity (maximum four bytes). */
+static bool getvl(int32_t & value)
 {
-	 int32_t l=0;
-	uint8_t c;
-	for (;;)
+	value = 0;
+	for (int i = 0; i < 4; i++)
 	{
-		read_local(&c,1,1);
-		l += (c & 0x7f);
-		if (!(c & 0x80)) return l;
-		l<<=7;
+		uint8_t c = 0;
+		if (read_local(&c, 1, 1) != 1) {
+			return false;
+		}
+		value = (value << 7) | (c & 0x7f);
+		if (!(c & 0x80)) {
+			return true;
+		}
 	}
+
+	return false;
 }
 
 /* Print a string from the file, followed by a newline. Any non-ASCII
@@ -152,23 +172,31 @@ static MidiEventList *read_midi_event(void)
 
 	for (;;)
 	{
-		at+=getvl();
+		int32_t delta = 0;
+		if (!getvl(delta) || delta > 0x7FFFFFFF - at) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: invalid MIDI delta time", current_filename);
+			return 0;
+		}
+		at += delta;
+
 		if (read_local(&me,1,1)!=1)
 		{
-			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: read_midi_event: %s", 
-				current_filename, strerror(errno));
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: truncated MIDI event", current_filename);
 			return 0;
 		}
 
 		if(me==0xF0 || me == 0xF7) /* SysEx event */
 		{
-			len=getvl();
-			skip_local(len);
+			if (!getvl(len) || !skip_local((size_t)len)) {
+				return 0;
+			}
 		}
 		else if(me==0xFF) /* Meta event */
 		{
-			read_local(&type,1,1);
-			len=getvl();
+			if (read_local(&type, 1, 1) != 1 || !getvl(len)) {
+				return 0;
+			}
+
 			if (type>0 && type<16)
 			{
 				static char *label[]={
@@ -183,13 +211,20 @@ static MidiEventList *read_midi_event(void)
 					return MAGIC_EOT;
 
 				case 0x51: /* Tempo */
-					read_local(&a,1,1); read_local(&b,1,1); read_local(&c,1,1);
+					if (len != 3 ||
+						read_local(&a, 1, 1) != 1 ||
+						read_local(&b, 1, 1) != 1 ||
+						read_local(&c, 1, 1) != 1) {
+						return 0;
+					}
 					MIDIEVENT(at, ME_TEMPO, c, a, b);
 
 				default:
 					ctl->cmsg(CMSG_INFO, VERB_DEBUG, 
 						"(Meta event type 0x%02x, length %ld)", type, len);
-					skip_local(len);
+					if (!skip_local((size_t)len)) {
+						return 0;
+					}
 					break;
 			}
 		}
@@ -200,28 +235,30 @@ static MidiEventList *read_midi_event(void)
 			{
 				lastchan=a & 0x0F;
 				laststatus=(a>>4) & 0x07;
-				read_local(&a, 1,1);
+				if (read_local(&a, 1, 1) != 1) {
+					return 0;
+				}
 				a &= 0x7F;
 			}
 			switch(laststatus)
 			{
 			case 0: /* Note off */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_NOTEOFF, lastchan, a,b);
 
 			case 1: /* Note on */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_NOTEON, lastchan, a,b);
 
 			case 2: /* Key Pressure */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_KEYPRESSURE, lastchan, a, b);
 
 			case 3: /* Control change */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				{
 					int control=255;
@@ -304,7 +341,7 @@ static MidiEventList *read_midi_event(void)
 				break;
 
 			case 6: /* Pitch wheel */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_PITCHWHEEL, lastchan, a, b);
 
@@ -593,9 +630,12 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 		return 0;
 	}
 
-	read_local(&format, 2, 1);
-	read_local(&tracks, 2, 1);
-	read_local(&divisions_tmp, 2, 1);
+	if (read_local(&format, 2, 1) != 1 ||
+		read_local(&tracks, 2, 1) != 1 ||
+		read_local(&divisions_tmp, 2, 1) != 1) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: Truncated MIDI header.", current_filename);
+		return 0;
+	}
 	format=BE_SHORT(format);
 	tracks=BE_SHORT(tracks);
 	divisions_tmp=BE_SHORT(divisions_tmp);
@@ -613,7 +653,9 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 		ctl->cmsg(CMSG_WARNING, VERB_NORMAL, 
 			"%s: MIDI file header size %ld bytes", 
 			current_filename, len);
-		skip_local(len-6); /* skip_local the excess */
+		if (!skip_local((size_t)(len - 6))) {
+			return 0;
+		}
 	}
 	if (format<0 || format >2)
 	{
@@ -690,9 +732,12 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 		return 0;
 	}
 
-	read_local(&format, 2, 1);
-	read_local(&tracks, 2, 1);
-	read_local(&divisions_tmp, 2, 1);
+	if (read_local(&format, 2, 1) != 1 ||
+		read_local(&tracks, 2, 1) != 1 ||
+		read_local(&divisions_tmp, 2, 1) != 1) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: Truncated MIDI header.", current_filename);
+		return 0;
+	}
 	format=BE_SHORT(format);
 	tracks=BE_SHORT(tracks);
 	divisions_tmp=BE_SHORT(divisions_tmp);
@@ -708,7 +753,9 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 		ctl->cmsg(CMSG_WARNING, VERB_NORMAL, 
 			"%s: MIDI file header size %ld bytes", 
 			current_filename, len);
-		skip_local(len-6); /* skip_local the excess */
+		if (!skip_local((size_t)(len - 6))) {
+			return 0;
+		}
 	}
 	if (format<0 || format >2)
 	{
