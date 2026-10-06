@@ -497,6 +497,10 @@ void idSoundSample_OpenAL::LoadResource()
 	if( s_noSound.GetBool() )
 	{
 		MakeDefault();
+		// Remember that this is only a temporary placeholder. If sound is
+		// enabled later, Restart() reloads the real resource instead of
+		// uploading this default beep into the new OpenAL context.
+		defaultedForNoSound = true;
 		return;
 	}
 	
@@ -898,6 +902,7 @@ void idSoundSample_OpenAL::MakeDefault()
 {
 	FreeData();
 	openalDataDecoded = false;
+	defaultedForNoSound = false;
 	
 	static const int DEFAULT_NUM_SAMPLES = 4096;
 	
@@ -969,6 +974,7 @@ void idSoundSample_OpenAL::FreeData()
 	playBegin = 0;
 	playLength = 0;
 	openalDataDecoded = false;
+	defaultedForNoSound = false;
 	
 	if (openalBuffer != 0 && alcGetCurrentContext() != NULL && alIsBuffer(openalBuffer))
 	{

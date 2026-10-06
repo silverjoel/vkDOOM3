@@ -99,6 +99,11 @@ public:
 	{
 		return loaded;
 	}
+
+	bool			WasDefaultedForNoSound() const
+	{
+		return defaultedForNoSound;
+	}
 	
 	void			SetNeverPurge()
 	{
@@ -213,6 +218,7 @@ protected:
 	// OpenAL buffer that contains all buffers
 	ALuint			openalBuffer;
 	bool			openalDataDecoded;
+	bool			defaultedForNoSound;
 	
 	int				playBegin;
 	int				playLength;

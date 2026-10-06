@@ -136,7 +136,14 @@ void idSoundSystemLocal::Restart() {
 		// perform a second decode.
 		for (int i = 0; i < samples.Num(); i++)
 		{
-			if (samples[i]->IsLoaded())
+			if (samples[i]->WasDefaultedForNoSound())
+			{
+				// This sample was first referenced while s_noSound was active
+				// and therefore contains only the temporary default beep.
+				// Reload the actual resource now that sound is available.
+				samples[i]->LoadResource();
+			}
+			else if (samples[i]->IsLoaded())
 			{
 				samples[i]->RecreateOpenALBuffer();
 			}
@@ -161,6 +168,11 @@ void idSoundSystemLocal::Init() {
 	if ( !s_noSound.GetBool() ) {
 		hardware.Init();
 	}
+
+	// Establish the startup value as the baseline. Runtime changes are handled
+	// in Render() so both disabling and re-enabling sound use the full restart
+	// lifecycle.
+	s_noSound.ClearModified();
 
 	cmdSystem->AddCommand( "testSound", TestSound_f, 0, "tests a sound", idCmdSystem::ArgCompletion_SoundName );
 	cmdSystem->AddCommand( "s_restart", RestartSound_f, 0, "restart sound system" );
@@ -247,6 +259,15 @@ idSoundSystemLocal::Render
 ========================
 */
 void idSoundSystemLocal::Render() {
+
+	// Handle runtime s_noSound transitions before the disabled early-out.
+	// Restart() tears down the current context when disabling and rebuilds it
+	// (including context-local sample buffers) when enabling.
+	if (s_noSound.IsModified()) 
+	{
+		s_noSound.ClearModified();
+		Restart();
+	}
 
 	if ( s_noSound.GetBool() ) {
 		return;
