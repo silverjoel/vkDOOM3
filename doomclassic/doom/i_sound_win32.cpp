@@ -257,7 +257,7 @@ I_StartSound2
 //
 int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, int pitch, int priority)
 {
-	if (!soundHardwareInitialized || id == 0) {
+	if (!soundHardwareInitialized || id <= 0 || id >= NUMSFX || alBuffers[id] == 0) {
 		return id;
 	}
 
@@ -283,6 +283,11 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	for (i = 0; i < NUM_SOUNDBUFFERS; i++) {
 		sound = &activeSounds[i];
 
+		// A source can be unavailable if OpenAL source creation failed during
+		// hardware initialization. Never issue AL calls against source 0.
+		if (sound->alSourceVoice == 0)
+			continue;
+
 		if (!sound->valid)
 			break;
 
@@ -300,6 +305,10 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 
 	// none found, so use the oldest one
 	if (i == NUM_SOUNDBUFFERS) {
+		if (oldestnum < 0) {
+			return id;
+		}
+
 		i = oldestnum;
 		sound = &activeSounds[i];
 	}
@@ -316,7 +325,11 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	alSourcef(sound->alSourceVoice, AL_GAIN, x_SoundVolume);
 
 	// Set the source voice pitch
-	alSourcef(sound->alSourceVoice, AL_PITCH, 1 + ((float)pitch - 128.f) / 95.f);
+	float sourcePitch = 1.0f + ((float)pitch - 128.0f) / 95.0f;
+	if (sourcePitch <= 0.0f) {
+		sourcePitch = 0.01f;
+	}
+	alSourcef(sound->alSourceVoice, AL_PITCH, sourcePitch);
 
 	// Set the source voice position
 	ALfloat x = 0.f;
@@ -793,13 +806,28 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	soundchannel->localSound = false;
 	soundchannel->originator = NULL;
 
-	alGenSources((ALuint)1, &soundchannel->alSourceVoice);
+	// Isolate this source's setup from sticky errors produced elsewhere.
+	alGetError();
+	alGenSources(1, &soundchannel->alSourceVoice);
+	ALenum alError = alGetError();
+	if (alError != AL_NO_ERROR || soundchannel->alSourceVoice == 0) {
+		printf("[doomclassic] failed to create SFX source %d: 0x%X\n", channel, alError);
+		soundchannel->alSourceVoice = 0;
+		return;
+	}
 
 	alSource3f(soundchannel->alSourceVoice, AL_VELOCITY, 0.f, 0.f, 0.f);
 	alSourcei(soundchannel->alSourceVoice, AL_LOOPING, AL_FALSE);
 	alSourcef(soundchannel->alSourceVoice, AL_MAX_DISTANCE, SFX_MAX_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_REFERENCE_DISTANCE, SFX_REFERENCE_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_ROLLOFF_FACTOR, SFX_ROLLOFF_FACTOR);
+
+	alError = alGetError();
+	if (alError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to configure SFX source %d: 0x%X\n", channel, alError);
+		alDeleteSources(1, &soundchannel->alSourceVoice);
+		soundchannel->alSourceVoice = 0;
+	}
 }
 
 /*
