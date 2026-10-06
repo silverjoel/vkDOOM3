@@ -172,7 +172,15 @@ static MidiEventList* read_midi_event(bool resetRunningStatus)
 {
 	static uint8_t laststatus = 0, lastchan = 0;
 	static bool runningStatusValid = false;
-	static uint8_t nrpn=0, rpn_msb[16], rpn_lsb[16]; /* one per channel */
+	static bool nrpn[16] = { false };
+	static uint8_t rpn_msb[16] = {
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F,
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F
+	};
+	static uint8_t rpn_lsb[16] = {
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F,
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F
+	};
 	uint8_t me, type, a,b,c;
 	 int32_t len;
 	MidiEventList *newEventList;
@@ -181,6 +189,14 @@ static MidiEventList* read_midi_event(bool resetRunningStatus)
 		laststatus = 0;
 		lastchan = 0;
 		runningStatusValid = false;
+		// RPN/NRPN selection is channel state. Reset it at each MTrk
+		// boundary because tracks are parsed independently and must not inherit
+		// selector state from a previously parsed track or song.
+		for (int channel = 0; channel < 16; ++channel) {
+			nrpn[channel] = false;
+			rpn_msb[channel] = 0x7F;
+			rpn_lsb[channel] = 0x7F;
+		}
 	}
 
 	for (;;)
@@ -320,10 +336,10 @@ static MidiEventList* read_midi_event(bool resetRunningStatus)
 							control=ME_TONE_BANK;
 						break;
 
-					case 100: nrpn=0; rpn_msb[lastchan]=b; break;
-					case 101: nrpn=0; rpn_lsb[lastchan]=b; break;
-					case 99: nrpn=1; rpn_msb[lastchan]=b; break;
-					case 98: nrpn=1; rpn_lsb[lastchan]=b; break;
+					case 100: nrpn[lastchan] = false; rpn_msb[lastchan] = b; break;
+					case 101: nrpn[lastchan] = false; rpn_lsb[lastchan] = b; break;
+					case 99: nrpn[lastchan] = true; rpn_msb[lastchan] = b; break;
+					case 98: nrpn[lastchan] = true; rpn_lsb[lastchan] = b; break;
 
 					case 6:
 						if (nrpn)
@@ -341,9 +357,8 @@ static MidiEventList* read_midi_event(bool resetRunningStatus)
 							control=ME_PITCH_SENS;
 							break;
 
-						case 0x7F7F: /* RPN reset */
-							/* reset pitch bend sensitivity to 2 */
-							MIDIEVENT(at, ME_PITCH_SENS, lastchan, 2, 0);
+						case 0x7F7F: /* Null RPN: no parameter selected */
+							break;
 
 						default:
 							ctl->cmsg(CMSG_INFO, VERB_DEBUG, 
