@@ -48,9 +48,13 @@ static unsigned char* local_buffer = 0;
 static size_t local_buffer_length = 0;
 static size_t local_buffer_cur = 0;
 
-/* These would both fit into 32 bits, but they are often added in
-large multiples, so it's simpler to have two roomy ints */
-static  int32_t sample_increment, sample_correction; /*samples per MIDI delta-t*/
+/*
+Keep the fixed-point samples-per-delta value in 64 bits. MIDI tempo is a
+24-bit value, and the intermediate 16.16 representation can exceed int32_t
+for small timing divisions even though the final samples-per-delta value is
+well within range.
+*/
+static int64_t sample_increment, sample_correction; /* samples per MIDI delta-t */
 
 static  int32_t read_local(void* buffer, size_t len, size_t count)
 {
@@ -101,15 +105,17 @@ static bool skip_local(size_t len)
 /* Computes how many (fractional) samples one MIDI delta-time unit contains */
 static void compute_sample_increment( int32_t tempo,  int32_t divisions)
 {
-	double a;
-	a = (double) (tempo) * (double) (play_mode->rate) * (65536.0/1000000.0) /
+	const double fixedSamplesPerDelta =
+		(double)(tempo) * (double)(play_mode->rate) * (65536.0 / 1000000.0) /
 		(double)(divisions);
 
-	sample_correction = (int32_t)(a) & 0xFFFF;
-	sample_increment = (int32_t)(a) >> 16;
+	const int64_t fixedIncrement = (int64_t)fixedSamplesPerDelta;
+
+	sample_correction = fixedIncrement & 0xFFFF;
+	sample_increment = fixedIncrement >> 16;
 
 	ctl->cmsg(CMSG_INFO, VERB_DEBUG, "Samples per delta-t: %d (correction %d)",
-		sample_increment, sample_correction);
+		(int)sample_increment, (int)sample_correction);
 }
 
 /* Read a standard MIDI variable-length quantity (maximum four bytes). */
@@ -538,7 +544,8 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 	MidiEvent *groomed_list, *lp;
 	MidiEventList *meep;
 	 int32_t i, our_event_count, tempo, skip_local_this_event, new_value;
-	 int32_t sample_cum, samples_to_do, at, st, dt, counting_time;
+	 int32_t at, dt, counting_time;
+	 int64_t sample_cum, samples_to_do, st;
 
 	int current_bank[16], current_set[16], current_program[16]; 
 	/* Or should each bank have its own current program? */
@@ -653,15 +660,26 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		break;
 		}
 
-		/* Recompute time in samples*/
+		/* Recompute time in samples using 64-bit intermediates. */
 		if ((dt=meep->event.time - at) && !counting_time)
 		{
-			samples_to_do=sample_increment * dt;
-			sample_cum += sample_correction * dt;
-			if (sample_cum & 0xFFFF0000)
+			samples_to_do = sample_increment * (int64_t)dt;
+			sample_cum += sample_correction * (int64_t)dt;
+			
+			// Carry every accumulated 16.16 fractional sample, even for a
+			// very large MIDI delta.
+			samples_to_do += sample_cum >> 16;
+			sample_cum &= 0xFFFF;
+			
+			if (samples_to_do < 0 || st > 0x7FFFFFFFLL - samples_to_do)
 			{
-				samples_to_do += ((sample_cum >> 16) & 0xFFFF);
-				sample_cum &= 0x0000FFFF;
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+					"%s: MIDI duration exceeds supported sample range", current_filename);
+				Real_Tim_Free(groomed_list);
+				free_midi_list();
+				*eventsp = 0;
+				*samplesp = 0;
+				return 0;
 			}
 			st += samples_to_do;
 		}
@@ -670,7 +688,7 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		{
 			/* Add the event to the list */
 			*lp=meep->event;
-			lp->time=st;
+			lp->time = (int32_t)st;
 			lp++;
 			our_event_count++;
 		}
@@ -678,13 +696,13 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		meep=(MidiEventList *)meep->next;
 	}
 	/* Add an End-of-Track event */
-	lp->time=st;
+	lp->time = (int32_t)st;
 	lp->type=ME_EOT;
 	our_event_count++;
 	free_midi_list();
 
 	*eventsp=our_event_count;
-	*samplesp=st;
+	*samplesp = (int32_t)st;
 	return groomed_list;
 }
 
