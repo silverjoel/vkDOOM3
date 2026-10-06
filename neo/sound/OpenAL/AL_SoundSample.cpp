@@ -333,11 +333,30 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 	{
 		uint32 magic;
 		fileIn->ReadBig( magic );
+
+		if (magic != SOUND_MAGIC_IDMSA)
+		{
+			idLib::Warning( "LoadGeneratedSample( %s ): invalid sound cache magic 0x%08x", filename.c_str(), magic);
+			return false;
+		}
+
 		fileIn->ReadBig( timestamp );
 		fileIn->ReadBig( loaded );
 		fileIn->ReadBig( playBegin );
 		fileIn->ReadBig( playLength );
-		idWaveFile::ReadWaveFormatDirect( format, fileIn );
+
+		if (!loaded)
+		{
+			idLib::Warning( "LoadGeneratedSample( %s ): generated sample is marked unloaded", filename.c_str());
+			return false;
+		}
+		
+		if (!idWaveFile::ReadWaveFormatDirect(format, fileIn))
+		{
+			idLib::Warning( "LoadGeneratedSample( %s ): invalid generated wave format", filename.c_str());
+			loaded = false;
+			return false;
+		}
 
 		// New generated multichannel samples retain their extensible channel
 		// mask. Older generated PCM samples have no mask to validate, so keep
