@@ -250,6 +250,7 @@ void idSoundHardware_OpenAL::Init()
 	// Extension availability and procedure addresses are context-dependent.
 	// Start every hardware context with fresh OpenAL extension caches.
 	OpenAL_ResetContextCaches();
+	OpenAL_ResetSampleContextCaches();
 	
 	common->Printf( "Done.\n" );
 	
@@ -332,6 +333,7 @@ void idSoundHardware_OpenAL::Shutdown()
 	// destruction/restart, even if the OpenAL implementation later reuses the
 	// same ALCcontext address.
 	OpenAL_ResetContextCaches();
+	OpenAL_ResetSampleContextCaches();
 	
 	if( openalContext != NULL )
 	{

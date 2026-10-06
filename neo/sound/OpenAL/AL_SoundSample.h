@@ -29,6 +29,9 @@ If you have questions concerning this license or the applicable additional terms
 #ifndef __AL_SOUNDSAMPLE_H__
 #define __AL_SOUNDSAMPLE_H__
 
+// Reset context-dependent OpenAL sample format caches.
+void OpenAL_ResetSampleContextCaches();
+
 /*
 ================================================
 idSoundSample_OpenAL

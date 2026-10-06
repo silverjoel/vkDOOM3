@@ -43,6 +43,104 @@ const uint32 SOUND_MAGIC_IDMSA = 0x6D7A7274;
 
 extern idCVar sys_lang;
 
+static ALCcontext* openalMCFormatsContext = NULL;
+static bool openalMCFormatsAvailable = false;
+static ALenum openalQuad16Format = AL_NONE;
+static ALenum openal51Chn16Format = AL_NONE;
+static ALenum openal61Chn16Format = AL_NONE;
+static ALenum openal71Chn16Format = AL_NONE;
+
+/*
+========================
+OpenAL_ResetSampleContextCaches
+========================
+*/
+void OpenAL_ResetSampleContextCaches()
+{
+	openalMCFormatsContext = NULL;
+	openalMCFormatsAvailable = false;
+	openalQuad16Format = AL_NONE;
+	openal51Chn16Format = AL_NONE;
+	openal61Chn16Format = AL_NONE;
+	openal71Chn16Format = AL_NONE;
+}
+
+/*
+========================
+OpenAL_GetMultichannel16Format
+========================
+*/
+static ALenum OpenAL_GetMultichannel16Format(int numChannels)
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if (context == NULL)
+	{
+		OpenAL_ResetSampleContextCaches();
+		return AL_NONE;
+	}
+	
+	if (context != openalMCFormatsContext)
+	{
+		openalMCFormatsContext = context;
+		openalMCFormatsAvailable = false;
+		openalQuad16Format = AL_NONE;
+		openal51Chn16Format = AL_NONE;
+		openal61Chn16Format = AL_NONE;
+		openal71Chn16Format = AL_NONE;
+		
+		CheckALErrors();
+		if (alIsExtensionPresent("AL_EXT_MCFORMATS") == AL_TRUE)
+		{
+			openalQuad16Format = alGetEnumValue("AL_FORMAT_QUAD16");
+			openal51Chn16Format = alGetEnumValue("AL_FORMAT_51CHN16");
+			openal61Chn16Format = alGetEnumValue("AL_FORMAT_61CHN16");
+			openal71Chn16Format = alGetEnumValue("AL_FORMAT_71CHN16");
+			
+			if (CheckALErrors() == AL_NO_ERROR)
+			{
+							// Some implementations historically returned -1 for unknown
+								// enums, so require every value to be a positive AL enum.
+				openalMCFormatsAvailable =
+				openalQuad16Format > AL_NONE &&
+				openal51Chn16Format > AL_NONE &&
+				openal61Chn16Format > AL_NONE &&
+				openal71Chn16Format > AL_NONE;
+			}
+		}
+		else
+		{
+			CheckALErrors();
+		}
+		
+		if (!openalMCFormatsAvailable)
+		{
+			openalQuad16Format = AL_NONE;
+			openal51Chn16Format = AL_NONE;
+			openal61Chn16Format = AL_NONE;
+			openal71Chn16Format = AL_NONE;
+		}
+	}
+	
+	if (!openalMCFormatsAvailable)
+	{
+		return AL_NONE;
+	}
+	
+	switch (numChannels)
+	{
+		case 4:
+			return openalQuad16Format;
+		case 6:
+			return openal51Chn16Format;
+		case 7:
+			return openal61Chn16Format;
+		case 8:
+			return openal71Chn16Format;
+		default:
+			return AL_NONE;
+	}
+}
+
 /*
 ========================
 AllocBuffer
@@ -297,6 +395,16 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		return;
 	}
 
+	const ALenum alFormat = GetOpenALBufferFormat();
+	if (alFormat == AL_NONE)
+	{
+		idLib::Warning(
+			"idSoundSample_OpenAL::CreateOpenALBuffer: unsupported %d-channel format for '%s'",
+			NumChannels(), GetName());
+		openalBuffer = 0;
+		return;
+	}
+
 	// build OpenAL buffer
 	CheckALErrors();
 	alGenBuffers( 1, &openalBuffer );
@@ -375,7 +483,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		else
 #endif
 		{
-			alBufferData( openalBuffer, GetOpenALBufferFormat(), buffer, bufferSize, format.basic.samplesPerSec );
+			alBufferData(openalBuffer, alFormat, buffer, bufferSize, format.basic.samplesPerSec);
 		}
 		
 		if( CheckALErrors() != AL_NO_ERROR )
@@ -563,7 +671,8 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	
 	if( format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE )
 	{
-		// HACK: XAudio2 doesn't really support FORMAT_EXTENSIBLE so we convert it to a basic format after extracting the channel mask
+		// Normalize WAVE_FORMAT_EXTENSIBLE to its underlying sample format
+		// after retaining the channel count/layout information.
 		format.basic.formatTag = format.extra.extensible.subFormat.data1;
 	}
 	
@@ -999,24 +1108,36 @@ ALenum idSoundSample_OpenAL::GetOpenALBufferFormat() const
 	
 	if( format.basic.formatTag == idWaveFile::FORMAT_PCM )
 	{
-		alFormat = NumChannels() == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+		switch (NumChannels())
+		{
+			case 1:
+				return AL_FORMAT_MONO16;
+			case 2:
+				return AL_FORMAT_STEREO16;
+			case 4:
+			case 6:
+			case 7:
+			case 8:
+				return OpenAL_GetMultichannel16Format(NumChannels());
+			default:
+				return AL_NONE;
+		}
 	}
 	else if( format.basic.formatTag == idWaveFile::FORMAT_ADPCM )
 	{
-		//alFormat = NumChannels() == 1 ? AL_FORMAT_MONO8 : AL_FORMAT_STEREO8;
-		alFormat = NumChannels() == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
-		//alFormat = NumChannels() == 1 ? AL_FORMAT_MONO_IMA4 : AL_FORMAT_STEREO_IMA4;
+		// The MS ADPCM decoder supports mono and stereo and produces 16-bit PCM.
+		if (NumChannels() == 1)
+		{
+			return AL_FORMAT_MONO16;
+		}
+		if (NumChannels() == 2)
+		{
+			return AL_FORMAT_STEREO16;
+		}
+		return AL_NONE;
 	}
-	else if( format.basic.formatTag == idWaveFile::FORMAT_XMA2 )
-	{
-		alFormat = NumChannels() == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
-	}
-	else
-	{
-		alFormat = NumChannels() == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
-	}
-	
-	return alFormat;
+
+	return AL_NONE;
 }
 
 int32 idSoundSample_OpenAL::MS_ADPCM_nibble( MS_ADPCM_decodeState_t* state, int8 nybble )
