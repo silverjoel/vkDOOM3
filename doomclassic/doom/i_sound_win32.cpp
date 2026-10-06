@@ -953,7 +953,7 @@ void I_ShutdownMusic(void)
 	Music_initialized = false;
 }
 
-int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len);
+int Mus2Midi(const unsigned char* bytes, int inputLength, unsigned char* out, int outputCapacity, int* len);
 
 namespace {
 	const int MaxMidiConversionSize = 1024 * 1024;
@@ -970,10 +970,18 @@ void I_LoadSong(const char* songname)
 	idStr lumpName = "d_";
 	lumpName += static_cast<const char*>(songname);
 
-	unsigned char* musFile = static_cast<unsigned char*>(W_CacheLumpName(lumpName.c_str(), PU_STATIC_SHARED));
+	const int lumpNum = W_GetNumForName(lumpName.c_str());
+	const int musLength = W_LumpLength(lumpNum);
+	const unsigned char* musFile = static_cast<const unsigned char*>(W_CacheLumpNum(lumpNum, PU_STATIC_SHARED));
 
 	int length = 0;
-	Mus2Midi(musFile, midiConversionBuffer, &length);
+
+	if (!Mus2Midi(musFile, musLength, midiConversionBuffer, MaxMidiConversionSize, &length) || length <= 0)
+	{
+		printf("[doomclassic] failed to convert music lump '%s' to MIDI\n", lumpName.c_str());
+		musicReady = false;
+		return;
+	}
 
 	doomMusic = Timidity_LoadSongMem(midiConversionBuffer, length);
 
