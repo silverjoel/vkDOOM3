@@ -1224,12 +1224,12 @@ float idSoundSample_OpenAL::GetAmplitude( int timeMS ) const
 	{
 		return 1.0f;
 	}
-	int index = timeMS * 60 / 1000;
+	const int64 index = (static_cast<int64>(timeMS) * 60) / 1000;
 	if( index < 0 || index >= amplitude.Num() )
 	{
 		return 0.0f;
 	}
-	return ( float )amplitude[index] / 255.0f;
+	return (float)amplitude[static_cast<int>(index)] / 255.0f;
 }
 
 

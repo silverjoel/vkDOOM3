@@ -1064,8 +1064,8 @@ float idSoundVoice_OpenAL::GetAmplitude()
 	
 	const int relativeSample =
 	Max( 0, currentSampleOffset - currentSample->playBegin );
-	const int timeMS =
-	SamplesToMsec( relativeSample, currentSample->SampleRate() );
+	const int64 timeMS64 = (static_cast<int64>(relativeSample) * 1000) / static_cast<int64>(currentSample->SampleRate());
+	const int timeMS = timeMS64 > INT_MAX ? INT_MAX : static_cast<int>(timeMS64);
 	
 	return currentSample->GetAmplitude( timeMS );
 }
