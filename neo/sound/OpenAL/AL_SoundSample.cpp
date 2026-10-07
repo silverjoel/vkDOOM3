@@ -783,54 +783,6 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 			{
 				buffer = buffers[0].buffer;
 				bufferSize = buffers[0].bufferSize;
-
-				// XAudio2 can describe a playable subrange with PlayBegin/PlayLength,
-				// but a normal OpenAL static buffer always plays the complete buffer.
-				// Make the OpenAL object itself represent exactly the sample's
-				// [playBegin, playBegin + playLength) range.  Voice offsets can then
-				// remain relative to the logical start of the sound, and AL_LOOPING
-				// repeats only the intended loop region.
-				const uint64 bytesPerFrame = static_cast<uint64>(NumChannels()) * sizeof(int16);
-				const uint64 availableBytes = static_cast<uint64>(bufferSize);
-				
-				if (bytesPerFrame == 0 || playBegin < 0 || playLength <= 0 || (availableBytes % bytesPerFrame) != 0)
-				{
-					idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: invalid playable range for '%s'", GetName());
-					CheckALErrors();
-					alDeleteBuffers(1, &openalBuffer);
-					CheckALErrors();
-					openalBuffer = 0;
-					return;
-				}
-				
-				const uint64 availableFrames = availableBytes / bytesPerFrame;
-				const uint64 playBeginFrames = static_cast<uint64>(playBegin);
-				const uint64 playLengthFrames = static_cast<uint64>(playLength);
-				
-				if (playBeginFrames > availableFrames || playLengthFrames > availableFrames - playBeginFrames)
-				{
-					idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: playable range exceeds decoded data for '%s'", GetName());
-					CheckALErrors();
-					alDeleteBuffers(1, &openalBuffer);
-					CheckALErrors();
-					openalBuffer = 0;
-					return;
-				}
-				
-				const uint64 uploadOffsetBytes = playBeginFrames * bytesPerFrame;
-				const uint64 uploadSizeBytes = playLengthFrames * bytesPerFrame;
-				if (uploadSizeBytes == 0 || uploadSizeBytes > static_cast<uint64>(INT_MAX))
-				{
-					idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: playable data is too large for OpenAL '%s'", GetName());
-					CheckALErrors();
-					alDeleteBuffers(1, &openalBuffer);
-					CheckALErrors();
-					openalBuffer = 0;
-					return;
-				}
-				
-				buffer = static_cast<byte*>(buffer) + static_cast<size_t>(uploadOffsetBytes);
-				bufferSize = static_cast<uint32>(uploadSizeBytes);
 				
 				if (MS_ADPCM_decode((uint8**)&buffer, &bufferSize) < 0)
 				{
@@ -863,6 +815,56 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 			buffer = buffers[0].buffer;
 			bufferSize = buffers[0].bufferSize;
 		}
+
+		// XAudio2 can describe a playable subrange with PlayBegin/PlayLength,
+		// but a normal OpenAL static buffer always plays the complete buffer.
+		//
+		// Apply the range only after any ADPCM payload has been decoded.  The
+		// playBegin/playLength values are PCM sample-frame units, while the
+		// pre-decode ADPCM buffer is compressed bytes and cannot be sliced with
+		// PCM frame arithmetic.  Doing this here also gives PCM and extensible
+		// PCM samples the same playable-range semantics.
+		const uint64 bytesPerFrame = static_cast<uint64>(NumChannels()) * sizeof(int16);
+		const uint64 availableBytes = static_cast<uint64>(bufferSize);
+		
+		if (buffer == NULL || bytesPerFrame == 0 || playBegin < 0 || playLength <= 0 || (availableBytes % bytesPerFrame) != 0)
+		{
+			idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: invalid decoded playable range for '%s'", GetName());
+			CheckALErrors();
+			alDeleteBuffers(1, &openalBuffer);
+			CheckALErrors();
+			openalBuffer = 0;
+			return;
+		}
+		
+		const uint64 availableFrames = availableBytes / bytesPerFrame;
+		const uint64 playBeginFrames = static_cast<uint64>(playBegin);
+		const uint64 playLengthFrames = static_cast<uint64>(playLength);
+		
+		if (playBeginFrames > availableFrames || playLengthFrames > availableFrames - playBeginFrames)
+		{
+			idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: playable range exceeds decoded data for '%s'", GetName());
+			CheckALErrors();
+			alDeleteBuffers(1, &openalBuffer);
+			CheckALErrors();
+			openalBuffer = 0;
+			return;
+		}
+		
+		const uint64 uploadOffsetBytes = playBeginFrames * bytesPerFrame;
+		const uint64 uploadSizeBytes = playLengthFrames * bytesPerFrame;
+		if (uploadSizeBytes == 0 || uploadSizeBytes > static_cast<uint64>(INT_MAX))
+		{
+			idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: playable data is too large for OpenAL '%s'", GetName());
+			CheckALErrors();
+			alDeleteBuffers(1, &openalBuffer);
+			CheckALErrors();
+			openalBuffer = 0;
+			return;
+		}
+		
+		buffer = static_cast<byte*>(buffer) + static_cast<size_t>(uploadOffsetBytes);
+		bufferSize = static_cast<uint32>(uploadSizeBytes);
 		
 #if 0 //#if defined(AL_SOFT_buffer_samples)
 		if( alIsExtensionPresent( "AL_SOFT_buffer_samples" ) )
