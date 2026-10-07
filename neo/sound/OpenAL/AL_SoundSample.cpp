@@ -314,6 +314,12 @@ void idSoundSample_OpenAL::WriteAllSamples( const idStr& sampleName )
 		if( samplePC->LoadWav( inName ) || samplePC->LoadWav( inName2 ) )
 		{
 			idFile* fileOut = fileSystem->OpenFileWrite( outName, "fs_basepath" );
+			if (fileOut == NULL)
+			{
+				idLib::Warning( "idSoundSample_OpenAL::WriteAllSamples: could not open '%s' for writing", outName.c_str());
+				delete samplePC;
+				return;
+			}
 			samplePC->WriteGeneratedSample( fileOut );
 			delete fileOut;
 		}
