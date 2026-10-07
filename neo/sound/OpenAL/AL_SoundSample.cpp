@@ -424,7 +424,54 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			FreeData();
 			return false;
 		}
+
+		const bool isPCM =
+			format.basic.formatTag == idWaveFile::FORMAT_PCM ||
+			format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE;
+		const bool isADPCM = format.basic.formatTag == idWaveFile::FORMAT_ADPCM;
 		
+		if (isPCM)
+		{
+			const uint64 expectedBlockSize =
+			static_cast<uint64>(format.basic.numChannels) * sizeof(int16);
+			
+			if (format.basic.bitsPerSample != 16 ||
+				expectedBlockSize != format.basic.blockSize ||
+				(totalBufferSize % format.basic.blockSize) != 0)
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): invalid PCM sample geometry", filename.c_str());
+				FreeData();
+				return false;
+			}
+		}
+		else if (isADPCM)
+		{
+			const uint32 channels = format.basic.numChannels;
+			const uint32 headerBytes = 7u * channels;
+
+			if ((channels != 1 && channels != 2) ||
+				format.basic.bitsPerSample != 4 ||
+				format.extra.adpcm.numCoef == 0 ||
+				format.extra.adpcm.numCoef > 7 ||
+				format.extra.adpcm.samplesPerBlock < 2 ||
+				format.basic.blockSize < headerBytes ||
+				(totalBufferSize % format.basic.blockSize) != 0)
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): invalid MS ADPCM sample geometry", filename.c_str());
+				FreeData();
+				return false;
+			}
+
+			const uint32 payloadBytes = format.basic.blockSize - headerBytes;
+			const uint32 expectedSamplesPerBlock = 2u + ((payloadBytes * 2u) / channels);
+
+			if (format.extra.adpcm.samplesPerBlock != expectedSamplesPerBlock)
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): inconsistent MS ADPCM block metadata", filename.c_str());
+				FreeData();
+				return false;
+			}
+		}
 		buffers.Clear();
 		uint64 accumulatedBufferSize = 0;
 		
@@ -472,6 +519,52 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			FreeData();
 			return false;
 		}
+
+		// OpenAL's PCM and ADPCM upload paths operate on one contiguous CPU
+		// buffer. Generated resources produced by LoadWav() use exactly one
+		// buffer for these formats; accepting more would silently upload only
+		// buffers[0] in release builds.
+		if ((isPCM || isADPCM) && buffers.Num() != 1)
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): unsupported multi-buffer PCM/ADPCM sample", filename.c_str());
+			FreeData();
+			return false;
+		}
+		
+		if (isPCM)
+		{
+			const uint64 expectedBytes =
+			static_cast<uint64>(buffers[0].numSamples) *
+			static_cast<uint64>(format.basic.blockSize);
+			
+			if (expectedBytes != static_cast<uint64>(buffers[0].bufferSize))
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): PCM sample count does not match buffer size", filename.c_str());
+				FreeData();
+				return false;
+			}
+		}
+		else if (isADPCM)
+		{
+			const uint64 blockCount = static_cast<uint64>(totalBufferSize) / static_cast<uint64>(format.basic.blockSize);
+			const uint64 expectedSamples = blockCount * static_cast<uint64>(format.extra.adpcm.samplesPerBlock);
+			
+			if (expectedSamples == 0 || expectedSamples > 0x7FFFFFFFULL || static_cast<uint64>(buffers[0].numSamples) != expectedSamples)
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): MS ADPCM sample count does not match encoded data", filename.c_str());
+				FreeData();
+				return false;
+			}
+		}
+		
+		const uint64 playEnd = static_cast<uint64>(playBegin) + static_cast<uint64>(playLength);
+		if (playEnd > static_cast<uint64>(buffers[buffers.Num() - 1].numSamples))
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): play range exceeds available samples", filename.c_str());
+			FreeData();
+			return false;
+		}
+
 		loaded = true;
 		return true;
 	}
