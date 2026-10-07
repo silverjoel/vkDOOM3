@@ -1506,7 +1506,10 @@ void I_ShutdownMusic(void)
 	if (Music_initialized) {
 		// Preserve only music that was actually pending, playing, or paused.
 		// A naturally completed non-looping track should not be restarted.
-		restoreMusicAfterHardwareRestart = waitingForMusic && !currentMusicName.IsEmpty();
+		// Keep an explicit restore request made by I_UpdateMusic() after an
+		// OpenAL upload/start failure; the failed path has already cleared
+		// waitingForMusic before the full sound restart reaches this teardown.
+		restoreMusicAfterHardwareRestart = restoreMusicAfterHardwareRestart || (waitingForMusic && !currentMusicName.IsEmpty());
 
 		if (alMusicSourceVoice) {
 			if (!currentMusicName.IsEmpty() && !restoreMusicAfterHardwareRestart) {
@@ -1779,6 +1782,8 @@ void I_UpdateMusic(void)
 		printf("[doomclassic] failed to detach previous music buffer: 0x%X\n", alError);
 		musicReady = false;
 		waitingForMusic = false;
+		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
+		soundSystemLocal.SetNeedsRestart();
 		return;
 	}
 	
@@ -1788,6 +1793,8 @@ void I_UpdateMusic(void)
 		printf("[doomclassic] failed to upload music buffer: 0x%X\n", alError);
 		musicReady = false;
 		waitingForMusic = false;
+		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
+		soundSystemLocal.SetNeedsRestart();
 		return;
 	}
 	
@@ -1801,6 +1808,8 @@ void I_UpdateMusic(void)
 		alGetError();
 		musicReady = false;
 		waitingForMusic = false;
+		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
+		soundSystemLocal.SetNeedsRestart();
 		return;
 	}
 	
