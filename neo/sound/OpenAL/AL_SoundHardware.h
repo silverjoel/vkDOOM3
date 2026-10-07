@@ -49,7 +49,9 @@ public:
 	void			Init();
 	void			Shutdown();
 	
-	void 			Update();
+	// Validate/update the OpenAL device/context. Returns false when per-voice
+	// OpenAL work must be skipped until the normal sound restart recovers it.
+	bool			Update();
 	
 	idSoundVoice* 	AllocateVoice( const idSoundSample* leadinSample, const idSoundSample* loopingSample );
 	void			FreeVoice( idSoundVoice* voice );

@@ -286,11 +286,19 @@ void idSoundSystemLocal::Render() {
 
 	SCOPED_PROFILE_EVENT( "SoundSystem::Render" );
 
+	// Validate the owned OpenAL device/context before any sound-world voice
+	// update can issue source calls. In particular, never let stale numeric
+	// source names be used while another/no OpenAL context is current. Keep
+	// logical sound time advancing while hardware is unavailable so expired
+	// one-shots do not resume later.
+	if (!hardware.Update()) {
+		soundTime = Sys_Milliseconds();
+		return;
+	}
+
 	if ( currentSoundWorld != NULL ) {
 		currentSoundWorld->Update();
 	}
-
-	hardware.Update();
 
 	// The sound system doesn't use game time or anything like that because the sounds are decoded in real time. 
 	soundTime = Sys_Milliseconds();

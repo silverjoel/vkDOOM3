@@ -536,7 +536,7 @@ void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
 idSoundHardware_OpenAL::Update
 ========================
 */
-void idSoundHardware_OpenAL::Update()
+bool idSoundHardware_OpenAL::Update()
 {
 	// s_device is an archived runtime CVar, but opening another OpenAL device
 	// requires a new device/context pair. Never swap the context directly
@@ -547,7 +547,7 @@ void idSoundHardware_OpenAL::Update()
 	{
 		s_device.ClearModified();
 		soundSystemLocal.SetNeedsRestart();
-		return;
+		return false;
 	}
 
 	// Match the original hardware backend's graceful "no audio device"
@@ -565,7 +565,7 @@ void idSoundHardware_OpenAL::Update()
 			idLib::Warning("OpenAL device/context unavailable; requesting sound restart");
 			soundSystemLocal.SetNeedsRestart();
 		}
-		return;
+		return false;
 	}
 
 	// All source/buffer names owned by this backend belong to openalContext.
@@ -580,7 +580,7 @@ void idSoundHardware_OpenAL::Update()
 			idLib::Warning("OpenAL context is no longer current; requesting sound restart");
 			soundSystemLocal.SetNeedsRestart();
 		}
-		return;
+		return false;
 	}
 
 	if (disconnectExtensionAvailable)
@@ -602,7 +602,7 @@ void idSoundHardware_OpenAL::Update()
 				idLib::Warning("OpenAL playback device disconnected; requesting sound restart");
 				soundSystemLocal.SetNeedsRestart();
 			}
-			return;
+			return false;
 		}
 	}
 
@@ -632,8 +632,9 @@ void idSoundHardware_OpenAL::Update()
 			idLib::Warning("OpenAL listener update failed; requesting sound restart");
 			soundSystemLocal.SetNeedsRestart();
 		}
-		return;
+		return false;
 	}
+	return true;
 }
 
 
