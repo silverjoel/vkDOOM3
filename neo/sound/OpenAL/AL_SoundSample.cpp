@@ -1489,44 +1489,89 @@ int32 idSoundSample_OpenAL::MS_ADPCM_nibble( MS_ADPCM_decodeState_t* state, int8
 
 int idSoundSample_OpenAL::MS_ADPCM_decode( uint8** audio_buf, uint32* audio_len )
 {
-	static MS_ADPCM_decodeState_t	states[2];
+	MS_ADPCM_decodeState_t			states[2];
 	MS_ADPCM_decodeState_t*			state[2];
 	
-	uint8* freeable, *encoded, *decoded;
-	int32 encoded_len, samplesleft;
+	if (audio_buf == NULL || audio_len == NULL || *audio_buf == NULL)
+	{
+		return -1;
+	}
+	
+	const uint32 channels = format.basic.numChannels;
+	const uint32 blockSize = format.basic.blockSize;
+	const uint32 samplesPerBlock = format.extra.adpcm.samplesPerBlock;
+	const uint32 numCoef = format.extra.adpcm.numCoef;
+	const uint32 headerBytes = 7u * channels;
+	
+	// Validate the complete block layout here as well as in the WAV loader.
+	// Generated .idwav data can reach this decoder without passing LoadWav().
+	if ((channels != 1 && channels != 2) ||
+			blockSize == 0 ||
+			samplesPerBlock < 2 ||
+			numCoef == 0 ||
+			numCoef > 7 ||
+			blockSize < headerBytes ||
+			*audio_len == 0 ||
+			*audio_len > 0x7FFFFFFFu ||
+			(*audio_len % blockSize) != 0)
+	{
+		return -1;
+	}
+	
+	const uint32 payloadBytes = blockSize - headerBytes;
+	const uint32 expectedSamplesPerBlock = 2u + ((payloadBytes * 2u) / channels);
+	if (samplesPerBlock != expectedSamplesPerBlock)
+	{
+		return -1;
+	}
+	
+	const uint64 blockCount = (uint64)*audio_len / (uint64)blockSize;
+	const uint64 decodedByteCount =
+		blockCount *
+		(uint64)samplesPerBlock *
+		(uint64)channels *
+		(uint64)sizeof(int16);
+	
+	if (decodedByteCount == 0 || decodedByteCount > 0x7FFFFFFFULL)
+	{
+		return -1;
+	}
+	
+	// Predictor values are stored in the first byte(s) of every block.
+	// Validate all of them before allocating output or modifying ownership.
+	const uint8 * encodedBlock = *audio_buf;
+	for (uint64 block = 0; block < blockCount; ++block)
+	{
+		if (encodedBlock[0] >= numCoef ||
+			(channels == 2 && encodedBlock[1] >= numCoef))
+		{
+			return -1;
+		}
+		
+		encodedBlock += blockSize;
+	}
+	
+	uint8 * decodedBuffer = (uint8*)Mem_Alloc((int)decodedByteCount, TAG_AUDIO);
+	if (decodedBuffer == NULL)
+	{
+		return -1;
+	}
+	
+	uint8 * encoded = *audio_buf;
+	uint8 * decoded = decodedBuffer;
+	int32 encoded_len = (int32)*audio_len;
+	int32 samplesleft;
 	int8 nybble;
-	int8 stereo;
+	const int8 stereo = (channels == 2) ? 1 : 0;
 	int32 new_sample;
 	
-	// Allocate the proper sized output buffer
-	encoded_len = *audio_len;
-	encoded = *audio_buf;
-	freeable = *audio_buf;
-	
-	*audio_len = ( encoded_len / format.basic.blockSize ) * format.extra.adpcm.samplesPerBlock * format.basic.numChannels * sizeof( int16 );
-	
-	*audio_buf = ( uint8* ) Mem_Alloc( *audio_len, TAG_AUDIO );
-	if( *audio_buf == NULL )
-	{
-		//SDL_Error( SDL_ENOMEM );
-		return ( -1 );
-	}
-	decoded = *audio_buf;
-	
-	assert( format.basic.numChannels == 1 || format.basic.numChannels == 2 );
-	
-	// Get ready... Go!
-	stereo = ( format.basic.numChannels == 2 ) ? 1 : 0;
 	state[0] = &states[0];
 	state[1] = &states[stereo];
 	
-	while( encoded_len >= format.basic.blockSize )
+	while (encoded_len >= (int32)blockSize)
 	{
-		// Grab the initial information for this block
+		// Predictor indices were preflighted for every block above.
 		state[0]->hPredictor = *encoded++;
-		
-		assert( state[0]->hPredictor < format.extra.adpcm.numCoef );
-		state[0]->hPredictor = idMath::ClampInt( 0, 6, state[0]->hPredictor );
 		
 		state[0]->coef1 = format.extra.adpcm.aCoef[state[0]->hPredictor].coef1;
 		state[0]->coef2 = format.extra.adpcm.aCoef[state[0]->hPredictor].coef2;
@@ -1534,9 +1579,6 @@ int idSoundSample_OpenAL::MS_ADPCM_decode( uint8** audio_buf, uint32* audio_len 
 		if( stereo )
 		{
 			state[1]->hPredictor = *encoded++;
-			
-			assert( state[1]->hPredictor < format.extra.adpcm.numCoef );
-			state[1]->hPredictor = idMath::ClampInt( 0, 6, state[1]->hPredictor );
 			
 			state[1]->coef1 = format.extra.adpcm.aCoef[state[1]->hPredictor].coef1;
 			state[1]->coef2 = format.extra.adpcm.aCoef[state[1]->hPredictor].coef2;
@@ -1566,9 +1608,7 @@ int idSoundSample_OpenAL::MS_ADPCM_decode( uint8** audio_buf, uint32* audio_len 
 			encoded += sizeof( int16 );
 		}
 		
-		
-		
-		// Store the two initial samples we start with
+		// Store the two initial samples we start with.
 		decoded[0] = state[0]->iSamp2 & 0xFF;
 		decoded[1] = ( state[0]->iSamp2 >> 8 ) & 0xFF;
 		decoded += 2;
@@ -1589,8 +1629,8 @@ int idSoundSample_OpenAL::MS_ADPCM_decode( uint8** audio_buf, uint32* audio_len 
 			decoded += 2;
 		}
 		
-		// Decode and store the other samples in this block
-		samplesleft = ( format.extra.adpcm.samplesPerBlock - 2 ) * format.basic.numChannels;
+		// Decode and store the other samples in this block.
+		samplesleft = (samplesPerBlock - 2) * channels;
 		
 		while( samplesleft > 0 )
 		{
@@ -1612,10 +1652,14 @@ int idSoundSample_OpenAL::MS_ADPCM_decode( uint8** audio_buf, uint32* audio_len 
 			samplesleft -= 2;
 		}
 		
-		encoded_len -= format.basic.blockSize;
+		encoded_len -= blockSize;
 	}
 	
-	Mem_Free( freeable );
+	// Commit ownership only after the entire input has passed validation and
+	// the replacement buffer was allocated successfully.
+	Mem_Free(*audio_buf);
+	*audio_buf = decodedBuffer;
+	*audio_len = (uint32)decodedByteCount;
 	
 	return 0;
 }
