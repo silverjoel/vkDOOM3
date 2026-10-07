@@ -59,6 +59,13 @@ static const float OPENAL_OCCLUSION_HF_ATTENUATION_DB = -16.0f;
 static ALCcontext * openalSourceRadiusContext = NULL;
 static ALenum openalSourceRadiusEnum = AL_NONE;
 
+// Core OpenAL restricts AL_MAX_GAIN to 1.0, which would silently defeat
+// BFG's SSF_UNCLAMPED source gains above unity. AL_SOFT_gain_clamp_ex raises
+// that limit and exposes the implementation's final gain ceiling. Cache the
+// result per context because extension support can change after a restart.
+static ALCcontext * openalGainClampContext = NULL;
+static float openalGainLimit = 1.0f;
+
 /*
 ========================
 OpenAL_ResetContextCaches
@@ -68,6 +75,9 @@ void OpenAL_ResetContextCaches()
 {
 	openalSourceRadiusContext = NULL;
 	openalSourceRadiusEnum = AL_NONE;
+
+	openalGainClampContext = NULL;
+	openalGainLimit = 1.0f;
 
 	openalEfxContext = NULL;
 	openalEfxAvailable = false;
@@ -108,6 +118,57 @@ static ALenum OpenAL_GetSourceRadiusEnum()
 	}
 	
 	return openalSourceRadiusEnum;
+}
+
+/*
+========================
+OpenAL_GetGainLimit
+
+AL_SOFT_gain_clamp_ex extends the legal AL_MAX_GAIN range beyond the core
+OpenAL 1.0 ceiling. The extension's AL_GAIN_LIMIT_SOFT value is the
+implementation's final mixing gain limit, so using it for AL_MAX_GAIN lets
+SSF_UNCLAMPED sources retain their intended gain above unity when supported.
+========================
+*/
+static float OpenAL_GetGainLimit()
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if (context == NULL)
+	{
+		OpenAL_ResetContextCaches();
+		return 1.0f;
+	}
+	
+	if (context == openalGainClampContext)
+	{
+		return openalGainLimit;
+	}
+	
+	openalGainClampContext = context;
+	openalGainLimit = 1.0f;
+	
+	CheckALErrors();
+	if (alIsExtensionPresent("AL_SOFT_gain_clamp_ex") != AL_TRUE)
+	{
+		CheckALErrors();
+		return openalGainLimit;
+	}
+	
+	// The bundled headers predate AL_SOFT_gain_clamp_ex, so resolve the
+	// standardized token at runtime just as we do for AL_EXT_SOURCE_RADIUS.
+	const ALenum gainLimitEnum = alGetEnumValue("AL_GAIN_LIMIT_SOFT");
+	if (CheckALErrors() != AL_NO_ERROR || gainLimitEnum == AL_NONE)
+	{
+		return openalGainLimit;
+	}
+	
+	const ALfloat gainLimit = alGetFloat(gainLimitEnum);
+	if (CheckALErrors() == AL_NO_ERROR && gainLimit >= 1.0f)
+	{
+		openalGainLimit = gainLimit;
+	}
+	
+	return openalGainLimit;
 }
 
 static bool OpenAL_LoadEfxFilterProcs()
@@ -296,6 +357,13 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	
 	alSourcei( openalSource, AL_SOURCE_RELATIVE, AL_TRUE );
 	alSource3f( openalSource, AL_POSITION, 0.0f, 0.0f, 0.0f );
+
+	// Core OpenAL clamps a source's effective gain to AL_MAX_GAIN, whose
+	// default is 1.0. Raise that ceiling only when AL_SOFT_gain_clamp_ex says
+	// the implementation supports it. This makes SSF_UNCLAMPED gain > 1.0
+	// effective on supporting OpenAL implementations while preserving the
+	// core-compatible 1.0 ceiling everywhere else.
+	alSourcef(openalSource, AL_MAX_GAIN, OpenAL_GetGainLimit());
 	
 	alSourcef( openalSource, AL_GAIN, 1.0f );
 	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
