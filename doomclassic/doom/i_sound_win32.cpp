@@ -456,6 +456,7 @@ static void I_RetireFailedSoundSource(activeSound_t * sound)
 	sound->localSound = false;
 	sound->originator = NULL;
 	}
+}
 
 /*
 ======================
@@ -527,7 +528,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 			const ALboolean sourceValid = alIsSource(sound->alSourceVoice);
 			const ALenum sourceError = alGetError();
 			if (sourceValid != AL_TRUE || sourceError != AL_NO_ERROR) {
-				sound->alSourceVoice = 0;
+				I_RetireFailedSoundSource(sound);
 				I_InitSoundChannel(i, numOutputChannels);
 				if (sound->alSourceVoice == 0) {
 					sourceCreationFailed = true;
