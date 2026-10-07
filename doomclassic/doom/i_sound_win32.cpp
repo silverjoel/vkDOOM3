@@ -1661,7 +1661,15 @@ I_PlaySong
 void I_PlaySong(const char* songname, int looping)
 {
 	if (!Music_initialized) {
-		return;
+		// Music hardware is intentionally initialized lazily. If its first
+		// source/buffer allocation failed transiently during Classic startup,
+		// give the requested song one clean chance to recreate it.
+		if (soundHardwareInitialized && S_initialized) {
+			I_InitMusic();
+		}
+		if (!Music_initialized) {
+			return;
+		}
 	}
 
 	I_StopSong(0);
@@ -1721,6 +1729,21 @@ void I_UpdateMusic(void)
 	}
 
 	if (!waitingForMusic) {
+		// A completed non-looping OpenAL static buffer remains attached to a
+		// stopped source. Record that logical completion so a later hardware
+		// restart does not resurrect it and pause/resume cannot restart it.
+		if (!currentMusicName.IsEmpty() && !currentMusicLooping && alMusicSourceVoice) {
+			ALint sourceState = AL_INITIAL;
+			alGetError();
+			alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
+			const ALenum stateError = alGetError();
+			if (stateError == AL_NO_ERROR && sourceState == AL_STOPPED) {
+				currentMusicName.Clear();
+				currentMusicLooping = 0;
+				restoreMusicAfterHardwareRestart = false;
+				musicReady = false;
+			}
+		}
 		return;
 	}
 
@@ -1784,7 +1807,16 @@ void I_PauseSong(int handle)
 		return;
 	}
 
-	alSourcePause(alMusicSourceVoice);
+	// Only a source that is actually playing can be meaningfully paused.
+	// In particular, do not turn a naturally completed non-looping track
+	// into something that I_ResumeSong() could accidentally restart.
+	ALint sourceState = AL_INITIAL;
+	alGetError();
+	alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
+	if (alGetError() == AL_NO_ERROR && sourceState == AL_PLAYING) {
+		alSourcePause(alMusicSourceVoice);
+		alGetError();
+	}
 }
 
 /*
@@ -1804,7 +1836,16 @@ void I_ResumeSong(int handle)
 		return;
 	}
 
-	alSourcePlay(alMusicSourceVoice);
+	// OpenAL restarts a stopped static-buffer source from the beginning when
+	// alSourcePlay() is called. Resume only a source that was genuinely
+	// paused; a completed non-looping song must remain completed.
+	ALint sourceState = AL_INITIAL;
+	alGetError();
+	alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
+	if (alGetError() == AL_NO_ERROR && sourceState == AL_PAUSED) {
+		alSourcePlay(alMusicSourceVoice);
+		alGetError();
+	}
 }
 
 /*
