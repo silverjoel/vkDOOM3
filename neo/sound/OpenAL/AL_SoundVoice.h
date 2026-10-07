@@ -64,9 +64,15 @@ public:
 	
 	void		SetPitch( float p )
 	{
-		idSoundVoice_Base::SetPitch( p );
+		// OpenAL requires AL_PITCH > 0. Preserve the lower-bound behavior of
+		// the old XAudio2 backend (XAUDIO2_MIN_FREQ_RATIO = 1 / 1024) so a
+		// zero, negative, or otherwise invalid slow-motion value cannot leave
+		// AL_INVALID_VALUE sticky on the source while retaining an old pitch.
+		const float minPitch = 1.0f / 1024.0f;
+		const float openalPitch = (p > minPitch) ? p : minPitch;
 		
-		alSourcef( openalSource, AL_PITCH, p );
+		idSoundVoice_Base::SetPitch(openalPitch);
+		alSourcef(openalSource, AL_PITCH, openalPitch);
 	}
 
 	void					SetOcclusion(float f)
