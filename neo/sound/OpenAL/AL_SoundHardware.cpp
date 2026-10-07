@@ -208,6 +208,14 @@ void idSoundHardware_OpenAL::Init()
 	common->Printf( "Setup OpenAL device and context... " );
 	
 	const int requestedDeviceIndex = s_device.GetInteger();
+
+	// This Init() attempt is already consuming the currently selected device,
+	// regardless of whether opening it ultimately succeeds. Clear the modified
+	// flag now so a failed startup/re-enable does not make Update() request an
+	// immediate second full restart and bypass the normal one-second retry
+	// throttle. A later user change will mark the CVar modified again.
+	s_device.ClearModified();
+
 	const ALCchar * requestedDeviceName = NULL;
 	
 	if( requestedDeviceIndex >= 0 )
@@ -285,11 +293,6 @@ void idSoundHardware_OpenAL::Init()
 	{
 		freeVoices[i] = &voices[i];
 	}
-
-	// This context now reflects the currently selected playback device.
-	// Runtime changes are handled by Update() through the normal full sound
-	// restart path so all context-local OpenAL buffers are rebuilt safely.
-	s_device.ClearModified();
 }
 
 /*
