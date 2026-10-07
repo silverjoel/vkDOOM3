@@ -661,6 +661,17 @@ int idSoundVoice_OpenAL::RestartAt(int64 offsetSamples)
 
 		sample = loopingSample;
 	}
+
+	// A start offset can skip the lead-in and begin directly in a loop whose
+	// channel count or native rate differs. Keep the cached active-sample
+	// state synchronized so mono source-radius handling and diagnostics use
+	// the sample that is actually bound to the OpenAL source.
+	if (numChannels != sample->format.basic.numChannels || sampleRate != sample->format.basic.samplesPerSec)
+	{
+		numChannels = sample->format.basic.numChannels;
+		sampleRate = sample->format.basic.samplesPerSec;
+		ApplySourceRadius();
+	}
 	
 	// A distinct lead-in followed by a loop is best represented as a two-buffer
 	// OpenAL queue.  Start with looping disabled; Update() removes the processed
@@ -853,6 +864,14 @@ bool idSoundVoice_OpenAL::Update()
 			
 			if( (ALuint)currentBuffer == leadinSample->openalBuffer )
 			{
+
+				// Static-buffer fallback also supports a loop whose format
+				// differs from the lead-in. Update the cached sample state
+				// before binding it so source-radius behavior follows the
+				// active mono/stereo/multichannel buffer.
+				numChannels = loopingSample->format.basic.numChannels;
+				sampleRate = loopingSample->format.basic.samplesPerSec;
+				ApplySourceRadius();
 				if (SubmitBuffer(loopingSample, 0, 0) <= 0)
 				{
 					return false;
