@@ -206,7 +206,7 @@ protected:
 		int16 coef1;
 		int16 coef2;
 		
-		uint32 iDelta;
+		int32 iDelta;
 		int16 iSamp1;
 		int16 iSamp2;
 	};

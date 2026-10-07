@@ -1601,32 +1601,30 @@ int32 idSoundSample_OpenAL::MS_ADPCM_nibble( MS_ADPCM_decodeState_t* state, int8
 		768, 614, 512, 409, 307, 230, 230, 230
 	};
 	
-	int32 new_sample, delta;
+	int32 delta;
 	
-	new_sample = ( ( state->iSamp1 * state->coef1 ) +
-				   ( state->iSamp2 * state->coef2 ) ) / 256;
+	int64 newSample = (static_cast<int64>(state->iSamp1) * state->coef1 + static_cast<int64>(state->iSamp2) * state->coef2) / 256;
 				   
 	if( nybble & 0x08 )
 	{
-		new_sample += state->iDelta * ( nybble - 0x10 );
+		newSample += static_cast<int64>(state->iDelta) * (nybble - 0x10);
 	}
 	else
 	{
-		new_sample += state->iDelta * nybble;
+		newSample += static_cast<int64>(state->iDelta) * nybble;
 	}
 	
-	if( new_sample < min_audioval )
+	if (newSample < min_audioval)
 	{
-		new_sample = min_audioval;
+		newSample = min_audioval;
 	}
-	else if( new_sample > max_audioval )
+	else if (newSample > max_audioval)
 	{
-		new_sample = max_audioval;
+		newSample = max_audioval;
 	}
 	
 	const int64 adaptedDelta = (static_cast<int64>(state->iDelta) * adaptive[nybble]) / 256;
-	const int64 maxSafeDelta = INT_MAX / 768;
-	delta = static_cast<int32>((adaptedDelta > maxSafeDelta) ? maxSafeDelta : adaptedDelta);
+	delta = static_cast<int32>((adaptedDelta > INT_MAX) ? INT_MAX : adaptedDelta);
 
 	if( delta < 16 )
 	{
@@ -1635,9 +1633,9 @@ int32 idSoundSample_OpenAL::MS_ADPCM_nibble( MS_ADPCM_decodeState_t* state, int8
 	
 	state->iDelta = delta;
 	state->iSamp2 = state->iSamp1;
-	state->iSamp1 = ( int16 ) new_sample;
+	state->iSamp1 = static_cast<int16>(newSample);
 	
-	return ( new_sample );
+	return static_cast<int32>(newSample);
 }
 
 int idSoundSample_OpenAL::MS_ADPCM_decode( uint8** audio_buf, uint32* audio_len )
