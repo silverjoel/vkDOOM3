@@ -482,7 +482,7 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			return false;
 		}
 		
-		if (playBegin < 0 || playLength <= 0 || format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.blockSize == 0)
+		if (playBegin < 0 || playLength <= 0 || format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.samplesPerSec > INT_MAX || format.basic.blockSize == 0)
 		{
 			idLib::Warning("LoadGeneratedSample( %s ): invalid sample metadata", filename.c_str());
 			FreeData();
@@ -921,9 +921,9 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 
 	// These fields drive divisions, buffer sizing, and OpenAL upload. Reject
 	// malformed format headers before using them for any arithmetic.
-	if (format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.blockSize == 0)
+	if (format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.samplesPerSec > INT_MAX || format.basic.blockSize == 0)
 	{
-		idLib::Warning("LoadWav( %s ): invalid zero-valued wave format field", filename.c_str());
+		idLib::Warning("LoadWav( %s ): invalid wave format field", filename.c_str());
 		FreeData();
 		return false;
 	}
