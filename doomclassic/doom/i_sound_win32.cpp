@@ -422,6 +422,43 @@ int I_GetSfxLumpNum(sfxinfo_t* sfx)
 
 /*
 ======================
+I_RetireFailedSoundSource
+
+An OpenAL source that has produced a state/setup error is no longer trusted.
+Release it when possible and always clear the cached name so the lazy Classic
+allocator can create a fresh source for this logical channel later.
+======================
+*/
+static void I_RetireFailedSoundSource(activeSound_t * sound)
+{
+	if (sound == NULL) {
+		return;
+	}
+	
+	if (sound->alSourceVoice != 0 && soundHardwareInitialized) {
+		ALuint source = sound->alSourceVoice;
+		alGetError();
+		if (alIsSource(source) == AL_TRUE) {
+			alSourceStop(source);
+			alSourcei(source, AL_BUFFER, 0);
+			alDeleteSources(1, &source);
+		}
+		// Consume any cleanup error so it cannot poison the next allocation.
+		alGetError();
+	}
+	
+	sound->alSourceVoice = 0;
+	sound->handle = 0;
+	sound->id = 0;
+	sound->valid = 0;
+	sound->start = 0;
+	sound->player = -1;
+	sound->localSound = false;
+	sound->originator = NULL;
+	}
+
+/*
+======================
 I_StartSound2
 ======================
 */
@@ -482,17 +519,32 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 		if (sound->alSourceVoice == 0)
 			continue;
 
-		if (!sound->valid)
+		if (!sound->valid) {
+			// A logically free slot can still carry a stale source name after
+			// an earlier driver/source failure. Validate it before selecting
+			// the slot so the current start can recreate it immediately.
+			alGetError();
+			const ALboolean sourceValid = alIsSource(sound->alSourceVoice);
+			const ALenum sourceError = alGetError();
+			if (sourceValid != AL_TRUE || sourceError != AL_NO_ERROR) {
+				sound->alSourceVoice = 0;
+				I_InitSoundChannel(i, numOutputChannels);
+				if (sound->alSourceVoice == 0) {
+					sourceCreationFailed = true;
+					continue;
+				}
+			}
 			break;
+		}
 
 		ALint sourceState = AL_INITIAL;
 		alGetError();
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
 		const ALenum stateError = alGetError();
 		if (stateError != AL_NO_ERROR) {
-			// Do not reuse a source whose state cannot be queried. Leaving the
-			// channel valid prevents us from issuing additional setup calls to a
-			// source that OpenAL has already rejected.
+			// Do not let one rejected source permanently poison this logical
+			// slot. Retire it and continue looking for another usable channel.
+			I_RetireFailedSoundSource(sound);
 			continue;
 		}
 		if (sourceState == AL_STOPPED) {
@@ -566,19 +618,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	if (startError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to start SFX %d: 0x%X\n", id, startError);
 		
-		// The old sound was already stopped, so make the CPU-side slot free as
-		// well. Detach the buffer to ensure the next use performs a fresh bind.
-		alSourceStop(sound->alSourceVoice);
-		alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
-		alGetError();
-		
-		sound->handle = 0;
-		sound->id = 0;
-		sound->start = 0;
-		sound->valid = 0;
-		sound->player = -1;
-		sound->localSound = false;
-		sound->originator = NULL;
+		I_RetireFailedSoundSource(sound);
 		return 0;
 	}
 	
@@ -748,13 +788,7 @@ int I_SoundIsPlaying(int handle)
 		const ALenum stateError = alGetError();
 		if (stateError != AL_NO_ERROR) {
 			// A source whose state cannot be queried is no longer trustworthy.
-			sound->handle = 0;
-			sound->id = 0;
-			sound->valid = 0;
-			sound->start = 0;
-			sound->player = -1;
-			sound->localSound = false;
-			sound->originator = NULL;
+			I_RetireFailedSoundSource(sound);
 			continue;
 		}
 
@@ -815,13 +849,7 @@ void I_UpdateSound(void)
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
 		const ALenum stateError = alGetError();
 		if (stateError != AL_NO_ERROR) {
-			sound->handle = 0;
-			sound->id = 0;
-			sound->valid = 0;
-			sound->start = 0;
-			sound->player = -1;
-			sound->localSound = false;
-			sound->originator = NULL;
+			I_RetireFailedSoundSource(sound);
 			continue;
 		}
 
