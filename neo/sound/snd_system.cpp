@@ -266,6 +266,13 @@ void idSoundSystemLocal::Render() {
 	if (s_noSound.IsModified()) 
 	{
 		s_noSound.ClearModified();
+
+		// This full lifecycle restart supersedes any request that was already
+		// pending before the s_noSound transition. Clear it before Restart()
+		// rather than after, so a new recovery request raised during hardware
+		// shutdown/reinitialization is preserved and can still be serviced.
+		needsRestart = false;
+
 		Restart();
 	}
 
