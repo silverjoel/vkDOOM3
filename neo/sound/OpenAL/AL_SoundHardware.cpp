@@ -387,30 +387,54 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 		// preserve the requested loop instead of silently dropping it.
 	}
 	
-	// Try to find a free voice that matches the format
-	// But fallback to the last free voice if none match the format
-	idSoundVoice* voice = NULL;
+	// Prefer a free voice that already owns an OpenAL source. Some OpenAL
+	// devices expose fewer sources than MAX_HARDWARE_VOICES; if an unused
+	// voice at the front of freeVoices hits that source limit, returning
+	// immediately would hide reusable source objects later in the list and
+	// could starve all subsequent allocations.
+	idSoundVoice_OpenAL * unusedVoice = NULL;
 	for( int i = 0; i < freeVoices.Num(); i++ )
 	{
-		if( freeVoices[i]->IsPlaying() )
+		idSoundVoice_OpenAL* candidate = freeVoices[i];
+		if (candidate->IsPlaying())
 		{
 			continue;
 		}
-		voice = ( idSoundVoice* )freeVoices[i];
-		if( voice->CompatibleFormat( ( idSoundSample_OpenAL* )leadinSample ) )
+		if (!candidate->CompatibleFormat((idSoundSample_OpenAL*)leadinSample))
 		{
-			break;
+			continue;
 		}
+
+		if (candidate->openalSource == 0)
+		{
+			if (unusedVoice == NULL)
+			{
+				unusedVoice = candidate;
+			}
+			continue;
+		}
+		
+		if (!candidate->Create(leadinSample, loopingSample))
+		{
+			idLib::Warning("OpenAL failed to reuse voice for %s", leadinSample->GetName());
+			continue;
+		}
+		
+		freeVoices.Remove(candidate);
+		return (idSoundVoice*)candidate;
 	}
-	if( voice != NULL )
+	// No reusable source was available. Try to instantiate one unused voice.
+	// If source creation fails here, trying every other unused slot would hit
+	// the same device source limit and only generate repeated AL errors.
+	if (unusedVoice != NULL)
 	{
-		if (!voice->Create(leadinSample, loopingSample))
+		if (!unusedVoice->Create(leadinSample, loopingSample))
 		{
 			idLib::Warning("OpenAL failed to create voice for %s", leadinSample->GetName());
 			return NULL;
 		}
-		freeVoices.Remove( voice );
-		return voice;
+		freeVoices.Remove(unusedVoice);
+		return (idSoundVoice*)unusedVoice;
 	}
 	
 	return NULL;
