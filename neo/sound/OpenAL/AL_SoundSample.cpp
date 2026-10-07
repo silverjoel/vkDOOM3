@@ -751,11 +751,6 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 			buffer = buffers[0].buffer;
 			bufferSize = buffers[0].bufferSize;
 		}
-		else if( format.basic.formatTag == idWaveFile::FORMAT_XMA2 )
-		{
-			// RB: not used in the PC version of the BFG edition
-			common->Error( "idSoundSample_OpenAL::CreateOpenALBuffer: could not decode XMA2 '%s' to 16 bit format", GetName() );
-		}
 		else if( format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE )
 		{
 			// Extensible PCM has already been validated by the loader. Its
@@ -1018,81 +1013,6 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		}
 		
 		buffers[0].buffer = GPU_CONVERT_CPU_TO_CPU_CACHED_READONLY_ADDRESS( buffers[0].buffer );
-		
-	}
-	else if( format.basic.formatTag == idWaveFile::FORMAT_XMA2 )
-	{
-	
-		if( format.extra.xma2.blockCount == 0 )
-		{
-			idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), "No data blocks in file" );
-			FreeData();
-			return false;
-		}
-		
-		int bytesPerBlock = format.extra.xma2.bytesPerBlock;
-		assert( format.extra.xma2.blockCount == ALIGN( totalBufferSize, bytesPerBlock ) / bytesPerBlock );
-		assert( format.extra.xma2.blockCount * bytesPerBlock >= totalBufferSize );
-		assert( format.extra.xma2.blockCount * bytesPerBlock < totalBufferSize + bytesPerBlock );
-		
-		buffers.SetNum( format.extra.xma2.blockCount );
-		for( int i = 0; i < buffers.Num(); i++ )
-		{
-			if( i == buffers.Num() - 1 )
-			{
-				buffers[i].bufferSize = totalBufferSize - ( i * bytesPerBlock );
-			}
-			else
-			{
-				buffers[i].bufferSize = bytesPerBlock;
-			}
-			
-			buffers[i].buffer = AllocBuffer( buffers[i].bufferSize, GetName() );
-			wave.Read( buffers[i].buffer, buffers[i].bufferSize );
-			buffers[i].buffer = GPU_CONVERT_CPU_TO_CPU_CACHED_READONLY_ADDRESS( buffers[i].buffer );
-		}
-		
-		int seekTableSize = wave.SeekToChunk( 'seek' );
-		if( seekTableSize != 4 * buffers.Num() )
-		{
-			idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), "Wrong number of entries in seek table" );
-			FreeData();
-			return false;
-		}
-		
-		for( int i = 0; i < buffers.Num(); i++ )
-		{
-			wave.Read( &buffers[i].numSamples, sizeof( buffers[i].numSamples ) );
-			idSwap::Big( buffers[i].numSamples );
-		}
-		
-		playBegin = format.extra.xma2.loopBegin;
-		playLength = format.extra.xma2.loopLength;
-		
-		if( buffers[buffers.Num() - 1].numSamples < playBegin + playLength )
-		{
-			// This shouldn't happen, but it's not fatal if it does
-			playLength = buffers[buffers.Num() - 1].numSamples - playBegin;
-		}
-		else
-		{
-			// Discard samples beyond playLength
-			for( int i = 0; i < buffers.Num(); i++ )
-			{
-				if( buffers[i].numSamples > playBegin + playLength )
-				{
-					buffers[i].numSamples = playBegin + playLength;
-					// Ideally, the following loop should always have 0 iterations because playBegin + playLength ends in the last block already
-					// But there is no guarantee for that, so to be safe, discard all buffers beyond this one
-					for( int j = i + 1; j < buffers.Num(); j++ )
-					{
-						FreeBuffer( buffers[j].buffer );
-					}
-					buffers.SetNum( i + 1 );
-					break;
-				}
-			}
-		}
 		
 	}
 	else
