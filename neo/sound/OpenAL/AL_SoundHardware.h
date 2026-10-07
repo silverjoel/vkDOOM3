@@ -92,7 +92,7 @@ private:
 	ALCcontext*			openalContext;
 	bool				disconnectExtensionAvailable;
 	
-	int					lastResetTime;
+	uint					lastResetTime;
 	
 	//int				outputChannels;
 	//int				channelMask;

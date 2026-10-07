@@ -230,7 +230,7 @@ void idSoundHardware_OpenAL::Init()
 	if( openalDevice == NULL )
 	{
 		idLib::Warning("idSoundHardware_OpenAL::Init: alcOpenDevice() failed; sound will remain unavailable until a device can be opened");
-		lastResetTime = Sys_Milliseconds();
+		lastResetTime = static_cast<uint32>(Sys_Milliseconds());
 		disconnectExtensionAvailable = false;
 		return;
 	}
@@ -244,7 +244,7 @@ void idSoundHardware_OpenAL::Init()
 		alcCloseDevice( openalDevice );
 		openalDevice = NULL;
 		idLib::Warning("idSoundHardware_OpenAL::Init: alcCreateContext() failed; sound will retry later");
-		lastResetTime = Sys_Milliseconds();
+		lastResetTime = static_cast<uint32>(Sys_Milliseconds());
 		disconnectExtensionAvailable = false;
 		return;
 	}
@@ -256,7 +256,7 @@ void idSoundHardware_OpenAL::Init()
 		alcCloseDevice( openalDevice );
 		openalDevice = NULL;
 		idLib::Warning("idSoundHardware_OpenAL::Init: alcMakeContextCurrent() failed; sound will retry later");
-		lastResetTime = Sys_Milliseconds();
+		lastResetTime = static_cast<uint32>(Sys_Milliseconds());
 		disconnectExtensionAvailable = false;
 		return;
 	}
@@ -519,8 +519,8 @@ void idSoundHardware_OpenAL::Update()
 	// becomes available.
 	if (openalDevice == NULL || openalContext == NULL)
 	{
-		const int nowTime = Sys_Milliseconds();
-		if (lastResetTime + 1000 < nowTime)
+		const uint32 nowTime = static_cast<uint32>(Sys_Milliseconds());
+		if (nowTime - lastResetTime > 1000u)
 		{
 			lastResetTime = nowTime;
 			idLib::Warning("OpenAL device/context unavailable; requesting sound restart");
@@ -534,8 +534,8 @@ void idSoundHardware_OpenAL::Update()
 	// Recover through the same bounded full-restart path.
 	if (alcGetCurrentContext() != openalContext)
 	{
-		const int nowTime = Sys_Milliseconds();
-		if (lastResetTime + 1000 < nowTime)
+		const uint32 nowTime = static_cast<uint32>(Sys_Milliseconds());
+		if (nowTime - lastResetTime > 1000u)
 		{
 			lastResetTime = nowTime;
 			idLib::Warning("OpenAL context is no longer current; requesting sound restart");
@@ -556,8 +556,8 @@ void idSoundHardware_OpenAL::Update()
 		
 		if (connectionError == ALC_NO_ERROR && connected == ALC_FALSE)
 		{
-			const int nowTime = Sys_Milliseconds();
-			if (lastResetTime + 1000 < nowTime)
+			const uint32 nowTime = static_cast<uint32>(Sys_Milliseconds());
+			if (nowTime - lastResetTime > 1000u)
 			{
 				lastResetTime = nowTime;
 				idLib::Warning("OpenAL playback device disconnected; requesting sound restart");
@@ -586,8 +586,8 @@ void idSoundHardware_OpenAL::Update()
 		// Treat a failed core listener operation like the other device/context
 		// failure paths above. A persistently broken replacement context must
 		// not turn into a full sound restart every rendered frame.
-		const int nowTime = Sys_Milliseconds();
-		if (lastResetTime + 1000 < nowTime)
+		const uint32 nowTime = static_cast<uint32>(Sys_Milliseconds());
+		if (nowTime - lastResetTime > 1000u)
 		{
 			lastResetTime = nowTime;
 			idLib::Warning("OpenAL listener update failed; requesting sound restart");
