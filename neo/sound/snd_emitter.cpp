@@ -348,9 +348,24 @@ void idSoundChannel::UpdateHardware( float volumeAdd, int currentTime ) {
 	}
 
 	if ( issueStart ) {
-		hardwareVoice->Start( startOffset, parms.soundShaderFlags | ( parms.shakes == 0.0f ? SSF_NO_FLICKER : 0 ) );
+		if (!hardwareVoice->Start(startOffset, parms.soundShaderFlags | (parms.shakes == 0.0f ? SSF_NO_FLICKER : 0))) 
+		{
+			// OpenAL preparation/start failures must not leave a logically
+			// active channel owning a dead hardware voice. Return it to the
+			// pool immediately; a looping/long-lived channel can retry with
+			// a freshly recreated source on a later update.
+			soundSystemLocal.FreeVoice(hardwareVoice);
+			hardwareVoice = NULL;
+		}
 	} else {
-		hardwareVoice->Update();
+		if (!hardwareVoice->Update()) 
+		{
+			// Source state/queue errors make this voice unusable for the
+			// current channel. Free it rather than allowing a looping channel
+			// to pin a silent voice indefinitely.
+			soundSystemLocal.FreeVoice(hardwareVoice);
+			hardwareVoice = NULL;
+		}
 	}
 }
 

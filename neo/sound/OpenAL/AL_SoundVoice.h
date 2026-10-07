@@ -89,8 +89,9 @@ public:
 	
 	bool					Create(const idSoundSample* leadinSample, const idSoundSample* loopingSample);
 	
-	// Start playing at a particular point in the buffer.  Does an Update() too
-	void					Start( int offsetMS, int ssFlags );
+	// Start playing at a particular point in the buffer. Returns false if the
+	// source could not be prepared or started.
+	bool					Start(int offsetMS, int ssFlags);
 	
 	// Stop playing.
 	void					Stop();

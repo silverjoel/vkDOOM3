@@ -572,7 +572,7 @@ void idSoundVoice_OpenAL::ApplySourceRadius()
 idSoundVoice_OpenAL::Start
 ========================
 */
-void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
+bool idSoundVoice_OpenAL::Start(int offsetMS, int ssFlags)
 {
 	if( s_debugHardware.GetBool() )
 	{
@@ -581,12 +581,12 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 	
 	if( !leadinSample )
 	{
-		return;
+		return false;
 	}
 	
 	if( !alIsSource( openalSource ) )
 	{
-		return;
+		return false;
 	}
 	
 	if( leadinSample->IsDefault() )
@@ -601,16 +601,18 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 	const int64 offsetSamples = (static_cast<int64>(safeOffsetMS) * static_cast<int64>(leadinSample->SampleRate())) / 1000;
 	if( loopingSample == NULL && offsetSamples >= leadinSample->playLength )
 	{
-		return;
+		return false;
 	}
 
 	if( RestartAt( offsetSamples ) <= 0 )
 	{
-		return;
+		return false;
 	}
 
 	Update();
 	UnPause();
+
+	return IsPlaying();
 }
 
 /*
