@@ -473,6 +473,17 @@ void idSoundHardware_OpenAL::Update()
 		return;
 	}
 
+	// All source/buffer names owned by this backend belong to openalContext.
+	// If that context is no longer current, issuing AL calls would either hit
+	// no context or an unrelated one. Recover through the normal sound-system
+	// restart so voices are muted and all context-local objects are rebuilt.
+	if (openalContext == NULL || alcGetCurrentContext() != openalContext)
+	{
+		idLib::Warning( "OpenAL context is no longer current; requesting sound restart");
+		soundSystemLocal.SetNeedsRestart();
+		return;
+	}
+
 	if( openalDevice == NULL )
 	{
 		int nowTime = Sys_Milliseconds();
@@ -511,6 +522,11 @@ void idSoundHardware_OpenAL::Update()
 			return;
 		}
 	}
+
+	// Isolate the listener update from sticky AL errors left by unrelated
+	// operations. AL_GAIN is valid for every OpenAL listener, so an error here
+	// indicates that the context/device is no longer usable enough to trust.
+	CheckALErrors();
 	
 	if( soundSystem->IsMuted() )
 	{
@@ -519,6 +535,13 @@ void idSoundHardware_OpenAL::Update()
 	else
 	{
 		alListenerf( AL_GAIN, DBtoLinear( s_volume_dB.GetFloat() ) );
+	}
+
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		idLib::Warning( "OpenAL listener update failed; requesting sound restart");
+		soundSystemLocal.SetNeedsRestart();
+		return;
 	}
 }
 
