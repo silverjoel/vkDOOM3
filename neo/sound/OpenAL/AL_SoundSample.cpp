@@ -1104,8 +1104,18 @@ bool idSoundSample_OpenAL::LoadAmplitude( const idStr& name )
 	{
 		return false;
 	}
-	amplitude.SetNum( f->Length() );
-	f->Read( amplitude.Ptr(), amplitude.Num() );
+	const int64 amplitudeBytes = f->Length();
+	if (amplitudeBytes <= 0 || amplitudeBytes > INT_MAX)
+	{
+		return false;
+	}
+	
+	amplitude.SetNum((int)amplitudeBytes);
+	if (f->Read(amplitude.Ptr(), amplitude.Num()) != amplitude.Num())
+	{
+		amplitude.Clear();
+		return false;
+	}
 	return true;
 }
 
