@@ -455,7 +455,6 @@ static void I_RetireFailedSoundSource(activeSound_t * sound)
 	sound->player = -1;
 	sound->localSound = false;
 	sound->originator = NULL;
-	}
 }
 
 /*
