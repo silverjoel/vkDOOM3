@@ -125,9 +125,14 @@ soundEvent_t soundEvents[128];
 extern int PLAYERCOUNT;
 
 // Source voice settings for all sound effects
-const ALfloat		SFX_MAX_DISTANCE = 1200.f;
-const ALfloat		SFX_REFERENCE_DISTANCE = 100.f;
-const ALfloat		SFX_ROLLOFF_FACTOR = 0.2f;
+//
+// The original X3DAudio emitter used pVolumeCurve == NULL with
+// CurveDistanceScaler == 1200.  That produces full gain through 1200 world
+// units and then an inverse 1200 / distance falloff.  OpenAL's default
+// AL_INVERSE_DISTANCE_CLAMPED model reproduces that curve with reference
+// distance 1200, rolloff 1, and the source's default FLT_MAX max distance.
+const ALfloat		SFX_REFERENCE_DISTANCE = 1200.f;
+const ALfloat		SFX_ROLLOFF_FACTOR = 1.0f;
 
 // Real volumes
 const float		GLOBAL_VOLUME_MULTIPLIER = 0.5f;
@@ -1175,7 +1180,6 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	// it coordinates transformed into that player's frame instead.
 	alSourcei(soundchannel->alSourceVoice, AL_SOURCE_RELATIVE, AL_TRUE);
 	alSourcei(soundchannel->alSourceVoice, AL_LOOPING, AL_FALSE);
-	alSourcef(soundchannel->alSourceVoice, AL_MAX_DISTANCE, SFX_MAX_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_REFERENCE_DISTANCE, SFX_REFERENCE_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_ROLLOFF_FACTOR, SFX_ROLLOFF_FACTOR);
 
