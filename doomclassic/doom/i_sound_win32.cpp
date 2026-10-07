@@ -81,6 +81,10 @@ int		totalBufferSize;
 bool		waitingForMusic;
 bool		musicReady;
 
+static idStr	currentMusicName;
+static int	currentMusicLooping = 0;
+static bool	restoreMusicAfterHardwareRestart = false;
+
 typedef struct {
 	float x;
 	float y;
@@ -1070,6 +1074,12 @@ void I_InvalidateSoundHardware()
 {
 	soundHardwareInitialized = false;
 
+	// The context is unavailable, so its source state cannot be queried.
+	// Preserve a selected track for the next successful hardware init.
+	if (!currentMusicName.IsEmpty()) {
+		restoreMusicAfterHardwareRestart = true;
+	}
+
 	for (int i = 0; i < NUM_SOUNDBUFFERS; ++i) {
 		activeSound_t* sound = &activeSounds[i];
 		sound->alSourceVoice = 0;
@@ -1315,6 +1325,16 @@ void I_InitMusic(void)
 	}
 	
 	Music_initialized = true;
+
+	// A hardware-only restart destroys the OpenAL music objects while the
+	// Classic Doom game still considers its current track selected. Requeue
+	// that track into the newly created context when shutdown marked it active.
+	if (restoreMusicAfterHardwareRestart && !currentMusicName.IsEmpty()) {
+		const idStr restartSongName = currentMusicName;
+		const int restartLooping = currentMusicLooping;
+		restoreMusicAfterHardwareRestart = false;
+		I_PlaySong(restartSongName.c_str(), restartLooping);
+	}
 }
 
 /*
@@ -1325,9 +1345,30 @@ I_ShutdownMusic
 void I_ShutdownMusic(void)
 {
 	if (Music_initialized) {
+		// Preserve only music that was actually pending, playing, or paused.
+		// A naturally completed non-looping track should not be restarted.
+		restoreMusicAfterHardwareRestart = waitingForMusic && !currentMusicName.IsEmpty();
+
 		if (alMusicSourceVoice) {
-			I_StopSong(0);
+			if (!currentMusicName.IsEmpty() && !restoreMusicAfterHardwareRestart) {
+				ALint sourceState = AL_STOPPED;
+				alGetError();
+				alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
+				const ALenum stateError = alGetError();
+				
+				if (stateError != AL_NO_ERROR ||
+					sourceState == AL_PLAYING ||
+					sourceState == AL_PAUSED) {
+					restoreMusicAfterHardwareRestart = true;
+				}
+			}
+			
+			// Stop directly here rather than through I_StopSong(); I_StopSong()
+			// intentionally clears the retained logical-track state.
+			alGetError();
+			alSourceStop(alMusicSourceVoice);
 			alSourcei(alMusicSourceVoice, AL_BUFFER, 0);
+			alGetError();
 			alDeleteSources(1, &alMusicSourceVoice);
 			alMusicSourceVoice = 0;
 		}
@@ -1504,6 +1545,11 @@ void I_PlaySong(const char* songname, int looping)
 	I_LoadSong(songname);
 	waitingForMusic = musicReady;
 
+	if (musicReady) {
+		currentMusicName = songname;
+		currentMusicLooping = looping;
+	}
+
 	if (DoomLib::GetPlayer() >= 0) {
 		::g->mus_looping = looping;
 	}
@@ -1626,14 +1672,20 @@ I_StopSong
 */
 void I_StopSong(int handle)
 {
-	if (!Music_initialized) {
-		return;
-	}
+	// This is a logical stop, not a hardware-only teardown. Do not allow the
+	// stopped track to be resurrected by a later sound-system restart.
+	currentMusicName.Clear();
+	currentMusicLooping = 0;
+	restoreMusicAfterHardwareRestart = false;
 	
 	// Cancel a decoded-but-not-yet-uploaded song as well as an already playing
 	// source. Otherwise a later I_UpdateMusic() could start music after Stop.
 	waitingForMusic = false;
 	musicReady = false;
+
+	if (!Music_initialized) {
+		return;
+	}
 	
 	if (!alMusicSourceVoice) {
 		return;
