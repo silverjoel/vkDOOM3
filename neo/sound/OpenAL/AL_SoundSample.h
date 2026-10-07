@@ -178,7 +178,7 @@ protected:
 	bool			LoadAmplitude( const idStr& name );
 	void			WriteAllSamples( const idStr& sampleName );
 	bool			LoadGeneratedSample( const idStr& name );
-	void			WriteGeneratedSample( idFile* fileOut );
+	bool			WriteGeneratedSample(idFile* fileOut);
 	
 	struct MS_ADPCM_decodeState_t
 	{

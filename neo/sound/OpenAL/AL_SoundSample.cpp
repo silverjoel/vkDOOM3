@@ -274,25 +274,56 @@ idSoundSample_OpenAL::~idSoundSample_OpenAL()
 idSoundSample_OpenAL::WriteGeneratedSample
 ========================
 */
-void idSoundSample_OpenAL::WriteGeneratedSample( idFile* fileOut )
+bool idSoundSample_OpenAL::WriteGeneratedSample(idFile* fileOut)
 {
-	fileOut->WriteBig( SOUND_MAGIC_IDMSA );
-	fileOut->WriteBig( timestamp );
-	fileOut->WriteBig( loaded );
-	fileOut->WriteBig( playBegin );
-	fileOut->WriteBig( playLength );
-	idWaveFile::WriteWaveFormatDirect( format, fileOut );
-	fileOut->WriteBig( ( int )amplitude.Num() );
-	fileOut->Write( amplitude.Ptr(), amplitude.Num() );
-	fileOut->WriteBig( totalBufferSize );
-	fileOut->WriteBig( ( int )buffers.Num() );
-	for( int i = 0; i < buffers.Num(); i++ )
+	if (fileOut == NULL)
 	{
-		fileOut->WriteBig( buffers[ i ].numSamples );
-		fileOut->WriteBig( buffers[ i ].bufferSize );
-		fileOut->Write( buffers[ i ].buffer, buffers[ i ].bufferSize );
-	};
+		return false;
+	}
+
+	if (fileOut->WriteBig(SOUND_MAGIC_IDMSA) != sizeof(SOUND_MAGIC_IDMSA) ||
+		fileOut->WriteBig(timestamp) != sizeof(timestamp) ||
+		fileOut->WriteBig(loaded) != sizeof(loaded) ||
+		fileOut->WriteBig(playBegin) != sizeof(playBegin) ||
+		fileOut->WriteBig(playLength) != sizeof(playLength))
+	{
+		return false;
+	}
+	
+	if (!idWaveFile::WriteWaveFormatDirect(format, fileOut))
+	{
+		return false;
+	}
+	
+	const int amplitudeSize = amplitude.Num();
+	if (fileOut->WriteBig(amplitudeSize) != sizeof(amplitudeSize) ||
+		(amplitudeSize > 0 && fileOut->Write(amplitude.Ptr(), amplitudeSize) != amplitudeSize) ||
+		fileOut->WriteBig(totalBufferSize) != sizeof(totalBufferSize))
+	{
+		return false;
+	}
+	
+	const int numBuffers = buffers.Num();
+	if (fileOut->WriteBig(numBuffers) != sizeof(numBuffers))
+	{
+		return false;
+	}
+	
+	for (int i = 0; i < numBuffers; i++)
+	{
+		if (fileOut->WriteBig(buffers[i].numSamples) != sizeof(buffers[i].numSamples) ||
+			fileOut->WriteBig(buffers[i].bufferSize) != sizeof(buffers[i].bufferSize) ||
+			buffers[i].bufferSize <= 0 ||
+			buffers[i].buffer == NULL ||
+			fileOut->Write(buffers[i].buffer, buffers[i].bufferSize) != buffers[i].bufferSize)
+		{
+			return false;
+		}
+	}
+	
+	return true;
 }
+
 /*
 ========================
 idSoundSample_OpenAL::WriteAllSamples
@@ -320,8 +351,15 @@ void idSoundSample_OpenAL::WriteAllSamples( const idStr& sampleName )
 				delete samplePC;
 				return;
 			}
-			samplePC->WriteGeneratedSample( fileOut );
+			const bool writeSucceeded = samplePC->WriteGeneratedSample(fileOut);
 			delete fileOut;
+
+			if (!writeSucceeded)
+			{
+				idLib::Warning(
+					"idSoundSample_OpenAL::WriteAllSamples: short write while generating '%s'",
+					outName.c_str());
+			}
 		}
 	}
 	delete samplePC;

@@ -463,6 +463,9 @@ Writes a wave format header to a file ptr,
 ========================
 */
 bool idWaveFile::WriteWaveFormatDirect( waveFmt_t & format, idFile *file ) {
+	if (file == NULL) {
+		return false;
+	}
 	//idSwapClass<waveFmt_t::basic_t> swap;
 	//swap.Little( format.basic.formatTag );
 	//swap.Little( format.basic.numChannels );
@@ -470,21 +473,29 @@ bool idWaveFile::WriteWaveFormatDirect( waveFmt_t & format, idFile *file ) {
 	//swap.Little( format.basic.avgBytesPerSec );
 	//swap.Little( format.basic.blockSize );
 	//swap.Little( format.basic.bitsPerSample );
-	file->Write( &format.basic, sizeof( format.basic ) );
+	if (file->Write(&format.basic, sizeof(format.basic)) != sizeof(format.basic)) {
+		return false;
+	}
 	if ( format.basic.formatTag == FORMAT_PCM ) {
 		//file->Write( &format.basic, sizeof( format.basic ) );	
 	} else if ( format.basic.formatTag == FORMAT_ADPCM ) {
 		//file->Write( &format.basic, sizeof( format.basic ) );
-		file->Write( &format.extraSize, sizeof( format.extraSize ) );
-		file->Write( &format.extra.adpcm, sizeof( format.extra.adpcm ) );
+		if (file->Write(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize) ||
+			file->Write(&format.extra.adpcm, sizeof(format.extra.adpcm)) != sizeof(format.extra.adpcm)) {
+			return false;
+		}
 	} else if ( format.basic.formatTag == FORMAT_XMA2 ) {
 		//file->Write( &format.basic, sizeof( format.basic ) );
-		file->Write( &format.extraSize, sizeof( format.extraSize ) );
-		file->Write( &format.extra.xma2, sizeof( format.extra.xma2 ) );
+		if (file->Write(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize) ||
+			file->Write(&format.extra.xma2, sizeof(format.extra.xma2)) != sizeof(format.extra.xma2)) {
+			return false;
+		}
 	} else if ( format.basic.formatTag == FORMAT_EXTENSIBLE ) {
 		//file->Write( &format.basic, sizeof( format.basic ) );
-		file->Write( &format.extraSize, sizeof( format.extraSize ) );
-		file->Write( &format.extra.extensible, sizeof( format.extra.extensible ) );
+		if (file->Write(&format.extraSize, sizeof(format.extraSize)) != sizeof(format.extraSize) ||
+			file->Write(&format.extra.extensible, sizeof(format.extra.extensible)) != sizeof(format.extra.extensible)) {
+			return false;
+		}
 	} else {
 		return false;
 	}
