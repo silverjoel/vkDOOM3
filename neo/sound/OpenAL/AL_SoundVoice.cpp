@@ -620,10 +620,10 @@ int idSoundVoice_OpenAL::RestartAt(int64 offsetSamples)
 		alSourcei( openalSource, AL_LOOPING, AL_FALSE );
 		alSourceQueueBuffers( openalSource, 2, queuedBuffers );
 	
-		// For a queued source AL_SAMPLE_OFFSET is relative to the beginning
-		// of the complete queue, so an offset inside the lead-in can be
-		// applied directly here.
-		const int64 queueOffset64 = static_cast<int64>(leadinSample->playBegin) + offsetSamples;
+		// The OpenAL buffer contains only the playable range, beginning at
+		// leadinSample->playBegin in the CPU-side asset.  Source offsets are
+		// therefore relative to the logical start of the lead-in.
+		const int64 queueOffset64 = offsetSamples;
 		if (queueOffset64 > INT_MAX)
 		{
 			FlushSourceBuffers();
@@ -644,24 +644,15 @@ int idSoundVoice_OpenAL::RestartAt(int64 offsetSamples)
 		return Max( 1, leadinSample->totalBufferSize );
 	}
 
-	int64 previousNumSamples = 0;
-	const int64 sampleOffset = static_cast<int64>(sample->playBegin) + offsetSamples;
-
-	for( int i = 0; i < sample->buffers.Num(); i++ )
+	// PCM/MS-ADPCM samples are represented by one OpenAL hardware buffer,
+	// trimmed during upload to [playBegin, playBegin + playLength).  Keep
+	// AL_SAMPLE_OFFSET relative to that logical range.
+	if (offsetSamples >= sample->playLength || offsetSamples > INT_MAX)
 	{
-		if (static_cast<int64>(sample->buffers[i].numSamples) > sampleOffset)
-		{
-			const int64 bufferOffset = sampleOffset - previousNumSamples;
-			if (bufferOffset < 0 || bufferOffset > INT_MAX)
-			{
-				return 0;
-			}
-			return SubmitBuffer(sample, i, static_cast<int>(bufferOffset));
-		}
-		previousNumSamples = sample->buffers[i].numSamples;
+		return 0;
 	}
 	
-	return 0;
+	return SubmitBuffer(sample, 0, static_cast<int>(offsetSamples));
 }
 
 /*
@@ -794,7 +785,7 @@ bool idSoundVoice_OpenAL::Update()
 			
 			if( (ALuint)currentBuffer == leadinSample->openalBuffer )
 			{
-				if( SubmitBuffer( loopingSample, 0, loopingSample->playBegin ) <= 0 )
+				if (SubmitBuffer(loopingSample, 0, 0) <= 0)
 				{
 					return false;
 				}
@@ -1030,9 +1021,7 @@ float idSoundVoice_OpenAL::GetAmplitude()
 		}
 		else if( leadinSample->buffers.Num() > 0 )
 		{
-			const int leadinBufferSamples =
-			leadinSample->buffers[leadinSample->buffers.Num() - 1].numSamples;
-			
+			const int leadinBufferSamples = leadinSample->playLength;
 			if( currentSampleOffset >= leadinBufferSamples )
 			{
 				currentSampleOffset -= leadinBufferSamples;
@@ -1058,8 +1047,8 @@ float idSoundVoice_OpenAL::GetAmplitude()
 		return 1.0f;
 	}
 	
-	const int relativeSample =
-	Max( 0, currentSampleOffset - currentSample->playBegin );
+	// Hardware offsets are already relative to the trimmed playable range.
+	const int relativeSample = Max(0, currentSampleOffset);
 	const int64 timeMS64 = (static_cast<int64>(relativeSample) * 1000) / static_cast<int64>(currentSample->SampleRate());
 	const int timeMS = timeMS64 > INT_MAX ? INT_MAX : static_cast<int>(timeMS64);
 	
