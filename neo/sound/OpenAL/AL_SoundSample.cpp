@@ -1624,13 +1624,16 @@ int32 idSoundSample_OpenAL::MS_ADPCM_nibble( MS_ADPCM_decodeState_t* state, int8
 		new_sample = max_audioval;
 	}
 	
-	delta = ( ( int32 ) state->iDelta * adaptive[nybble] ) / 256;
+	const int64 adaptedDelta = (static_cast<int64>(state->iDelta) * adaptive[nybble]) / 256;
+	const int64 maxSafeDelta = INT_MAX / 768;
+	delta = static_cast<int32>((adaptedDelta > maxSafeDelta) ? maxSafeDelta : adaptedDelta);
+
 	if( delta < 16 )
 	{
 		delta = 16;
 	}
 	
-	state->iDelta = ( uint16 ) delta;
+	state->iDelta = delta;
 	state->iSamp2 = state->iSamp1;
 	state->iSamp1 = ( int16 ) new_sample;
 	
