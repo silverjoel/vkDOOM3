@@ -609,7 +609,12 @@ bool idSoundVoice_OpenAL::Start(int offsetMS, int ssFlags)
 		return false;
 	}
 
-	Update();
+	// Validate the freshly prepared source/queue before starting playback.
+	// Do not let a state/queue error be masked by a later alSourcePlay().
+	if (!Update())
+	{
+		return false;
+	}
 	UnPause();
 
 	return IsPlaying();
