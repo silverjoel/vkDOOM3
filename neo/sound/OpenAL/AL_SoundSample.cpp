@@ -370,6 +370,17 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			return false;
 		}
 
+		// The OpenAL backend has no XMA2 decoder or upload format. Reject an
+		// XMA2 cache here so LoadResource() can continue to its MS ADPCM/PCM
+		// fallback instead of treating an unplayable sample as successfully
+		// loaded.
+		if (format.basic.formatTag == idWaveFile::FORMAT_XMA2)
+		{
+			idLib::Warning("LoadGeneratedSample( %s ): XMA2 is unsupported by the OpenAL backend", filename.c_str());
+			FreeData();
+			return false;
+		}
+
 		// New generated multichannel samples retain their extensible channel
 		// mask. Older generated PCM samples have no mask to validate, so keep
 		// accepting them for backward compatibility.
@@ -826,6 +837,19 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	{
 		idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), formatError );
 		MakeDefault();
+		return false;
+	}
+
+	// XMA2 was supported by the old platform-specific backends, but this
+	// OpenAL backend has neither an XMA2 decoder nor an OpenAL XMA2 buffer
+	// format. Fail this candidate cleanly so LoadResource() can try its
+	// existing fallback asset rather than leaving a loaded sample with no
+	// hardware buffer.
+	if (format.basic.formatTag == idWaveFile::FORMAT_XMA2)
+	{
+		idLib::Warning("LoadWav( %s ): XMA2 is unsupported by the OpenAL backend", filename.c_str());
+		wave.Close();
+		FreeData();
 		return false;
 	}
 
