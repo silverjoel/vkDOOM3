@@ -341,13 +341,16 @@ void idSoundSample_OpenAL::WriteAllSamples( const idStr& sampleName )
 		idStrStatic< MAX_OSPATH > outName = "generated/";
 		outName.Append( sampleName );
 		outName.Append( ".idwav" );
+
+		idStrStatic< MAX_OSPATH > tempName = outName;
+		tempName.Append(".tmp");
 		
 		if( samplePC->LoadWav( inName ) || samplePC->LoadWav( inName2 ) )
 		{
-			idFile* fileOut = fileSystem->OpenFileWrite( outName, "fs_basepath" );
+			idFile* fileOut = fileSystem->OpenFileWrite(tempName, "fs_basepath");
 			if (fileOut == NULL)
 			{
-				idLib::Warning( "idSoundSample_OpenAL::WriteAllSamples: could not open '%s' for writing", outName.c_str());
+				idLib::Warning( "idSoundSample_OpenAL::WriteAllSamples: could not open temporary cache '%s' for writing", tempName.c_str());
 				delete samplePC;
 				return;
 			}
@@ -359,6 +362,12 @@ void idSoundSample_OpenAL::WriteAllSamples( const idStr& sampleName )
 				idLib::Warning(
 					"idSoundSample_OpenAL::WriteAllSamples: short write while generating '%s'",
 					outName.c_str());
+				fileSystem->RemoveFile(tempName);
+			}
+			else if (!fileSystem->RenameFile(tempName, outName, "fs_basepath"))
+			{
+				idLib::Warning( "idSoundSample_OpenAL::WriteAllSamples: could not replace '%s' with completed temporary cache", outName.c_str());
+				fileSystem->RemoveFile(tempName);
 			}
 		}
 	}
