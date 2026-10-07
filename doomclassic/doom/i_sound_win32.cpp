@@ -991,6 +991,7 @@ void I_ShutdownSound(void)
 
 	if (S_initialized) 
 	{
+		bool hardwareCleanupFailed = false;
 		// Stop and detach every source. I_StopSound() filters by player, which
 		// can leave split-screen sounds active, and a stopped OpenAL source still
 		// keeps its buffer attached. The buffers are reused by I_InitSound(), so
@@ -1002,10 +1003,17 @@ void I_ShutdownSound(void)
 
 			if (soundHardwareInitialized && sound->alSourceVoice)
 			{
+				alGetError();
 				alSourceStop(sound->alSourceVoice);
 				alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
 				alDeleteSources(1, &sound->alSourceVoice);
 				sound->alSourceVoice = 0;
+				const ALenum cleanupError = alGetError();
+				if (cleanupError != AL_NO_ERROR)
+				{
+					printf("[doomclassic] failed to release SFX source %d: 0x%X\n", i, cleanupError);
+					hardwareCleanupFailed = true;
+				}
 			}
 
 			// Always clear CPU-side channel state, even if the OpenAL hardware
@@ -1031,7 +1039,10 @@ void I_ShutdownSound(void)
 				alDeleteBuffers(1, &alBuffers[i]);
 				const ALenum deleteError = alGetError();
 				if (deleteError != AL_NO_ERROR)
+				{
 					printf("[doomclassic] failed to delete SFX buffer %d: 0x%X\n", i, deleteError);
+					hardwareCleanupFailed = true;
+				}
 			}
 			alBuffers[i] = 0;
 		}
@@ -1050,6 +1061,13 @@ void I_ShutdownSound(void)
 			S_sfx[i].data = NULL;
 			lengths[i] = 0;
 		}
+
+		// Classic has intentionally discarded all source/buffer names above.
+		// If the driver rejected any cleanup operation, rebuild the OpenAL
+		// context so it can reclaim those otherwise unreachable objects before
+		// the main BFG sound system continues using the shared device.
+		if (hardwareCleanupFailed)
+			soundSystemLocal.SetNeedsRestart();
 	}
 
 	I_StopSong(0);
