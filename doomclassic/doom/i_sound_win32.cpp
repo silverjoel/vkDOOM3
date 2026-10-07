@@ -444,6 +444,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	int i;
 	activeSound_t* sound = 0;
 	int oldest = 0, oldestnum = -1;
+	bool sourceCreationFailed = false;
 
 	// these id's should not overlap
 	if (id == sfx_sawup || id == sfx_sawidl || id == sfx_sawful || id == sfx_sawhit || id == sfx_stnmov) {
@@ -463,8 +464,21 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	for (i = 0; i < NUM_SOUNDBUFFERS; i++) {
 		sound = &activeSounds[i];
 
-		// A source can be unavailable if OpenAL source creation failed during
-		// hardware initialization. Never issue AL calls against source 0.
+		// Classic Doom has 64 logical SFX channels, but reserving 64 OpenAL
+		// sources at engine startup can starve the main BFG voice pool on
+		// implementations with a modest source limit. Create Classic sources
+		// only as channels are actually needed. After one allocation failure,
+		// keep scanning already-created sources instead of hammering
+		// alGenSources() for every remaining logical slot.
+		if (sound->alSourceVoice == 0 && !sourceCreationFailed) {
+			I_InitSoundChannel(i, numOutputChannels);
+			if (sound->alSourceVoice == 0) {
+				sourceCreationFailed = true;
+			}
+		}
+		
+		// A source can still be unavailable if the device source limit was
+		// reached. Never issue AL calls against source 0.
 		if (sound->alSourceVoice == 0)
 			continue;
 
@@ -514,6 +528,8 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	if (sound->id != id) {
 		alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
 		alSourcei(sound->alSourceVoice, AL_BUFFER, alBuffers[id]);
+		alDeleteSources(1, &sound->alSourceVoice);
+		sound->alSourceVoice = 0;
 	}
 
 	// Set the source voice volume
@@ -956,10 +972,9 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 	// Debug: announce entry to doomclassic sound hardware init
 	printf("[doomclassic] I_InitSoundHardware: numOutputChannels=%d channelMask=0x%X\n", numOutputChannels_, channelMask);
 
-	// Initialize source voices
-	for (int i = 0; i < NUM_SOUNDBUFFERS; i++) {
-		I_InitSoundChannel(i, numOutputChannels);
-	}
+	// SFX sources are created lazily by I_StartSound2(). Keeping the 64
+	// logical Classic channels source-free until they are used prevents
+	// dormant Classic Doom audio from consuming the BFG hardware voice pool.
 
 	// Create OpenAL buffers for all sounds
 	for (int i = 1; i < NUMSFX; i++) {
@@ -1020,7 +1035,12 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 		}
 	}
 
-	I_InitMusic();
+	// If Classic Doom is already active, this is a hardware restart and its
+	// music state may need to be restored into the new context. On ordinary
+	// Doom 3 startup, defer the Classic music source until I_InitSound().
+	if (S_initialized) {
+		I_InitMusic();
+	}
 
 	soundHardwareInitialized = true;
 
@@ -1213,6 +1233,14 @@ void I_InitSound()
 		doom_Listener.Position.x = 0.f;
 		doom_Listener.Position.y = 0.f;
 		doom_Listener.Position.z = 0.f;
+
+		// Classic music gets the first Classic-owned OpenAL source. SFX
+		// sources are allocated lazily afterward, so a limited-source device
+		// cannot lose music merely because 64 dormant SFX channels were
+		// created first.
+		if (soundHardwareInitialized) {
+			I_InitMusic();
+		}
 
 		for (int i = 1; i < NUMSFX; i++) {
 			// Alias? Example is the chaingun sound linked to pistol.
