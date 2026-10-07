@@ -1269,6 +1269,13 @@ void I_InvalidateSoundHardware()
 	waitingForMusic = false;
 	musicReady = false;
 	Music_initialized = false;
+
+	// I_ShutdownMusic() normally resets the bounded initialization retry, but
+	// this invalid-context path cannot call it. A replacement OpenAL context
+	// should get the same one post-init retry if its early Classic music
+	// source/buffer creation attempt fails. Keep musicHardwareRestartAttempted
+	// intact so a music-triggered restart still cannot become a restart loop.
+	musicInitRetryAttempted = false;
 }
 
 /*
