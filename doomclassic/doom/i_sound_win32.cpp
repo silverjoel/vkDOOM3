@@ -62,7 +62,7 @@ If you have questions concerning this license or the applicable additional terms
 
 #pragma warning ( disable : 4244 )
 
-#define SFX_RATE		11050
+#define SFX_RATE		11025
 #define SFX_SAMPLETYPE		AL_FORMAT_MONO8
 
 #define MIDI_CHANNELS		2
