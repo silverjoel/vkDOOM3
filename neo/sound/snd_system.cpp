@@ -106,6 +106,11 @@ idSoundSystemLocal::Restart
 ========================
 */
 void idSoundSystemLocal::Restart() {
+	// A full restart satisfies any request that was already pending when the
+	// restart began, including a manual s_restart. Clear it at entry rather
+	// than at exit so a new recovery request raised during hardware shutdown
+	// or reinitialization remains set and can be serviced on the next render.
+	needsRestart = false;
 
 	// Mute all channels in all worlds
 	for ( int i = 0; i < soundWorlds.Num(); i++ ) {
@@ -266,12 +271,6 @@ void idSoundSystemLocal::Render() {
 	if (s_noSound.IsModified()) 
 	{
 		s_noSound.ClearModified();
-
-		// This full lifecycle restart supersedes any request that was already
-		// pending before the s_noSound transition. Clear it before Restart()
-		// rather than after, so a new recovery request raised during hardware
-		// shutdown/reinitialization is preserved and can still be serviced.
-		needsRestart = false;
 
 		Restart();
 	}
