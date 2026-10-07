@@ -376,9 +376,18 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 	}
 	if( loopingSample != NULL )
 	{
-		if( ( leadinSample->format.basic.formatTag != loopingSample->format.basic.formatTag ) || ( leadinSample->format.basic.numChannels != loopingSample->format.basic.numChannels ) )
+		// OpenAL receives 16-bit PCM buffers regardless of whether the source
+		// asset was PCM, extensible PCM, or MS ADPCM. Do not reject a valid
+		// lead-in/loop pair merely because their original WAVE format tags
+		// differ; idSoundVoice_OpenAL::RestartAt() tests the actual OpenAL
+		// buffer format and sample rate before deciding whether the pair can be
+		// queued, and falls back to switching static buffers when they cannot.
+		//
+		// Keep the channel-count guard for now because the voice caches channel
+		// state from the lead-in for source-radius/spatialization behavior.
+		if (leadinSample->format.basic.numChannels != loopingSample->format.basic.numChannels)
 		{
-			idLib::Warning( "Leadin/looping format mismatch: %s & %s", leadinSample->GetName(), loopingSample->GetName() );
+			idLib::Warning("Leadin/looping channel mismatch: %s & %s", leadinSample->GetName(), loopingSample->GetName());
 			loopingSample = NULL;
 		}
 	}
