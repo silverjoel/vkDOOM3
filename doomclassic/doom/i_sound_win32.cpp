@@ -1686,6 +1686,8 @@ void I_LoadSong(const char* songname)
 	musicReady = true;
 }
 
+static void I_HandleMusicHardwareFailure();
+
 /*
 ======================
 I_PlaySong
@@ -1730,6 +1732,13 @@ void I_PlaySong(const char* songname, int looping)
 	const ALenum loopingError = alGetError();
 	if (loopingError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to set music looping state: 0x%X\n", loopingError);
+		// Do not continue with whatever AL_LOOPING state the previous track
+		// left behind. Preserve this requested track for the bounded hardware
+		// recovery path just like detach/upload/start failures.
+		currentMusicName = songname != NULL ? songname : "";
+		currentMusicLooping = looping;
+		I_HandleMusicHardwareFailure();
+		return;
 	}
 
 	musicReady = false;
