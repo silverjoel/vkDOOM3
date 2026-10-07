@@ -135,7 +135,7 @@ private:
 	void					ApplySourceRadius();
 
 	// Helper function used by the initial start and lead-in/loop transitions.
-	int						RestartAt( int offsetSamples );
+	int						RestartAt(int64 offsetSamples);
 	
 	// Helper function to submit a buffer
 	int						SubmitBuffer( idSoundSample_OpenAL* sample, int bufferNumber, int offset );

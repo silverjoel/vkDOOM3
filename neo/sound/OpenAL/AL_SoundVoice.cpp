@@ -533,7 +533,8 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 	trackAmplitude = ( ssFlags & SSF_NO_FLICKER ) == 0;
 	
 	assert( offsetMS >= 0 );
-	int offsetSamples = MsecToSamples( offsetMS, leadinSample->SampleRate() );
+	const int safeOffsetMS = Max(0, offsetMS);
+	const int64 offsetSamples = (static_cast<int64>(safeOffsetMS) * static_cast<int64>(leadinSample->SampleRate())) / 1000;
 	if( loopingSample == NULL && offsetSamples >= leadinSample->playLength )
 	{
 		return;
@@ -553,9 +554,12 @@ void idSoundVoice_OpenAL::Start( int offsetMS, int ssFlags )
 idSoundVoice_OpenAL::RestartAt
 ========================
 */
-int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
+int idSoundVoice_OpenAL::RestartAt(int64 offsetSamples)
 {
-	offsetSamples = Max( 0, offsetSamples );
+	if (offsetSamples < 0)
+	{
+		offsetSamples = 0;
+	}
 	
 	if( leadinSample == NULL || leadinSample->playLength <= 0 )
 	{
@@ -581,11 +585,13 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 		}
 		else
 		{
-			// Convert through time when the lead-in and loop use different
-			// sample rates.
-			const int elapsedMS = SamplesToMsec( offsetSamples, leadinSample->SampleRate() );
-			const int loopElapsedMS = Max( 0, elapsedMS - leadinSample->LengthInMsec() );
-			offsetSamples = MsecToSamples( loopElapsedMS, loopingSample->SampleRate() );
+			// Convert through milliseconds using 64-bit intermediates. Start()
+			// receives a signed 32-bit millisecond offset and validated sample
+			// rates are <= INT_MAX, so these products remain within int64.
+			const int64 elapsedMS = (offsetSamples * 1000) / static_cast<int64>(leadinSample->SampleRate());
+			const int64 leadinMS = (static_cast<int64>(leadinSample->playLength) * 1000) / static_cast<int64>(leadinSample->SampleRate());
+			const int64 loopElapsedMS = elapsedMS > leadinMS ? elapsedMS - leadinMS : 0;
+			offsetSamples = (loopElapsedMS * static_cast<int64>(loopingSample->SampleRate())) / 1000;
 			offsetSamples %= loopingSample->playLength;
 		}
 
@@ -621,7 +627,13 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 		// For a queued source AL_SAMPLE_OFFSET is relative to the beginning
 		// of the complete queue, so an offset inside the lead-in can be
 		// applied directly here.
-		const int queueOffset = leadinSample->playBegin + offsetSamples;
+		const int64 queueOffset64 = static_cast<int64>(leadinSample->playBegin) + offsetSamples;
+		if (queueOffset64 > INT_MAX)
+		{
+			FlushSourceBuffers();
+			return 0;
+		}
+		const int queueOffset = static_cast<int>(queueOffset64);
 		if( queueOffset > 0 )
 		{
 			alSourcei( openalSource, AL_SAMPLE_OFFSET, queueOffset );
@@ -636,13 +648,19 @@ int idSoundVoice_OpenAL::RestartAt( int offsetSamples )
 		return Max( 1, leadinSample->totalBufferSize );
 	}
 
-	int previousNumSamples = 0;
+	int64 previousNumSamples = 0;
+	const int64 sampleOffset = static_cast<int64>(sample->playBegin) + offsetSamples;
 
 	for( int i = 0; i < sample->buffers.Num(); i++ )
 	{
-		if( sample->buffers[i].numSamples > sample->playBegin + offsetSamples )
+		if (static_cast<int64>(sample->buffers[i].numSamples) > sampleOffset)
 		{
-			return SubmitBuffer( sample, i, sample->playBegin + offsetSamples - previousNumSamples );
+			const int64 bufferOffset = sampleOffset - previousNumSamples;
+			if (bufferOffset < 0 || bufferOffset > INT_MAX)
+			{
+				return 0;
+			}
+			return SubmitBuffer(sample, i, static_cast<int>(bufferOffset));
 		}
 		previousNumSamples = sample->buffers[i].numSamples;
 	}
