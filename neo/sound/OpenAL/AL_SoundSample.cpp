@@ -760,14 +760,19 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 
 	// build OpenAL buffer
 	CheckALErrors();
+	openalBuffer = 0;
 	alGenBuffers( 1, &openalBuffer );
 	
-	if( CheckALErrors() != AL_NO_ERROR )
+	const ALenum generateError = CheckALErrors();
+	if (generateError != AL_NO_ERROR || openalBuffer == 0 || alIsBuffer(openalBuffer) == AL_FALSE)
 	{
-		common->Error( "idSoundSample_OpenAL::CreateOpenALBuffer: error generating OpenAL hardware buffer" );
+		idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: could not generate OpenAL buffer for '%s' (0x%X)", GetName(), generateError);
+		openalBuffer = 0;
+		CheckALErrors();
+		return;
 	}
 	
-	if( alIsBuffer( openalBuffer ) )
+	if (alIsBuffer(openalBuffer))
 	{
 		CheckALErrors();
 		
@@ -786,7 +791,12 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 				
 				if (MS_ADPCM_decode((uint8**)&buffer, &bufferSize) < 0)
 				{
-					common->Error("idSoundSample_OpenAL::CreateOpenALBuffer: could not decode ADPCM '%s' to 16 bit format", GetName());
+					idLib::Warning("idSoundSample_OpenAL::CreateOpenALBuffer: could not decode ADPCM '%s' to 16 bit format", GetName());
+					CheckALErrors();
+					alDeleteBuffers(1, &openalBuffer);
+					CheckALErrors();
+					openalBuffer = 0;
+					return;
 				}
 				
 				buffers[0].buffer = buffer;
@@ -889,7 +899,12 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		
 		if( CheckALErrors() != AL_NO_ERROR )
 		{
-			common->Error( "idSoundSample_OpenAL::CreateOpenALBuffer: error loading data into OpenAL hardware buffer" );
+			idLib::Warning("idSoundSample_OpenAL::CreateOpenALBuffer: error loading '%s' into OpenAL hardware buffer", GetName());
+			CheckALErrors();
+			alDeleteBuffers(1, &openalBuffer);
+			CheckALErrors();
+			openalBuffer = 0;
+			return;
 		}
 	}
 }

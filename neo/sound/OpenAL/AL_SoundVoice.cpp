@@ -284,6 +284,19 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	leadinSample = ( idSoundSample_OpenAL* )leadinSample_;
 	loopingSample = ( idSoundSample_OpenAL* )loopingSample_;
 
+	// A context restart or transient OpenAL allocation/upload failure can
+	// leave a loaded sample resident on the CPU with no hardware buffer.
+	// Retry that upload lazily when the sample is actually needed. Avoid
+	// retrying permanently unsupported formats every frame.
+	if (leadinSample != NULL && leadinSample->openalBuffer == 0 && leadinSample->IsLoaded() && leadinSample->GetOpenALBufferFormat() != AL_NONE)
+	{
+		leadinSample->RecreateOpenALBuffer();
+	}
+	if (loopingSample != NULL && loopingSample != leadinSample && loopingSample->openalBuffer == 0 && loopingSample->IsLoaded() && loopingSample->GetOpenALBufferFormat() != AL_NONE)
+	{
+		loopingSample->RecreateOpenALBuffer();
+	}
+
 	// PC PCM/ADPCM samples are decoded as needed and uploaded by
 	// idSoundSample_OpenAL::CreateOpenALBuffer(). The old CPU-streaming
 	// fallback was incomplete (one of three buffers was refilled/queued and
