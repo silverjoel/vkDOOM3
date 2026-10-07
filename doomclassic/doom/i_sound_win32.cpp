@@ -528,8 +528,6 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	if (sound->id != id) {
 		alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
 		alSourcei(sound->alSourceVoice, AL_BUFFER, alBuffers[id]);
-		alDeleteSources(1, &sound->alSourceVoice);
-		sound->alSourceVoice = 0;
 	}
 
 	// Set the source voice volume
@@ -924,6 +922,8 @@ void I_ShutdownSound(void)
 			{
 				alSourceStop(sound->alSourceVoice);
 				alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
+				alDeleteSources(1, &sound->alSourceVoice);
+				sound->alSourceVoice = 0;
 			}
 
 			// Always clear CPU-side channel state, even if the OpenAL hardware
