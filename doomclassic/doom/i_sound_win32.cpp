@@ -231,6 +231,46 @@ static int I_FindPendingSoundEvent(int handle, int player)
 
 /*
 ======================
+I_CalculateRelativeSoundPosition
+
+The original XAudio2 backend calculated a separate output matrix for each
+Classic Doom sound using the player stored in activeSound_t as that sound's
+listener. OpenAL has one global listener, so reproduce the same split-screen
+behavior by keeping SFX sources listener-relative and transforming each
+emitter into its assigned player's coordinate frame.
+
+OpenAL's default listener looks down -Z with +X to the right. Doom stores its
+2D world in X/Y, mapped here to OpenAL X/Z. The transform below therefore
+produces:
+  relative X = right/left
+  relative Z = negative-forward/positive-back
+======================
+*/
+static bool I_CalculateRelativeSoundPosition( const mobj_t * source, const mobj_t * listener, ALfloat & x, ALfloat & y, ALfloat & z)
+{
+	if (source == NULL || listener == NULL)
+	{
+		return false;
+	}
+	
+	const angle_t listenerAngle = listener->angle >> ANGLETOFINESHIFT;
+	const float frontX = (float)finecosine[listenerAngle] / (float)FRACUNIT;
+	const float frontZ = (float)finesine[listenerAngle] / (float)FRACUNIT;
+	
+	// Use 64-bit differences before converting from Doom fixed-point so an
+	// extreme pair of legal fixed_t positions cannot overflow subtraction.
+	const float deltaX = (float)((int64)source->x - (int64)listener->x) / (float)FRACUNIT;
+	const float deltaZ = (float)((int64)source->y - (int64)listener->y) / (float)FRACUNIT;
+	
+	// right = (frontZ, -frontX) in Doom's X/Y plane.
+	x = deltaX * frontZ - deltaZ * frontX;
+	y = 0.0f;
+	z = -(deltaX * frontX + deltaZ * frontZ);
+	return true;
+}
+
+/*
+======================
 getsfx
 ======================
 */
@@ -486,22 +526,19 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	ALfloat y = 0.f;
 	ALfloat z = 0.f;
 	bool localSound = false;
-	if (origin) {
-		if (origin == listener_origin) {
-			localSound = true;
-		}
-		else {
-			x = (ALfloat)(origin->x >> FRACBITS);
-			z = (ALfloat)(origin->y >> FRACBITS);
-		}
-	}
-	else {
+	if (origin == NULL || origin == listener_origin) {
 		localSound = true;
 	}
-	if (localSound) {
-		x = doom_Listener.Position.x;
-		z = doom_Listener.Position.z;
+	else if (!I_CalculateRelativeSoundPosition(origin, listener_origin, x, y, z)) {
+		// A non-local sound without a valid listener cannot be spatialized
+		// correctly. Treat it as local for this start rather than placing it
+		// in an unrelated global-listener coordinate system.
+		localSound = true;
+		x = 0.0f;
+		y = 0.0f;
+		z = 0.0f;
 	}
+
 	alSource3f(sound->alSourceVoice, AL_POSITION, x, y, z);
 
 	alSourcePlay(sound->alSourceVoice);
@@ -733,43 +770,6 @@ void I_UpdateSound(void)
 		return;
 	}
 
-	// Update listener orientation and position
-	mobj_t* playerObj = ::g->players[0].mo;
-	if (playerObj) {
-		angle_t	pAngle = playerObj->angle;
-		fixed_t fx, fz;
-
-		pAngle >>= ANGLETOFINESHIFT;
-
-		fx = finecosine[pAngle];
-		fz = finesine[pAngle];
-
-		doom_Listener.OrientFront.x = (float)(fx) / 65535.f;
-		doom_Listener.OrientFront.y = 0.f;
-		doom_Listener.OrientFront.z = (float)(fz) / 65535.f;
-		doom_Listener.Position.x = (float)(playerObj->x >> FRACBITS);
-		doom_Listener.Position.y = 0.f;
-		doom_Listener.Position.z = (float)(playerObj->y >> FRACBITS);
-	}
-	else {
-		doom_Listener.OrientFront.x = 0.f;
-		doom_Listener.OrientFront.y = 0.f;
-		doom_Listener.OrientFront.z = 1.f;
-
-		doom_Listener.Position.x = 0.f;
-		doom_Listener.Position.y = 0.f;
-		doom_Listener.Position.z = 0.f;
-	}
-
-	ALfloat listenerOrientation[] = { doom_Listener.OrientFront.x, doom_Listener.OrientFront.y,
-		doom_Listener.OrientFront.z, doom_Listener.OrientTop.x, doom_Listener.OrientTop.y,
-		doom_Listener.OrientTop.z };
-	alGetError();
-	alListenerfv(AL_ORIENTATION, listenerOrientation);
-	alListener3f(AL_POSITION, doom_Listener.Position.x, doom_Listener.Position.y, doom_Listener.Position.z);
-	// Do not let a listener-update error contaminate the per-source queries.
-	alGetError();
-
 	// Update playing source voice positions
 	int i;
 	activeSound_t* sound;
@@ -822,10 +822,9 @@ void I_UpdateSound(void)
 		}
 		
 		if (sound->localSound) {
-			alSource3f(sound->alSourceVoice, AL_POSITION, doom_Listener.Position.x,
-				doom_Listener.Position.y, doom_Listener.Position.z);
+			alSource3f(sound->alSourceVoice, AL_POSITION, 0.0f, 0.0f, 0.0f);
 		} else {
-			if (sound->originator == NULL) {
+			if (sound->originator == NULL || sound->player < 0 || sound->player >= MAXPLAYERS) {
 				// A non-local source without an originator cannot be positioned
 				// safely. Stop it before retiring the CPU-side channel so it
 				// cannot continue as an orphaned "ghost" sound.
@@ -843,9 +842,28 @@ void I_UpdateSound(void)
 				continue;
 			}
 			
-			ALfloat x = (ALfloat)(sound->originator->x >> FRACBITS);
+			mobj_t* playerObj = ::g->players[sound->player].mo;
+			if (playerObj == NULL) {
+				alGetError();
+				alSourceStop(sound->alSourceVoice);
+				alGetError();
+				
+				sound->handle = 0;
+				sound->id = 0;
+				sound->valid = 0;
+				sound->start = 0;
+				sound->player = -1;
+				sound->localSound = false;
+				sound->originator = NULL;
+				continue;
+			}
+			
+			ALfloat x = 0.0f;
 			ALfloat y = 0.f;
-			ALfloat z = (ALfloat)(sound->originator->y >> FRACBITS);
+			ALfloat z = 0.0f;
+			if (!I_CalculateRelativeSoundPosition(sound->originator, playerObj, x, y, z)) {
+				continue;
+			}
 			
 			alSource3f(sound->alSourceVoice, AL_POSITION, x, y, z);
 		}
@@ -1151,6 +1169,11 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	}
 
 	alSource3f(soundchannel->alSourceVoice, AL_VELOCITY, 0.f, 0.f, 0.f);
+	// Classic Doom previously used X3DAudio to calculate a separate speaker
+	// matrix for each sound's assigned split-screen player. OpenAL exposes
+	// only one listener, so keep every SFX source listener-relative and feed
+	// it coordinates transformed into that player's frame instead.
+	alSourcei(soundchannel->alSourceVoice, AL_SOURCE_RELATIVE, AL_TRUE);
 	alSourcei(soundchannel->alSourceVoice, AL_LOOPING, AL_FALSE);
 	alSourcef(soundchannel->alSourceVoice, AL_MAX_DISTANCE, SFX_MAX_DISTANCE);
 	alSourcef(soundchannel->alSourceVoice, AL_REFERENCE_DISTANCE, SFX_REFERENCE_DISTANCE);
