@@ -229,7 +229,9 @@ void idSoundHardware_OpenAL::Init()
 
 	if( openalDevice == NULL )
 	{
-		common->FatalError( "idSoundHardware_OpenAL::Init: alcOpenDevice() failed\n" );
+		idLib::Warning("idSoundHardware_OpenAL::Init: alcOpenDevice() failed; sound will remain unavailable until a device can be opened");
+		lastResetTime = Sys_Milliseconds();
+		disconnectExtensionAvailable = false;
 		return;
 	}
 
@@ -241,7 +243,9 @@ void idSoundHardware_OpenAL::Init()
 	{
 		alcCloseDevice( openalDevice );
 		openalDevice = NULL;
-		common->FatalError( "idSoundHardware_OpenAL::Init: alcCreateContext() failed\n" );
+		idLib::Warning("idSoundHardware_OpenAL::Init: alcCreateContext() failed; sound will retry later");
+		lastResetTime = Sys_Milliseconds();
+		disconnectExtensionAvailable = false;
 		return;
 	}
 	
@@ -251,7 +255,9 @@ void idSoundHardware_OpenAL::Init()
 		openalContext = NULL;
 		alcCloseDevice( openalDevice );
 		openalDevice = NULL;
-		common->FatalError( "idSoundHardware_OpenAL::Init: alcMakeContextCurrent() failed\n" );
+		idLib::Warning("idSoundHardware_OpenAL::Init: alcMakeContextCurrent() failed; sound will retry later");
+		lastResetTime = Sys_Milliseconds();
+		disconnectExtensionAvailable = false;
 		return;
 	}
 
@@ -505,28 +511,34 @@ void idSoundHardware_OpenAL::Update()
 		return;
 	}
 
-	// All source/buffer names owned by this backend belong to openalContext.
-	// If that context is no longer current, issuing AL calls would either hit
-	// no context or an unrelated one. Recover through the normal sound-system
-	// restart so voices are muted and all context-local objects are rebuilt.
-	if (openalContext == NULL || alcGetCurrentContext() != openalContext)
+	// Match the original hardware backend's graceful "no audio device"
+	// behavior. A failed OpenAL init leaves no usable context, but the rest of
+	// the sound system can continue with CPU-resident samples and no hardware
+	// voices. Retry through the full sound-system restart at a bounded rate so
+	// all context-local sample/Classic objects are rebuilt when a device
+	// becomes available.
+	if (openalDevice == NULL || openalContext == NULL)
 	{
-		idLib::Warning( "OpenAL context is no longer current; requesting sound restart");
-		soundSystemLocal.SetNeedsRestart();
+		const int nowTime = Sys_Milliseconds();
+		if (lastResetTime + 1000 < nowTime)
+		{
+			lastResetTime = nowTime;
+			idLib::Warning("OpenAL device/context unavailable; requesting sound restart");
+			soundSystemLocal.SetNeedsRestart();
+		}
 		return;
 	}
 
-	if( openalDevice == NULL )
+	// All source/buffer names owned by this backend belong to openalContext.
+	// If another/no context became current, never issue AL calls into it.
+	// Recover through the same bounded full-restart path.
+	if (alcGetCurrentContext() != openalContext)
 	{
-		int nowTime = Sys_Milliseconds();
-		if( lastResetTime + 1000 < nowTime )
+		const int nowTime = Sys_Milliseconds();
+		if (lastResetTime + 1000 < nowTime)
 		{
 			lastResetTime = nowTime;
-			// Never recreate the OpenAL context behind the sound system's
-			// back. Buffer names are context-local, so a hardware-only Init()
-			// would leave every resident idSoundSample with a stale buffer
-			// name. Request the normal sound-system restart instead; it
-			// invalidates and rebuilds all sample buffers for the new context.
+			idLib::Warning("OpenAL context is no longer current; requesting sound restart");
 			soundSystemLocal.SetNeedsRestart();
 		}
 		return;
