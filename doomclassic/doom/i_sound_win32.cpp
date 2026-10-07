@@ -86,6 +86,7 @@ static int	currentMusicLooping = 0;
 static bool	restoreMusicAfterHardwareRestart = false;
 static bool	musicHardwareRestartAttempted = false;
 static bool	restoringMusicAfterHardwareRestart = false;
+static bool	musicInitRetryAttempted = false;
 
 typedef struct {
 	float x;
@@ -1558,6 +1559,7 @@ void I_ShutdownMusic(void)
 	musicReady = false;
 
 	Music_initialized = false;
+	musicInitRetryAttempted = false;
 }
 
 namespace {
@@ -1685,15 +1687,23 @@ I_PlaySong
 void I_PlaySong(const char* songname, int looping)
 {
 	if (!Music_initialized) {
-		// Music hardware is intentionally initialized lazily. If its first
-		// source/buffer allocation failed transiently during Classic startup,
-		// give the requested song one clean chance to recreate it.
+		// S_ChangeMusic() records its logical selection even when the hardware
+		// start fails, and then suppresses repeated requests for that same
+		// track. Preserve the requested song here so a transient failure to
+		// create the Classic music source/buffer does not make the selected
+		// track permanently silent.
+		currentMusicName = songname != NULL ? songname : "";
+		currentMusicLooping = looping;
+		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
+		if (!restoringMusicAfterHardwareRestart) {
+			musicInitRetryAttempted = false;
+		}
 		if (soundHardwareInitialized && S_initialized) {
 			I_InitMusic();
 		}
-		if (!Music_initialized) {
-			return;
-		}
+		// A successful I_InitMusic() re-enters I_PlaySong() through its
+		// retained-track restore path, so either way this request is complete.
+		return;
 	}
 
 	I_StopSong(0);
@@ -1761,7 +1771,21 @@ I_UpdateMusic
 void I_UpdateMusic(void)
 {
 	if (!Music_initialized) {
-		return;
+		// A hardware restart initializes Classic music before
+		// soundHardwareInitialized is published. If source/buffer creation
+		// failed at that point, give the retained logical track one bounded
+		// retry after the new context is fully live. Do not retry every frame.
+		if (restoreMusicAfterHardwareRestart &&
+			!musicInitRetryAttempted &&
+			soundHardwareInitialized &&
+			S_initialized &&
+			!currentMusicName.IsEmpty()) {
+			musicInitRetryAttempted = true;
+			I_InitMusic();
+		}
+		 if (!Music_initialized) {
+			return;
+		}
 	}
 
 	// A decoded song can be waiting for its OpenAL upload when the game is
@@ -1835,6 +1859,7 @@ void I_UpdateMusic(void)
 	waitingForMusic = false;
 	restoreMusicAfterHardwareRestart = false;
 	musicHardwareRestartAttempted = false;
+	musicInitRetryAttempted = false;
 }
 
 /*
@@ -1910,6 +1935,7 @@ void I_StopSong(int handle)
 
 	if (!restoringMusicAfterHardwareRestart) {
 		musicHardwareRestartAttempted = false;
+		musicInitRetryAttempted = false;
 	}
 	
 	// Cancel a decoded-but-not-yet-uploaded song as well as an already playing
