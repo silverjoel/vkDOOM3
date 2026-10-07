@@ -84,6 +84,8 @@ bool		musicReady;
 static idStr	currentMusicName;
 static int	currentMusicLooping = 0;
 static bool	restoreMusicAfterHardwareRestart = false;
+static bool	musicHardwareRestartAttempted = false;
+static bool	restoringMusicAfterHardwareRestart = false;
 
 typedef struct {
 	float x;
@@ -1492,7 +1494,9 @@ void I_InitMusic(void)
 		const idStr restartSongName = currentMusicName;
 		const int restartLooping = currentMusicLooping;
 		restoreMusicAfterHardwareRestart = false;
+		restoringMusicAfterHardwareRestart = true;
 		I_PlaySong(restartSongName.c_str(), restartLooping);
+		restoringMusicAfterHardwareRestart = false;
 	}
 }
 
@@ -1727,6 +1731,30 @@ void I_PlaySong(const char* songname, int looping)
 
 /*
 ======================
+I_HandleMusicHardwareFailure
+
+Give a selected Classic music track one full sound-system restart after an
+OpenAL detach/upload/start failure. If the restored track fails again on the
+new context, do not create an endless restart loop.
+======================
+*/
+static void I_HandleMusicHardwareFailure()
+{
+	musicReady = false;
+	waitingForMusic = false;
+	
+	if (!currentMusicName.IsEmpty() && !musicHardwareRestartAttempted) {
+		restoreMusicAfterHardwareRestart = true;
+		musicHardwareRestartAttempted = true;
+		soundSystemLocal.SetNeedsRestart();
+	}
+	else {
+		restoreMusicAfterHardwareRestart = false;
+	}
+}
+
+/*
+======================
 I_UpdateMusic
 ======================
 */
@@ -1780,10 +1808,7 @@ void I_UpdateMusic(void)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to detach previous music buffer: 0x%X\n", alError);
-		musicReady = false;
-		waitingForMusic = false;
-		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
-		soundSystemLocal.SetNeedsRestart();
+		I_HandleMusicHardwareFailure();
 		return;
 	}
 	
@@ -1791,10 +1816,7 @@ void I_UpdateMusic(void)
 	alError = alGetError();
 	if (alError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to upload music buffer: 0x%X\n", alError);
-		musicReady = false;
-		waitingForMusic = false;
-		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
-		soundSystemLocal.SetNeedsRestart();
+		I_HandleMusicHardwareFailure();
 		return;
 	}
 	
@@ -1806,14 +1828,13 @@ void I_UpdateMusic(void)
 		alSourceStop(alMusicSourceVoice);
 		alSourcei(alMusicSourceVoice, AL_BUFFER, 0);
 		alGetError();
-		musicReady = false;
-		waitingForMusic = false;
-		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
-		soundSystemLocal.SetNeedsRestart();
+		I_HandleMusicHardwareFailure();
 		return;
 	}
 	
 	waitingForMusic = false;
+	restoreMusicAfterHardwareRestart = false;
+	musicHardwareRestartAttempted = false;
 }
 
 /*
@@ -1886,6 +1907,10 @@ void I_StopSong(int handle)
 	currentMusicName.Clear();
 	currentMusicLooping = 0;
 	restoreMusicAfterHardwareRestart = false;
+
+	if (!restoringMusicAfterHardwareRestart) {
+		musicHardwareRestartAttempted = false;
+	}
 	
 	// Cancel a decoded-but-not-yet-uploaded song as well as an already playing
 	// source. Otherwise a later I_UpdateMusic() could start music after Stop.
