@@ -195,14 +195,10 @@ idSoundVoice_OpenAL::CompatibleFormat
 */
 bool idSoundVoice_OpenAL::CompatibleFormat( idSoundSample_OpenAL* s )
 {
-	if (s == NULL)
-	{
-		return false;
-	}
-
 	// OpenAL sources are not tied to a PCM format the way XAudio2 source
-	// voices are. A stopped source can therefore be reused for any sample.
-	return !IsPlaying();
+	// voices are. Playback state is checked by AllocateVoice() and Create()
+	// before this compatibility test, so avoid a redundant AL state query.
+	return s != NULL;
 }
 
 /*
