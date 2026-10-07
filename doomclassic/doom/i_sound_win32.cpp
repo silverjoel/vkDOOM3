@@ -861,6 +861,7 @@ void I_ShutdownSound(void)
 
 			// Always clear CPU-side channel state, even if the OpenAL hardware
 			// is already unavailable or this channel has no source handle.
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -1006,6 +1007,7 @@ void I_ShutdownSoundHardware()
 		}
 
 		sound->alSourceVoice = 0;
+		sound->handle = 0;
 		sound->id = 0;
 		sound->valid = 0;
 		sound->start = 0;
@@ -1013,6 +1015,10 @@ void I_ShutdownSoundHardware()
 		sound->localSound = false;
 		sound->originator = NULL;
 	}
+
+	// Deferred split-screen events belong to the old OpenAL context/lifecycle.
+	// Never replay them after a hardware restart.
+	memset(soundEvents, 0, sizeof(soundEvents));
 
 	// Delete OpenAL buffers for all sounds
 	for (int i = 0; i < NUMSFX; i++) 
@@ -1043,6 +1049,7 @@ void I_InvalidateSoundHardware()
 	for (int i = 0; i < NUM_SOUNDBUFFERS; ++i) {
 		activeSound_t* sound = &activeSounds[i];
 		sound->alSourceVoice = 0;
+		sound->handle = 0;
 		sound->id = 0;
 		sound->valid = 0;
 		sound->start = 0;
@@ -1051,6 +1058,9 @@ void I_InvalidateSoundHardware()
 		sound->originator = NULL;
 
 	}
+
+	// The old context can no longer service deferred starts either.
+	memset(soundEvents, 0, sizeof(soundEvents));
 
 	for (int i = 0; i < NUMSFX; ++i) {
 		alBuffers[i] = 0;
@@ -1088,6 +1098,7 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	activeSound_t* soundchannel = &activeSounds[channel];
 
 	soundchannel->alSourceVoice = 0;
+	soundchannel->handle = 0;
 	soundchannel->id = 0;
 	soundchannel->valid = 0;
 	soundchannel->start = 0;
