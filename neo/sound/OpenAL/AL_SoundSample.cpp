@@ -842,7 +842,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	if( formatError != NULL )
 	{
 		idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), formatError );
-		MakeDefault();
+		FreeData();
 		return false;
 	}
 
@@ -862,7 +862,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	if (format.basic.formatTag == idWaveFile::FORMAT_PCM && format.basic.numChannels > 2)
 	{
 		idLib::Warning( "LoadWav( %s ): multichannel PCM requires WAVE_FORMAT_EXTENSIBLE channel-mask metadata", filename.c_str());
-		MakeDefault();
+		FreeData();
 		return false;
 	}
 	
@@ -873,7 +873,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 			filename.c_str(),
 			format.basic.numChannels,
 			format.extra.extensible.channelMask);
-		MakeDefault();
+		FreeData();
 		return false;
 	}
 
@@ -882,7 +882,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	if (format.basic.numChannels == 0 || format.basic.samplesPerSec == 0 || format.basic.blockSize == 0)
 	{
 		idLib::Warning("LoadWav( %s ): invalid zero-valued wave format field", filename.c_str());
-		MakeDefault();
+		FreeData();
 		return false;
 	}
 	
@@ -899,7 +899,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 			format.basic.blockSize < headerBytes)
 		{
 			idLib::Warning("LoadWav( %s ): invalid MS ADPCM format metadata", filename.c_str());
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 	
@@ -917,7 +917,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 				filename.c_str(),
 				format.extra.adpcm.samplesPerBlock,
 				expectedSamplesPerBlock);
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 	}
@@ -929,7 +929,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	if (totalBufferSize <= 0)
 	{
 		idLib::Warning("LoadWav( %s ): missing or empty data chunk", filename.c_str());
-		MakeDefault();
+		FreeData();
 		return false;
 	}
 	
@@ -939,7 +939,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if( format.basic.bitsPerSample != 16 )
 		{
 			idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), "Not a 16 bit PCM wav file" );
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 
@@ -948,7 +948,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if (format.basic.blockSize != expectedBlockSize || (totalBufferSize % format.basic.blockSize) != 0)
 		{
 			idLib::Warning("LoadWav( %s ): invalid PCM block alignment", filename.c_str());
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 		
@@ -964,7 +964,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if (wave.Read(buffers[0].buffer, totalBufferSize) != (size_t)totalBufferSize)
 		{
 			idLib::Warning("LoadWav( %s ): truncated PCM sample data", filename.c_str());
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 		
@@ -984,7 +984,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if ((totalBufferSize % format.basic.blockSize) != 0)
 		{
 			idLib::Warning("LoadWav( %s ): MS ADPCM data is not block aligned", filename.c_str());
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 		
@@ -998,7 +998,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if (decodedSampleCount == 0 || decodedSampleCount > 0x7FFFFFFFULL || decodedByteCount > 0x7FFFFFFFULL)
 		{
 			idLib::Warning("LoadWav( %s ): MS ADPCM sample is too large", filename.c_str());
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 	
@@ -1013,7 +1013,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if (wave.Read(buffers[0].buffer, totalBufferSize) != (size_t)totalBufferSize)
 		{
 			idLib::Warning("LoadWav( %s ): truncated MS ADPCM sample data", filename.c_str());
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 		
@@ -1026,7 +1026,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if( format.extra.xma2.blockCount == 0 )
 		{
 			idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), "No data blocks in file" );
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 		
@@ -1056,7 +1056,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		if( seekTableSize != 4 * buffers.Num() )
 		{
 			idLib::Warning( "LoadWav( %s ) : %s", filename.c_str(), "Wrong number of entries in seek table" );
-			MakeDefault();
+			FreeData();
 			return false;
 		}
 		
@@ -1098,7 +1098,7 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 	else
 	{
 		idLib::Warning( "LoadWav( %s ) : Unsupported wave format %d", filename.c_str(), format.basic.formatTag );
-		MakeDefault();
+		FreeData();
 		return false;
 	}
 	
