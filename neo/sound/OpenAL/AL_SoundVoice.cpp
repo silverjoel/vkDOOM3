@@ -112,7 +112,7 @@ static ALenum OpenAL_GetSourceRadiusEnum()
 	}
 	
 	const ALenum sourceRadius = alGetEnumValue( "AL_SOURCE_RADIUS" );
-	if( CheckALErrors() == AL_NO_ERROR && sourceRadius != AL_NONE )
+	if (CheckALErrors() == AL_NO_ERROR && sourceRadius > AL_NONE)
 	{
 		openalSourceRadiusEnum = sourceRadius;
 	}
@@ -157,7 +157,7 @@ static float OpenAL_GetGainLimit()
 	// The bundled headers predate AL_SOFT_gain_clamp_ex, so resolve the
 	// standardized token at runtime just as we do for AL_EXT_SOURCE_RADIUS.
 	const ALenum gainLimitEnum = alGetEnumValue("AL_GAIN_LIMIT_SOFT");
-	if (CheckALErrors() != AL_NO_ERROR || gainLimitEnum == AL_NONE)
+	if (CheckALErrors() != AL_NO_ERROR || gainLimitEnum <= AL_NONE)
 	{
 		return openalGainLimit;
 	}
