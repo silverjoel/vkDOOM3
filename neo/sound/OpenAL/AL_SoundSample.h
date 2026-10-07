@@ -67,7 +67,27 @@ public:
 	
 	int				LengthInMsec() const
 	{
-		return SamplesToMsec( NumSamples(), SampleRate() );
+		const int samples = NumSamples();
+		const int sampleRate = SampleRate();
+		if (samples <= 0 || sampleRate <= 0)
+		{
+			return 0;
+		}
+		
+		// Sound-world timing uses signed millisecond integers. Convert with a
+		// 64-bit intermediate so large samples cannot overflow before division,
+		// and make every valid positive-length sample at least 1 ms so looping
+		// callers never receive a zero duration.
+		const int64 lengthMS = (static_cast<int64>(samples) * 1000) / static_cast<int64>(sampleRate);
+		if (lengthMS <= 0)
+		{
+			return 1;
+		}
+		if (lengthMS > INT_MAX)
+		{
+			return INT_MAX;
+		}
+		return static_cast<int>(lengthMS);
 	}
 	int				SampleRate() const
 	{
