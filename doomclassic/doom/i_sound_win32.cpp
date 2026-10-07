@@ -329,6 +329,30 @@ I_SetSfxVolume
 void I_SetSfxVolume(int volume)
 {
 	x_SoundVolume = ((float)volume / 15.f) * GLOBAL_VOLUME_MULTIPLIER;
+
+	// New sounds pick up x_SoundVolume in I_StartSound2(), but existing
+	// OpenAL sources otherwise keep the gain they had when they were started.
+	// Apply master-volume changes to currently active Classic Doom sounds too.
+	if (!soundHardwareInitialized) {
+		return;
+	}
+	
+	alGetError();
+	for (int i = 0; i < NUM_SOUNDBUFFERS; ++i) {
+		activeSound_t * sound = &activeSounds[i];
+		if (!sound->valid || sound->alSourceVoice == 0) {
+			continue;
+		}
+		
+		alSourcef(sound->alSourceVoice, AL_GAIN, x_SoundVolume);
+	}
+	
+	// Do not leave a volume-update failure as a sticky error for unrelated
+	// source state queries later in the frame.
+	const ALenum volumeError = alGetError();
+	if (volumeError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to update active SFX volume: 0x%X\n", volumeError);
+	}
 }
 
 /*
