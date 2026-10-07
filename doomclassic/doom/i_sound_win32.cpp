@@ -1016,6 +1016,23 @@ void I_ShutdownSound(void)
 			sound->originator = NULL;
 		}
 
+		// Classic owns its SFX OpenAL buffers only while Classic is active.
+		// Releasing them here returns those hardware objects to the main BFG
+		// sound system instead of keeping an entire dormant Classic buffer
+		// set alive after switching games.
+		for (i = 1; i < NUMSFX; ++i)
+		{
+			if (soundHardwareInitialized && alBuffers[i] != 0)
+			{
+				alGetError();
+				alDeleteBuffers(1, &alBuffers[i]);
+				const ALenum deleteError = alGetError();
+				if (deleteError != AL_NO_ERROR)
+					printf("[doomclassic] failed to delete SFX buffer %d: 0x%X\n", i, deleteError);
+			}
+			alBuffers[i] = 0;
+		}
+
 		memset(soundEvents, 0, sizeof(soundEvents));
 			
 		// Free allocated sound memory and clear all data pointers, including
@@ -1055,10 +1072,17 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 	// logical Classic channels source-free until they are used prevents
 	// dormant Classic Doom audio from consuming the BFG hardware voice pool.
 
-	// Create OpenAL buffers for all sounds
+	// Keep Classic SFX buffers dormant too. During ordinary Doom 3 startup
+	// Classic has no resident SFX data and does not need to reserve OpenAL
+	// buffer objects. If Classic is already active, this is a hardware restart
+	// and its resident SFX buffers must be rebuilt into the new context.
 	for (int i = 1; i < NUMSFX; i++) {
 		alBuffers[i] = 0;
 		
+		if (!S_initialized) {
+			continue;
+		}
+
 		// Isolate each buffer creation so one failure cannot contaminate the
 		// diagnostics for every buffer generated after it.
 		alGetError();
@@ -1341,20 +1365,12 @@ void I_InitSound()
 				lengths[i] = lengths[S_sfx[i].link - S_sfx];
 			}
 			if (S_sfx[i].data) {
-				if (alBuffers[i] != 0) {
-					alGetError();
-					alBufferData(alBuffers[i], SFX_SAMPLETYPE, (byte*)S_sfx[i].data, lengths[i], SFX_RATE);
-					
-					ALenum aerr = alGetError();
-					if (aerr != AL_NO_ERROR) {
-						printf("[doomclassic] alBufferData error for buffer %d: 0x%X\n", i, aerr);
-						alDeleteBuffers(1, &alBuffers[i]);
-						alBuffers[i] = 0;
-					}
-				}
-				else {
+				// Normal engine startup no longer reserves dormant Classic
+				// buffers. Create/populate them now that Classic is actually
+				// active; I_StartSound2() will retry an individual buffer
+				// later if this allocation fails transiently.
+				if (!I_EnsureSfxBuffer(i)) {
 					printf("[doomclassic] warning: SFX buffer %d is unavailable\n", i);
-				}
 			} else {
 				// Log missing sound data for debugging
 				printf("[doomclassic] warning: S_sfx[%d] '%s' has no data\n", i, S_sfx[i].name);
