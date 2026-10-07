@@ -385,6 +385,42 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 	{
 		return NULL;
 	}
+
+	idSoundSample_OpenAL* openalLeadinSample = (idSoundSample_OpenAL*)leadinSample;
+	idSoundSample_OpenAL * openalLoopingSample = (idSoundSample_OpenAL*)loopingSample;
+	
+	// Resolve missing hardware buffers once before walking the free-voice
+	// list. Create() also has a defensive lazy retry, but doing it there for
+	// every candidate can multiply one unsupported/transient sample failure
+	// into many upload attempts and warnings in a single frame.
+	if (openalLeadinSample->openalBuffer == 0)
+	{
+		if (!openalLeadinSample->IsLoaded() || openalLeadinSample->GetOpenALBufferFormat() == AL_NONE)
+		{
+			return NULL;
+		}
+		
+		openalLeadinSample->RecreateOpenALBuffer();
+		if (openalLeadinSample->openalBuffer == 0)
+		{
+			return NULL;
+		}
+	}
+	
+	if (openalLoopingSample != NULL && openalLoopingSample != openalLeadinSample && openalLoopingSample->openalBuffer == 0)
+	{
+		if (!openalLoopingSample->IsLoaded() || openalLoopingSample->GetOpenALBufferFormat() == AL_NONE)
+		{
+			return NULL;
+		}
+		
+		openalLoopingSample->RecreateOpenALBuffer();
+		if (openalLoopingSample->openalBuffer == 0)
+		{
+			return NULL;
+		}
+	}
+
 	if( loopingSample != NULL )
 	{
 		// OpenAL sources may be rebound to a different static-buffer format
