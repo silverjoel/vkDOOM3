@@ -1371,9 +1371,10 @@ void I_InitSound()
 				// later if this allocation fails transiently.
 				if (!I_EnsureSfxBuffer(i)) {
 					printf("[doomclassic] warning: SFX buffer %d is unavailable\n", i);
+				}
 			} else {
-				// Log missing sound data for debugging
-				printf("[doomclassic] warning: S_sfx[%d] '%s' has no data\n", i, S_sfx[i].name);
+					// Log missing sound data for debugging
+					printf("[doomclassic] warning: S_sfx[%d] '%s' has no data\n", i, S_sfx[i].name);
 			}
 		}
 
