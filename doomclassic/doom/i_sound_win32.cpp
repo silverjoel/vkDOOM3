@@ -422,6 +422,53 @@ int I_GetSfxLumpNum(sfxinfo_t* sfx)
 
 /*
 ======================
+I_EnsureSfxBuffer
+
+Classic SFX buffers are normally created with the OpenAL context and populated
+when Classic Doom initializes. If creation or upload failed transiently, retry
+that one buffer lazily when the sound is actually requested instead of leaving
+the SFX unavailable until the next full sound-system restart.
+======================
+*/
+static bool I_EnsureSfxBuffer(int id)
+{
+	if (id <= 0 || id >= NUMSFX) {
+		return false;
+	}
+	
+	if (alBuffers[id] != 0) {
+		return true;
+	}
+	
+	if (!soundHardwareInitialized || S_sfx[id].data == NULL || lengths[id] <= 0) {
+		return false;
+	}
+	
+	ALuint buffer = 0;
+	alGetError();
+	alGenBuffers(1, &buffer);
+	ALenum alError = alGetError();
+	if (alError != AL_NO_ERROR || buffer == 0) {
+		printf("[doomclassic] failed to recreate SFX buffer %d: 0x%X\n", id, alError);
+		return false;
+	}
+	
+	alBufferData(buffer, SFX_SAMPLETYPE, (byte*)S_sfx[id].data, lengths[id], SFX_RATE);
+	alError = alGetError();
+	if (alError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to repopulate SFX buffer %d: 0x%X\n", id, alError);
+		alGetError();
+		alDeleteBuffers(1, &buffer);
+		alGetError();
+		return false;
+	}
+	
+	alBuffers[id] = buffer;
+	return true;
+}
+
+/*
+======================
 I_RetireFailedSoundSource
 
 An OpenAL source that has produced a state/setup error is no longer trusted.
@@ -474,7 +521,11 @@ I_StartSound2
 //
 int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, int pitch, int priority, int handle)
 {
-	if (!soundHardwareInitialized || id <= 0 || id >= NUMSFX || alBuffers[id] == 0 || handle <= 0) {
+	if (!soundHardwareInitialized || id <= 0 || id >= NUMSFX || handle <= 0) {
+		return 0;
+	}
+	
+	if (!I_EnsureSfxBuffer(id)) {
 		return 0;
 	}
 
