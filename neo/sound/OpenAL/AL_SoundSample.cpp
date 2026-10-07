@@ -1233,16 +1233,18 @@ void idSoundSample_OpenAL::FreeData()
 		alDeleteBuffers( 1, &openalBuffer );
 		if( CheckALErrors() != AL_NO_ERROR )
 		{
-			common->Error( "idSoundSample_OpenAL::FreeData: error unloading data from OpenAL hardware buffer" );
-		}
-		else
-		{
-			openalBuffer = 0;
+			// A device/context failure here should not turn a level-load purge
+			// into a fatal engine error. The buffer name is context-local and
+			// this sample is being unloaded, so discard the cached name and
+			// recover through the normal full sound restart. Context teardown
+			// will reclaim any buffer object the driver could not delete.
+			idLib::Warning("idSoundSample_OpenAL::FreeData: error unloading OpenAL buffer for '%s'; requesting sound restart", GetName());
+			soundSystemLocal.SetNeedsRestart();
 		}
 	}
 
 	// Always clear the cached name. It may refer to an object from a context
-	// that has already been destroyed.
+	// that has already been destroyed or one being abandoned for restart.
 	openalBuffer = 0;
 }
 
