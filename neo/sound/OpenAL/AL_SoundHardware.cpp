@@ -279,6 +279,11 @@ void idSoundHardware_OpenAL::Init()
 	{
 		freeVoices[i] = &voices[i];
 	}
+
+	// This context now reflects the currently selected playback device.
+	// Runtime changes are handled by Update() through the normal full sound
+	// restart path so all context-local OpenAL buffers are rebuilt safely.
+	s_device.ClearModified();
 }
 
 /*
@@ -456,6 +461,18 @@ idSoundHardware_OpenAL::Update
 */
 void idSoundHardware_OpenAL::Update()
 {
+	// s_device is an archived runtime CVar, but opening another OpenAL device
+	// requires a new device/context pair. Never swap the context directly
+	// here because every resident idSoundSample owns a context-local AL buffer
+	// name. Request the sound system's normal restart, which mutes voices,
+	// tears down the old context, and re-uploads resident samples afterward.
+	if (s_device.IsModified())
+	{
+		s_device.ClearModified();
+		soundSystemLocal.SetNeedsRestart();
+		return;
+	}
+
 	if( openalDevice == NULL )
 	{
 		int nowTime = Sys_Milliseconds();
