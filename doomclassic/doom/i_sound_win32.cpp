@@ -197,6 +197,36 @@ static int I_AllocateSoundHandle()
 
 /*
 ======================
+I_FindPendingSoundEvent
+======================
+*/
+static int I_FindPendingSoundEvent(int handle, int player)
+{
+	if (handle <= 0)
+	{
+		return -1;
+	}
+	
+	for (int i = 0; i < (int)(sizeof(soundEvents) / sizeof(soundEvents[0])); ++i)
+	{
+		if (soundEvents[i].handle != handle)
+		{
+			continue;
+		}
+		
+		if (player >= 0 && soundEvents[i].player != player)
+		{
+			continue;
+		}
+		
+		return i;
+	}
+	
+	return -1;
+}
+
+/*
+======================
 getsfx
 ======================
 */
@@ -561,7 +591,17 @@ void I_StopSound(int handle, int player)
 	}
 
 	if (i == NUM_SOUNDBUFFERS)
+	{
+		// A split-screen sound may still be waiting in soundEvents[] and not
+		// have an OpenAL source yet. Cancel that deferred start when the Doom
+		// logical channel is stopped before I_ProcessSoundEvents() runs.
+		const int pendingEvent = I_FindPendingSoundEvent(handle, player);
+		if (pendingEvent >= 0)
+		{
+			memset(&soundEvents[pendingEvent], 0, sizeof(soundEvents[pendingEvent]));
+		}
 		return;
+	}
 
 	// Stop the sound. CPU-side state is cleared regardless of whether the
 	// OpenAL stop succeeds so a stale source cannot remain logically active.
@@ -591,6 +631,14 @@ int I_SoundIsPlaying(int handle)
 		return 0;
 	}
 
+	// Split-screen coalescing defers the actual OpenAL start until
+	// I_ProcessSoundEvents(). Keep the logical Doom channel alive while its
+	// unique handle is still queued for that deferred start.
+	if (I_FindPendingSoundEvent(handle, -1) >= 0)
+	{
+		return 1;
+	}
+
 	int i;
 	activeSound_t* sound;
 
@@ -600,6 +648,7 @@ int I_SoundIsPlaying(int handle)
 			continue;
 
 		if(sound->alSourceVoice == 0) {
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -615,6 +664,7 @@ int I_SoundIsPlaying(int handle)
 		const ALenum stateError = alGetError();
 		if (stateError != AL_NO_ERROR) {
 			// A source whose state cannot be queried is no longer trustworthy.
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -629,6 +679,7 @@ int I_SoundIsPlaying(int handle)
 		}
 
 		if (sourceState == AL_STOPPED || sourceState == AL_INITIAL) {
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -702,6 +753,7 @@ void I_UpdateSound(void)
 		}
 
 		if (sound->alSourceVoice == 0) {
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -716,6 +768,7 @@ void I_UpdateSound(void)
 		alGetSourcei(sound->alSourceVoice, AL_SOURCE_STATE, &sourceState);
 		const ALenum stateError = alGetError();
 		if (stateError != AL_NO_ERROR) {
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -726,6 +779,7 @@ void I_UpdateSound(void)
 		}
 
 		if (sourceState == AL_STOPPED || sourceState == AL_INITIAL) {
+			sound->handle = 0;
 			sound->id = 0;
 			sound->valid = 0;
 			sound->start = 0;
@@ -751,6 +805,7 @@ void I_UpdateSound(void)
 				alSourceStop(sound->alSourceVoice);
 				alGetError();
 
+				sound->handle = 0;
 				sound->id = 0;
 				sound->valid = 0;
 				sound->start = 0;
