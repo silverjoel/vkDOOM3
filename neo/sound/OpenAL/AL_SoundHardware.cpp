@@ -583,8 +583,16 @@ void idSoundHardware_OpenAL::Update()
 
 	if (CheckALErrors() != AL_NO_ERROR)
 	{
-		idLib::Warning( "OpenAL listener update failed; requesting sound restart");
-		soundSystemLocal.SetNeedsRestart();
+		// Treat a failed core listener operation like the other device/context
+		// failure paths above. A persistently broken replacement context must
+		// not turn into a full sound restart every rendered frame.
+		const int nowTime = Sys_Milliseconds();
+		if (lastResetTime + 1000 < nowTime)
+		{
+			lastResetTime = nowTime;
+			idLib::Warning("OpenAL listener update failed; requesting sound restart");
+			soundSystemLocal.SetNeedsRestart();
+		}
 		return;
 	}
 }
