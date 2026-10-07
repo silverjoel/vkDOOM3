@@ -470,6 +470,24 @@ void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 
 /*
 ========================
+idSoundHardware_OpenAL::ReleaseFreeVoiceResources
+========================
+*/
+void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
+{
+	// Free only source objects that are not owned by an active sound channel.
+	// This is used when Classic Doom starts so its lazily-created sources can
+	// share the same device source budget with BFG without destroying voices
+	// that are still playing. The BFG allocator recreates these source objects
+	// lazily the next time the corresponding free voice is needed.
+	for (int i = 0; i < freeVoices.Num(); ++i)
+	{
+		freeVoices[i]->DestroyInternal();
+	}
+}
+
+/*
+========================
 idSoundHardware_OpenAL::Update
 ========================
 */

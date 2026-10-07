@@ -1234,6 +1234,14 @@ void I_InitSound()
 		doom_Listener.Position.y = 0.f;
 		doom_Listener.Position.z = 0.f;
 
+		// Doom 3 keeps stopped OpenAL source objects cached for fast voice
+		// reuse. Release only those idle BFG sources before Classic allocates
+		// its music/SFX sources so both backends can share devices with a
+		// limited source count. Active BFG voices remain untouched.
+		if (soundHardwareInitialized) {
+			soundSystemLocal.hardware.ReleaseFreeVoiceResources();
+		}
+
 		// Classic music gets the first Classic-owned OpenAL source. SFX
 		// sources are allocated lazily afterward, so a limited-source device
 		// cannot lose music merely because 64 dormant SFX channels were

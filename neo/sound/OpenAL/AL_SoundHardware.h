@@ -53,6 +53,7 @@ public:
 	
 	idSoundVoice* 	AllocateVoice( const idSoundSample* leadinSample, const idSoundSample* loopingSample );
 	void			FreeVoice( idSoundVoice* voice );
+	void			ReleaseFreeVoiceResources();
 	
 	// listDevices needs this
 	ALCdevice* 		GetOpenALDevice() const
