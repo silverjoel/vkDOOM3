@@ -631,9 +631,39 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 	CheckALErrors();
 	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAIN, 1.0f );
 	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAINHF, gainHF );
-	alSourcei( openalSource, AL_DIRECT_FILTER, openalLowPassFilter );
-	CheckALErrors();
+
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		// The filter object still belongs to this voice, but its parameter
+		// state can no longer be trusted. Detach it before retiring it so a
+		// failed optional EFX update cannot leave a stale muffling filter on
+		// the source or be reused as a configured filter later.
+		openalLowPassFilterConfigured = false;
+		
+		CheckALErrors();
+		alSourcei(openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL);
+		const ALenum detachError = CheckALErrors();
+		
+		if (detachError != AL_NO_ERROR)
+		{
+			// Keep the filter handle tracked. A context restart will safely
+			// reclaim both the source attachment and the filter object.
+			soundSystemLocal.SetNeedsRestart();
+			return;
+		}
+		
+		if (!DestroyOcclusionFilter())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return;
 	}
+	alSourcei( openalSource, AL_DIRECT_FILTER, openalLowPassFilter );
+	// Attaching EFX is optional. Consume an attachment error without
+	// invalidating an otherwise correctly configured filter.
+	CheckALErrors();
+}
+
 
 /*
 ========================
