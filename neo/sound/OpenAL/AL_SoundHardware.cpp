@@ -497,7 +497,29 @@ void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 		return;
 	}
 
-	voice->Stop();
+	idSoundVoice_OpenAL* openalVoice = static_cast<idSoundVoice_OpenAL*>(voice);
+	
+	// FreeVoice() is also used by the sound-system Restart() mute pass and by
+	// out-of-band StopAllSounds() calls. Those paths can run after the owned
+	// OpenAL context has been lost or another context has become current, but
+	// before hardware.Shutdown() gets a chance to restore/destroy it. Never
+	// issue source calls with stale numeric names against the wrong context.
+	if (openalContext != NULL && alcGetCurrentContext() == openalContext)
+	{
+		openalVoice->Stop();
+	}
+	else
+	{
+		// The old context will reclaim its source/filter objects when it is
+		// destroyed. Clear only this voice's cached context-local names so the
+		// logical channel can release the voice safely in the meantime.
+		openalVoice->InvalidateContextObjects();
+		
+		if (openalContext != NULL)
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+	}
 	
 	// OpenAL Stop()/FlushSourceBuffers() is synchronous. The source is stopped
 	// and its buffer/queue has already been detached, so the voice can be
