@@ -264,6 +264,49 @@ static int I_FindPendingSoundEvent(int handle, int player)
 
 /*
 ======================
+I_RetireFailedSoundSource
+
+An OpenAL source that has produced a state/setup error is no longer trusted.
+Release it when possible and always clear the cached name so the lazy Classic
+allocator can create a fresh source for this logical channel later.
+======================
+*/
+static void I_RetireFailedSoundSource(activeSound_t* sound)
+{
+	if (sound == NULL) {
+		return;
+	}
+
+	if (sound->alSourceVoice != 0 && soundHardwareInitialized && soundSystemLocal.hardware.IsContextCurrent()) {
+		ALuint source = sound->alSourceVoice;
+		alGetError();
+		if (alIsSource(source) == AL_TRUE) {
+			alSourceStop(source);
+			alSourcei(source, AL_BUFFER, 0);
+			alDeleteSources(1, &source);
+		}
+
+		const ALenum cleanupError = alGetError();
+		if (cleanupError != AL_NO_ERROR) {
+			printf("[doomclassic] failed to retire SFX source: 0x%X; requesting sound restart\n", cleanupError);
+			// The cached name is discarded below. Rebuild the shared context
+			// so any object the driver failed to release is reclaimed.
+			soundSystemLocal.SetNeedsRestart();
+		}
+	}
+
+	sound->alSourceVoice = 0;
+	sound->handle = 0;
+	sound->id = 0;
+	sound->valid = 0;
+	sound->start = 0;
+	sound->player = -1;
+	sound->localSound = false;
+	sound->originator = NULL;
+}
+
+/*
+======================
 I_CalculateRelativeSoundPosition
 
 The original XAudio2 backend calculated a separate output matrix for each
@@ -414,21 +457,20 @@ void I_SetSfxVolume(int volume)
 		return;
 	}
 	
-	alGetError();
 	for (int i = 0; i < NUM_SOUNDBUFFERS; ++i) {
 		activeSound_t * sound = &activeSounds[i];
 		if (!sound->valid || sound->alSourceVoice == 0) {
 			continue;
 		}
 		
+		alGetError();
 		alSourcef(sound->alSourceVoice, AL_GAIN, x_SoundVolume);
-	}
 	
-	// Do not leave a volume-update failure as a sticky error for unrelated
-	// source state queries later in the frame.
-	const ALenum volumeError = alGetError();
-	if (volumeError != AL_NO_ERROR) {
-		printf("[doomclassic] failed to update active SFX volume: 0x%X\n", volumeError);
+		const ALenum volumeError = alGetError();
+		if (volumeError != AL_NO_ERROR) {
+			printf("[doomclassic] failed to update SFX source %d volume: 0x%X\n", i, volumeError);
+			I_RetireFailedSoundSource(sound);
+		}
 	}
 }
 
@@ -502,43 +544,6 @@ static bool I_EnsureSfxBuffer(int id)
 	
 	alBuffers[id] = buffer;
 	return true;
-}
-
-/*
-======================
-I_RetireFailedSoundSource
-
-An OpenAL source that has produced a state/setup error is no longer trusted.
-Release it when possible and always clear the cached name so the lazy Classic
-allocator can create a fresh source for this logical channel later.
-======================
-*/
-static void I_RetireFailedSoundSource(activeSound_t * sound)
-{
-	if (sound == NULL) {
-		return;
-	}
-	
-	if (sound->alSourceVoice != 0 && soundHardwareInitialized && soundSystemLocal.hardware.IsContextCurrent()) {
-		ALuint source = sound->alSourceVoice;
-		alGetError();
-		if (alIsSource(source) == AL_TRUE) {
-			alSourceStop(source);
-			alSourcei(source, AL_BUFFER, 0);
-			alDeleteSources(1, &source);
-		}
-		// Consume any cleanup error so it cannot poison the next allocation.
-		alGetError();
-	}
-	
-	sound->alSourceVoice = 0;
-	sound->handle = 0;
-	sound->id = 0;
-	sound->valid = 0;
-	sound->start = 0;
-	sound->player = -1;
-	sound->localSound = false;
-	sound->originator = NULL;
 }
 
 /*
@@ -961,39 +966,26 @@ void I_UpdateSound(void)
 		}
 		
 		if (sound->localSound) {
+			alGetError();
 			alSource3f(sound->alSourceVoice, AL_POSITION, 0.0f, 0.0f, 0.0f);
+			const ALenum positionError = alGetError();
+			if (positionError != AL_NO_ERROR) {
+				printf("[doomclassic] failed to update local SFX source position: 0x%X\n", positionError);
+				I_RetireFailedSoundSource(sound);
+				continue;
+			}
 		} else {
 			if (sound->originator == NULL || sound->player < 0 || sound->player >= MAXPLAYERS) {
 				// A non-local source without an originator cannot be positioned
 				// safely. Stop it before retiring the CPU-side channel so it
 				// cannot continue as an orphaned "ghost" sound.
-				alGetError();
-				alSourceStop(sound->alSourceVoice);
-				alGetError();
-
-				sound->handle = 0;
-				sound->id = 0;
-				sound->valid = 0;
-				sound->start = 0;
-				sound->player = -1;
-				sound->localSound = false;
-				sound->originator = NULL;
+				I_RetireFailedSoundSource(sound);
 				continue;
 			}
 			
 			mobj_t* playerObj = ::g->players[sound->player].mo;
 			if (playerObj == NULL) {
-				alGetError();
-				alSourceStop(sound->alSourceVoice);
-				alGetError();
-				
-				sound->handle = 0;
-				sound->id = 0;
-				sound->valid = 0;
-				sound->start = 0;
-				sound->player = -1;
-				sound->localSound = false;
-				sound->originator = NULL;
+				I_RetireFailedSoundSource(sound);
 				continue;
 			}
 			
@@ -1003,8 +995,14 @@ void I_UpdateSound(void)
 			if (!I_CalculateRelativeSoundPosition(sound->originator, playerObj, x, y, z)) {
 				continue;
 			}
-			
+			alGetError();
 			alSource3f(sound->alSourceVoice, AL_POSITION, x, y, z);
+			const ALenum positionError = alGetError();
+			if (positionError != AL_NO_ERROR) {
+				printf("[doomclassic] failed to update spatial SFX source position: 0x%X\n", positionError);
+				I_RetireFailedSoundSource(sound);
+				continue;
+			}
 		}
 	}
 }
@@ -1907,7 +1905,14 @@ void I_UpdateMusic(void)
 
 	if (alMusicSourceVoice) {
 		// Set the volume
+		alGetError();
 		alSourcef(alMusicSourceVoice, AL_GAIN, x_MusicVolume * GLOBAL_VOLUME_MULTIPLIER);
+		const ALenum gainError = alGetError();
+		if (gainError != AL_NO_ERROR) {
+			printf("[doomclassic] failed to update music gain: 0x%X\n", gainError);
+			I_HandleMusicHardwareFailure();
+			return;
+		}
 	}
 
 	if (!waitingForMusic) {
@@ -1995,9 +2000,21 @@ void I_PauseSong(int handle)
 	ALint sourceState = AL_INITIAL;
 	alGetError();
 	alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
-	if (alGetError() == AL_NO_ERROR && sourceState == AL_PLAYING) {
-		alSourcePause(alMusicSourceVoice);
+	const ALenum stateError = alGetError();
+	if (stateError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to query music source before pause: 0x%X\n", stateError);
+		I_HandleMusicHardwareFailure();
+		return;
+	}
+	
+	if (sourceState == AL_PLAYING) {
 		alGetError();
+		alSourcePause(alMusicSourceVoice);
+		const ALenum pauseError = alGetError();
+		if (pauseError != AL_NO_ERROR) {
+			printf("[doomclassic] failed to pause music source: 0x%X\n", pauseError);
+			I_HandleMusicHardwareFailure();
+		}
 	}
 }
 
@@ -2024,9 +2041,21 @@ void I_ResumeSong(int handle)
 	ALint sourceState = AL_INITIAL;
 	alGetError();
 	alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
-	if (alGetError() == AL_NO_ERROR && sourceState == AL_PAUSED) {
-		alSourcePlay(alMusicSourceVoice);
+	const ALenum stateError = alGetError();
+	if (stateError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to query music source before resume: 0x%X\n", stateError);
+		I_HandleMusicHardwareFailure();
+		return;
+	}
+	
+	if (sourceState == AL_PAUSED) {
 		alGetError();
+		alSourcePlay(alMusicSourceVoice);
+		const ALenum resumeError = alGetError();
+		if (resumeError != AL_NO_ERROR) {
+			printf("[doomclassic] failed to resume music source: 0x%X\n", resumeError);
+			I_HandleMusicHardwareFailure();
+		}
 	}
 }
 
@@ -2064,8 +2093,16 @@ void I_StopSong(int handle)
 	if (!alMusicSourceVoice) {
 		return;
 	}
-
+	alGetError();
 	alSourceStop(alMusicSourceVoice);
+	const ALenum stopError = alGetError();
+	if (stopError != AL_NO_ERROR) {
+		printf("[doomclassic] failed to stop music source: 0x%X; requesting sound restart\n", stopError);
+		// This was a logical stop, so do not restore the track. A full
+		// context restart is used only to guarantee that any ghost playback
+		// from the failed stop is torn down.
+		soundSystemLocal.SetNeedsRestart();
+	}
 }
 
 /*
