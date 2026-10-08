@@ -141,8 +141,9 @@ private:
 	// OpenAL rejected any part of the cleanup.
 	bool					FlushSourceBuffers();
 	
-	// Destroy the internal hardware resource
-	void					DestroyInternal();
+	// Destroy the internal hardware resource. Returns false when OpenAL
+	// rejected deletion of an owned source in the current live context.
+	bool					DestroyInternal();
 
 	// Clear cached AL object names without issuing AL calls. Used only when
 	// the owning context cannot be made current during hardware shutdown.

@@ -311,7 +311,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		{
 			if (!FlushSourceBuffers())
 			{
-				DestroyInternal();
+				if (!DestroyInternal())
+				{
+					soundSystemLocal.SetNeedsRestart();
+				}
 			}
 		}
 		
@@ -334,13 +337,25 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		// a source whose old playback/binding state is unknown.
 		if (!FlushSourceBuffers())
 		{
-			DestroyInternal();
+			if (!DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+				leadinSample = NULL;
+				loopingSample = NULL;
+				return false;
+			}
 		}
 	}
 	
 	if (!alIsSource(openalSource))
 	{
-		DestroyInternal();
+		if (!DestroyInternal())
+		{
+			soundSystemLocal.SetNeedsRestart();
+			leadinSample = NULL;
+			loopingSample = NULL;
+			return false;
+		}
 		CheckALErrors();
 		
 		openalSource = 0;
@@ -353,12 +368,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		
 		if (generateError != AL_NO_ERROR || validationError != AL_NO_ERROR || openalSource == 0 || generatedSourceValid != AL_TRUE)
 		{
-			if (openalSource != 0 && generatedSourceValid == AL_TRUE)
+			if (openalSource != 0 && !DestroyInternal())
 			{
-				alDeleteSources(1, &openalSource);
-				CheckALErrors();
+				soundSystemLocal.SetNeedsRestart();
 			}
-			openalSource = 0;
 			leadinSample = NULL;
 			loopingSample = NULL;
 			return false;
@@ -373,7 +386,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		// failure and then publish this source as reusable.
 		if (CheckALErrors() != AL_NO_ERROR)
 		{
-			DestroyInternal();
+			if (!DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+			}
 			return false;
 		}
 		
@@ -420,7 +436,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	// and consume their own extension errors.
 	if (CheckALErrors() != AL_NO_ERROR)
 	{
-		DestroyInternal();
+		if (!DestroyInternal())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
 		return false;
 	}
 
@@ -437,7 +456,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 
 	if( CheckALErrors() != AL_NO_ERROR )
 	{
-		DestroyInternal();
+		if (!DestroyInternal())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
 		return false;
 	}
 	
@@ -451,8 +473,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 idSoundVoice_OpenAL::DestroyInternal
 ========================
 */
-void idSoundVoice_OpenAL::DestroyInternal()
+bool idSoundVoice_OpenAL::DestroyInternal()
 {
+	bool sourceCleanupSucceeded = true;
+
 	if (openalSource != 0)
 	{
 		if( s_debugHardware.GetBool() )
@@ -468,7 +492,10 @@ void idSoundVoice_OpenAL::DestroyInternal()
 		CheckALErrors();
 		
 		alDeleteSources( 1, &openalSource );
-		CheckALErrors();
+		if (CheckALErrors() != AL_NO_ERROR)
+		{
+			sourceCleanupSucceeded = false;
+		}
 	}
 
 	openalSource = 0;
@@ -476,6 +503,8 @@ void idSoundVoice_OpenAL::DestroyInternal()
 	coreParameterUpdateFailed = false;
 
 	DestroyOcclusionFilter();
+
+	return sourceCleanupSucceeded;
 }
 
 /*

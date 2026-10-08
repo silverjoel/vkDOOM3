@@ -614,9 +614,20 @@ void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
 		return;
 	}
 
+	bool cleanupFailed = false;
 	for (int i = 0; i < freeVoices.Num(); ++i)
 	{
-		freeVoices[i]->DestroyInternal();
+		if (!freeVoices[i]->DestroyInternal())
+		{
+			cleanupFailed = true;
+		}
+		
+	}
+	
+	if (cleanupFailed)
+	{
+		idLib::Warning("OpenAL failed to release one or more free BFG sources; requesting sound restart");
+		soundSystemLocal.SetNeedsRestart();
 	}
 }
 
