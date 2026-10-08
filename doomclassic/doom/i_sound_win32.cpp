@@ -1173,9 +1173,12 @@ void I_ShutdownSound(void)
 
 			if (soundHardwareInitialized && sound->alSourceVoice)
 			{
+				// Deleting an OpenAL source implicitly stops it and releases
+				// its buffer/queue references. Do not issue a separate stop
+				// or detach here: either could fail even if deletion succeeds,
+				// which would cause an unnecessary full sound restart.
+
 				alGetError();
-				alSourceStop(sound->alSourceVoice);
-				alSourcei(sound->alSourceVoice, AL_BUFFER, 0);
 				alDeleteSources(1, &sound->alSourceVoice);
 				sound->alSourceVoice = 0;
 				const ALenum cleanupError = alGetError();
