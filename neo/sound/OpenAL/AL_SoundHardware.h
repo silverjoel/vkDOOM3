@@ -60,33 +60,7 @@ public:
 	// Classic Doom also shares this OpenAL context and can run sound code
 	// outside idSoundSystemLocal::Render(). Let it cheaply verify ownership
 	// and confirmed device connectivity before issuing AL calls.
-	bool			IsContextCurrent() const
-	{
-		if (openalDevice == NULL || openalContext == NULL || alcGetCurrentContext() != openalContext)
-		{
-			return false;
-		}
-		
-		if (disconnectExtensionAvailable)
-		{
-			ALCint connected = ALC_TRUE;
-			
-			// ALC errors are sticky. Isolate this query just as Update() does.
-			// Only a successful explicit disconnect result makes the context
-			// unusable here; a query error is left to the normal hardware
-			// Update()/listener validation path.
-			alcGetError(openalDevice);
-			alcGetIntegerv(openalDevice, ALC_CONNECTED_EXT, 1, &connected);
-			const ALCenum connectionError = alcGetError(openalDevice);
-			
-			if (connectionError == ALC_NO_ERROR && connected == ALC_FALSE)
-			{
-				return false;
-			}
-		}
-		
-		return true;
-	}
+	bool			IsContextCurrent() const;
 	
 	// listDevices needs this
 	ALCdevice* 		GetOpenALDevice() const
