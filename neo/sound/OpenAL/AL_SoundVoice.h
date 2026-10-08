@@ -122,8 +122,9 @@ private:
 	// Returns true when all the buffers are finished processing
 	bool					IsPlaying();
 	
-	// Called after the voice has been stopped
-	void					FlushSourceBuffers();
+	// Stop the source and detach its static buffer/queue. Returns false if
+	// OpenAL rejected any part of the cleanup.
+	bool					FlushSourceBuffers();
 	
 	// Destroy the internal hardware resource
 	void					DestroyInternal();

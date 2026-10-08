@@ -308,7 +308,10 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	{
 		if( alIsSource(openalSource) )
 		{
-			FlushSourceBuffers();
+			if (!FlushSourceBuffers())
+			{
+				DestroyInternal();
+			}
 		}
 		
 		idLib::Warning(
@@ -325,10 +328,16 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	if( alIsSource( openalSource ) && CompatibleFormat( leadinSample ) )
 	{
 		// A reused OpenAL source may still have an old static buffer or queue
-		// attached. Clear it before configuring the new sample.
-		FlushSourceBuffers();
+		// attached. Clear it before configuring the new sample. If cleanup
+		// fails, retire the source and create a fresh one instead of reusing
+		// a source whose old playback/binding state is unknown.
+		if (!FlushSourceBuffers())
+		{
+			DestroyInternal();
+		}
 	}
-	else
+	
+	if (!alIsSource(openalSource))
 	{
 		DestroyInternal();
 		CheckALErrors();
@@ -425,9 +434,12 @@ void idSoundVoice_OpenAL::DestroyInternal()
 			idLib::Printf( "%dms: %i destroyed\n", Sys_Milliseconds(), openalSource );
 		}
 
+		// Deleting a playing source is legal in OpenAL, so deletion remains
+		// the final cleanup path even if stop/detach itself fails.
 		FlushSourceBuffers();
 		
 		alDeleteSources( 1, &openalSource );
+		CheckALErrors();
 	}
 
 	openalSource = 0;
@@ -724,7 +736,10 @@ int idSoundVoice_OpenAL::RestartAt(int64 offsetSamples)
 
 	if( queueLeadinAndLoop )
 	{
-		FlushSourceBuffers();
+		if (!FlushSourceBuffers())
+		{
+			return 0;
+		}
 	
 		ALuint queuedBuffers[2] =
 		{
@@ -956,11 +971,11 @@ bool idSoundVoice_OpenAL::IsPlaying()
 idSoundVoice_OpenAL::FlushSourceBuffers
 ========================
 */
-void idSoundVoice_OpenAL::FlushSourceBuffers()
+bool idSoundVoice_OpenAL::FlushSourceBuffers()
 {
 	if( !alIsSource( openalSource ) )
 	{
-		return;
+		return openalSource == 0;
 	}
 
 	// AL_BUFFER = AL_NONE is legal on a stopped/initial source and releases
@@ -968,12 +983,22 @@ void idSoundVoice_OpenAL::FlushSourceBuffers()
 	// simpler and safer than manually unqueueing every processed buffer.
 	CheckALErrors();
 	alSourceStop( openalSource );
+
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		return false;
+	}
+
 	alSourcei( openalSource, AL_BUFFER, 0 );
 	alSourcei( openalSource, AL_LOOPING, AL_FALSE );
 
-	CheckALErrors();
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		return false;
+	}
 
 	paused = true;
+	return true;
 }
 
 /*
@@ -1046,7 +1071,13 @@ void idSoundVoice_OpenAL::Stop()
 
 	// Flush even when our bookkeeping already says "paused".  A paused source
 	// may still have a static buffer or a lead-in/loop queue attached.
-	FlushSourceBuffers();
+	if (!FlushSourceBuffers())
+	{
+		idLib::Warning("idSoundVoice_OpenAL::Stop: failed to stop/detach source %u; retiring source", openalSource);
+		// The source is no longer trusted. DestroyInternal() will still try
+		// alDeleteSources(), which OpenAL permits even for a playing source.
+		DestroyInternal();
+	}
 }
 
 /*
