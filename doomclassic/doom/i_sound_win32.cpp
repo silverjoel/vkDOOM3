@@ -830,7 +830,16 @@ void I_StopSound(int handle, int player)
 	if (sound->alSourceVoice != 0) {
 		alGetError();
 		alSourceStop(sound->alSourceVoice);
-		alGetError();
+		const ALenum stopError = alGetError();
+		if (stopError != AL_NO_ERROR) {
+			printf("[doomclassic] failed to stop SFX source: 0x%X; retiring source\n", stopError);
+			// A rejected stop can leave audible ghost playback after the
+			// logical channel is gone. Retire the untrusted source so the
+			// context either releases it immediately or is rebuilt if
+			// cleanup itself fails.
+			I_RetireFailedSoundSource(sound);
+			return;
+		}
 	}
 
 	sound->handle = 0;
