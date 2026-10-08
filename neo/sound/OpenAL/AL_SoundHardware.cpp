@@ -193,10 +193,9 @@ void idSoundHardware_OpenAL::PrintALCInfo( ALCdevice* device )
 		
 	if( device )
 	{
-		idLib::Printf( "OpenAL extensions: %s", alGetString( AL_EXTENSIONS ) );
-		
-		//idLib::Printf("ALC extensions:");
-		//printList(alcGetString(device, ALC_EXTENSIONS), ' ');
+		// Keep this routine ALC-only. AL queries such as AL_EXTENSIONS require
+		// a current context and can fail merely because a device exists.
+		// Context-level AL information is reported by PrintALInfo().
 		CheckALCErrors( device );
 	}
 }
