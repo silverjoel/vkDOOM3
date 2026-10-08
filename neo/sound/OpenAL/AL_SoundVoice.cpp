@@ -455,7 +455,7 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	idSoundVoice_Base::SetInnerRadius(0.0f);
 	ApplySourceRadius();
 
-	if( CheckALErrors() != AL_NO_ERROR )
+	if (openalSource == 0 || CheckALErrors() != AL_NO_ERROR)
 	{
 		if (!DestroyInternal())
 		{
@@ -1260,7 +1260,7 @@ float idSoundVoice_OpenAL::GetAmplitude()
 	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
 	alGetSourcei( openalSource, AL_SAMPLE_OFFSET, &sampleOffset );
 	
-	if (openalSource == 0 || CheckALErrors() != AL_NO_ERROR)
+	if (CheckALErrors() != AL_NO_ERROR)
 	{
 		return 0.0f;
 	}
