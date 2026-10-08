@@ -478,6 +478,15 @@ static bool I_EnsureSfxBuffer(int id)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || buffer == 0) {
 		printf("[doomclassic] failed to recreate SFX buffer %d: 0x%X\n", id, alError);
+		if (buffer != 0) {
+			alGetError();
+			if (alIsBuffer(buffer) == AL_TRUE) {
+				alDeleteBuffers(1, &buffer);
+			}
+		// A failed cleanup must not contaminate the next lazy retry.
+		alGetError();
+		}
+		buffer = 0;
 		return false;
 	}
 	
@@ -1143,6 +1152,13 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 		const ALenum bufferError = alGetError();
 		if (bufferError != AL_NO_ERROR || alBuffers[i] == 0) {
 			printf("[doomclassic] failed to create SFX buffer %d: 0x%X\n", i, bufferError);
+			if (alBuffers[i] != 0) {
+				alGetError();
+				if (alIsBuffer(alBuffers[i]) == AL_TRUE) {
+					alDeleteBuffers(1, &alBuffers[i]);
+				}
+				alGetError();
+			}
 			alBuffers[i] = 0;
 		}
 	}
@@ -1351,6 +1367,13 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || soundchannel->alSourceVoice == 0) {
 		printf("[doomclassic] failed to create SFX source %d: 0x%X\n", channel, alError);
+		if (soundchannel->alSourceVoice != 0) {
+			alGetError();
+			if (alIsSource(soundchannel->alSourceVoice) == AL_TRUE) {
+				alDeleteSources(1, &soundchannel->alSourceVoice);
+			}
+			alGetError();
+		}
 		soundchannel->alSourceVoice = 0;
 		return;
 	}
@@ -1515,6 +1538,13 @@ void I_InitMusic(void)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || alMusicSourceVoice == 0) {
 		printf("[doomclassic] failed to create music source: 0x%X\n", alError);
+		if (alMusicSourceVoice != 0) {
+			alGetError();
+			if (alIsSource(alMusicSourceVoice) == AL_TRUE) {
+				alDeleteSources(1, &alMusicSourceVoice);
+			}
+			alGetError();
+		}
 		alMusicSourceVoice = 0;
 		Timidity_Shutdown();
 		return;

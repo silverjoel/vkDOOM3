@@ -337,8 +337,17 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 
 		alGenSources( 1, &openalSource );
 
-		if( CheckALErrors() != AL_NO_ERROR || !alIsSource(openalSource) )
+		const ALenum generateError = CheckALErrors();
+		const ALboolean generatedSourceValid = openalSource != 0 ? alIsSource(openalSource) : AL_FALSE;
+		const ALenum validationError = CheckALErrors();
+		
+		if (generateError != AL_NO_ERROR || validationError != AL_NO_ERROR || openalSource == 0 || generatedSourceValid != AL_TRUE)
 		{
+			if (openalSource != 0 && generatedSourceValid == AL_TRUE)
+			{
+				alDeleteSources(1, &openalSource);
+				CheckALErrors();
+			}
 			openalSource = 0;
 			leadinSample = NULL;
 			loopingSample = NULL;
@@ -463,8 +472,16 @@ bool idSoundVoice_OpenAL::EnsureOcclusionFilter()
 	
 	CheckALErrors();
 	qalGenFilters( 1, &openalLowPassFilter );
-	if( CheckALErrors() != AL_NO_ERROR || openalLowPassFilter == 0 )
+	const ALenum generateError = CheckALErrors();
+	if (generateError != AL_NO_ERROR || openalLowPassFilter == 0)
 	{
+		// EFX allocation is optional, but a nonzero name returned together
+		// with an error must not become unreachable on repeated retries.
+		if (openalLowPassFilter != 0)
+		{
+			qalDeleteFilters(1, &openalLowPassFilter);
+			CheckALErrors();
+		}
 		openalLowPassFilter = 0;
 		return false;
 	}

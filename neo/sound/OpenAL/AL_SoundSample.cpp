@@ -766,11 +766,22 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 	alGenBuffers( 1, &openalBuffer );
 	
 	const ALenum generateError = CheckALErrors();
-	if (generateError != AL_NO_ERROR || openalBuffer == 0 || alIsBuffer(openalBuffer) == AL_FALSE)
+	const ALboolean generatedBufferValid = openalBuffer != 0 ? alIsBuffer(openalBuffer) : AL_FALSE;
+	const ALenum validationError = CheckALErrors();
+	if (generateError != AL_NO_ERROR || validationError != AL_NO_ERROR || openalBuffer == 0 || generatedBufferValid != AL_TRUE)
 	{
 		idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: could not generate OpenAL buffer for '%s' (0x%X)", GetName(), generateError);
+
+		// Do not discard a nonzero name returned by a failed generation call.
+		// If the implementation did create a valid object before reporting an
+		// error, reclaim it now so repeated lazy retries cannot leak buffers.
+		if (openalBuffer != 0 && generatedBufferValid == AL_TRUE)
+		{
+			alDeleteBuffers(1, &openalBuffer);
+			CheckALErrors();
+		}
+
 		openalBuffer = 0;
-		CheckALErrors();
 		return;
 	}
 	
