@@ -305,6 +305,7 @@ void idSoundHardware_OpenAL::Shutdown()
 	// All OpenAL sources and buffers must be released while this context is
 	// still valid and current.
 	bool contextCurrent = false;
+	bool contextUsable = false;
 	
 	if( openalContext != NULL )
 	{
@@ -323,6 +324,14 @@ void idSoundHardware_OpenAL::Shutdown()
 	}
 
 	if (contextCurrent)
+	{
+		// A context can remain current after ALC_EXT_disconnect reports that
+		// its playback device is gone. Do not issue source/filter/buffer calls
+		// in that state; destroying the context below will reclaim its objects.
+		contextUsable = IsContextCurrent();
+	}
+
+	if (contextUsable)
 	{
 		for (int i = 0; i < voices.Num(); i++)
 		{
@@ -385,6 +394,11 @@ idSoundHardware_OpenAL::AllocateVoice
 idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadinSample, const idSoundSample* loopingSample )
 {
 	if( leadinSample == NULL )
+	{
+		return NULL;
+	}
+
+	if (!IsContextCurrent())
 	{
 		return NULL;
 	}
@@ -504,7 +518,7 @@ void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 	// OpenAL context has been lost or another context has become current, but
 	// before hardware.Shutdown() gets a chance to restore/destroy it. Never
 	// issue source calls with stale numeric names against the wrong context.
-	if (openalContext != NULL && alcGetCurrentContext() == openalContext)
+	if (IsContextCurrent())
 	{
 		openalVoice->Stop();
 	}
@@ -547,6 +561,24 @@ void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
 	// share the same device source budget with BFG without destroying voices
 	// that are still playing. The BFG allocator recreates these source objects
 	// lazily the next time the corresponding free voice is needed.
+
+	if (!IsContextCurrent())
+	{
+		// Never destroy context-local source/filter names against another/no
+		// context or a confirmed disconnected device. The old context will
+		// reclaim the actual objects when the pending full restart destroys it.
+		for (int i = 0; i < freeVoices.Num(); ++i)
+		{
+			freeVoices[i]->InvalidateContextObjects();
+		}
+		
+		if (openalContext != NULL)
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return;
+	}
+
 	for (int i = 0; i < freeVoices.Num(); ++i)
 	{
 		freeVoices[i]->DestroyInternal();
