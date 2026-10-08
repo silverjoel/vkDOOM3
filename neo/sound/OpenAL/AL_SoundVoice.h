@@ -91,10 +91,16 @@ public:
 	
 	void		SetPitch( float p )
 	{
-		// OpenAL requires AL_PITCH > 0. Preserve the lower-bound behavior of
-		// the old XAudio2 backend (XAUDIO2_MIN_FREQ_RATIO = 1 / 1024) so a
-		// zero, negative, or otherwise invalid slow-motion value cannot leave
-		// AL_INVALID_VALUE sticky on the source while retaining an old pitch.
+		// Preserve the old XAudio2 lower bound first. OpenAL Soft accepts a
+		// wider useful pitch range than the OpenAL 1.1 specification, so try
+		// the requested value before reducing Doom's slow-motion / timescale
+		// behavior. If a strict implementation rejects an out-of-spec pitch
+		// with AL_INVALID_VALUE, retry within the 0.5 .. 2.0 OpenAL 1.1 range.
+		//
+		// Keep other AL failures fatal to this voice: an invalid source,
+		// lost context, or device failure must still flow through the normal
+		// voice-release/restart path rather than being disguised as a pitch
+		// compatibility issue.
 		const float minPitch = 1.0f / 1024.0f;
 		const float openalPitch = (p > minPitch) ? p : minPitch;
 		
@@ -108,10 +114,28 @@ public:
 
 		alGetError();
 		alSourcef(openalSource, AL_PITCH, openalPitch);
-		if (alGetError() != AL_NO_ERROR)
+		const ALenum pitchError = alGetError();
+		if (pitchError == AL_NO_ERROR)
 		{
-			coreParameterUpdateFailed = true;
+			return;
 		}
+		
+		if (pitchError == AL_INVALID_VALUE && (openalPitch < 0.5f || openalPitch > 2.0f))
+		{
+			const float compatiblePitch = idMath::ClampFloat(0.5f, 2.0f, openalPitch);
+			
+			alGetError();
+			alSourcef(openalSource, AL_PITCH, compatiblePitch);
+			if (alGetError() == AL_NO_ERROR)
+			{
+				// Keep the cached voice state equal to what the hardware is
+				// actually using after the compatibility fallback.
+				idSoundVoice_Base::SetPitch(compatiblePitch);
+				return;
+			}
+		}
+		
+		coreParameterUpdateFailed = true;
 	}
 
 	void					SetOcclusion(float f)

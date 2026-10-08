@@ -605,16 +605,16 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 	
 	const float amount = idMath::ClampFloat( 0.0f, 1.0f, occlusion );
 	
-	if( amount <= 0.0f )
+	if (amount <= 0.0f)
 	{
-		if( openalLowPassFilter != 0 && OpenAL_LoadEfxFilterProcs() )
+		if (openalLowPassFilter != 0 && OpenAL_LoadEfxFilterProcs())
 		{
 			CheckALErrors();
-			alSourcei( openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL );
+			alSourcei(openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL);
 			if (CheckALErrors() != AL_NO_ERROR)
 			{
 				idLib::Warning("OpenAL failed to detach stale EFX filter from source %u; retiring source", openalSource);
-				
+
 				// A source that cannot shed its old direct filter must not be
 				// reused for an unoccluded sound. Deleting the source releases
 				// the filter attachment; DestroyInternal() then retires the
@@ -624,10 +624,10 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 					soundSystemLocal.SetNeedsRestart();
 				}
 				return;
+			}
+			return;
 		}
-		return;
 	}
-	
 	if( !EnsureOcclusionFilter() )
 	{
 		// EFX is optional. If the current OpenAL device does not expose it,
