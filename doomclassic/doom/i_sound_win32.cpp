@@ -2056,19 +2056,34 @@ void I_UpdateMusic(void)
 	}
 
 	if (!waitingForMusic) {
-		// A completed non-looping OpenAL static buffer remains attached to a
-		// stopped source. Record that logical completion so a later hardware
-		// restart does not resurrect it and pause/resume cannot restart it.
-		if (!currentMusicName.IsEmpty() && !currentMusicLooping && alMusicSourceVoice) {
+		// Once a selected track has started, its source should remain PLAYING
+		// until a non-looping track reaches AL_STOPPED. A state-query failure,
+		// or an unexpected stopped/initial/paused looping source while the
+		// game itself is not paused, means the music hardware is no longer
+		// trustworthy enough to leave the logical track selected silently.
+		if (!currentMusicName.IsEmpty() && alMusicSourceVoice) {
 			ALint sourceState = AL_INITIAL;
 			alGetError();
 			alGetSourcei(alMusicSourceVoice, AL_SOURCE_STATE, &sourceState);
 			const ALenum stateError = alGetError();
-			if (stateError == AL_NO_ERROR && sourceState == AL_STOPPED) {
+
+			if (stateError != AL_NO_ERROR) {
+				printf("[doomclassic] failed to query active music source state: 0x%X\n", stateError);
+				I_HandleMusicHardwareFailure();
+				return;
+			}
+			
+			if (!currentMusicLooping && sourceState == AL_STOPPED) {
+				// Natural completion of a one-shot track.
 				currentMusicName.Clear();
 				currentMusicLooping = 0;
 				restoreMusicAfterHardwareRestart = false;
 				musicReady = false;
+			}
+			else if (sourceState != AL_PLAYING) {
+				printf("[doomclassic] active music source entered unexpected state 0x%X; requesting recovery\n", sourceState);
+				I_HandleMusicHardwareFailure();
+				return;
 			}
 		}
 		return;
