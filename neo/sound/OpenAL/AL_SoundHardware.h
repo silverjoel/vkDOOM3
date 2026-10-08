@@ -55,7 +55,9 @@ public:
 	
 	idSoundVoice* 	AllocateVoice( const idSoundSample* leadinSample, const idSoundSample* loopingSample );
 	void			FreeVoice( idSoundVoice* voice );
-	void			ReleaseFreeVoiceResources();
+	// Release source objects owned only by free BFG voices. Returns false when
+	// live-context cleanup failed and a full sound restart has been requested.
+	bool			ReleaseFreeVoiceResources();
 
 	// Classic Doom also shares this OpenAL context and can run sound code
 	// outside idSoundSystemLocal::Render(). Let it cheaply verify ownership

@@ -1546,21 +1546,23 @@ void I_InitSound()
 		// I_InitSound() can be entered outside the main sound-system Render()
 		// path. Retire stale Classic AL names before any BFG-source handoff,
 		// music creation, or SFX buffer upload.
-		I_ValidateSoundHardwareContext();
+		const bool contextReady = I_ValidateSoundHardwareContext();
+		bool classicHardwareReady = contextReady && soundHardwareInitialized;
 
 		// Doom 3 keeps stopped OpenAL source objects cached for fast voice
 		// reuse. Release only those idle BFG sources before Classic allocates
 		// its music/SFX sources so both backends can share devices with a
 		// limited source count. Active BFG voices remain untouched.
-		if (soundHardwareInitialized) {
-			soundSystemLocal.hardware.ReleaseFreeVoiceResources();
+		if (classicHardwareReady) {
+			classicHardwareReady = soundSystemLocal.hardware.ReleaseFreeVoiceResources();
 		}
 
 		// Classic music gets the first Classic-owned OpenAL source. SFX
 		// sources are allocated lazily afterward, so a limited-source device
-		// cannot lose music merely because 64 dormant SFX channels were
-		// created first.
-		if (soundHardwareInitialized) {
+		// cannot lose music merely because 64 dormant SFX channels were created
+		// first. If releasing BFG free sources failed, keep all Classic hardware
+		// dormant until the already-requested full restart rebuilds the context.
+		if (classicHardwareReady) {
 			I_InitMusic();
 		}
 
@@ -1576,11 +1578,11 @@ void I_InitSound()
 				lengths[i] = lengths[S_sfx[i].link - S_sfx];
 			}
 			if (S_sfx[i].data) {
-				// Normal engine startup no longer reserves dormant Classic
-				// buffers. Create/populate them now that Classic is actually
-				// active; I_StartSound2() will retry an individual buffer
-				// later if this allocation fails transiently.
-				if (!I_EnsureSfxBuffer(i)) {
+				// Keep CPU sound data resident even when hardware allocation is
+				// deferred for a pending context restart. The restart path will
+				// recreate/populate all resident Classic buffers once S_initialized
+				// is published below.
+				if (classicHardwareReady && !I_EnsureSfxBuffer(i)) {
 					printf("[doomclassic] warning: SFX buffer %d is unavailable\n", i);
 				}
 			} else {

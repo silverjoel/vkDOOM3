@@ -589,7 +589,7 @@ void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 idSoundHardware_OpenAL::ReleaseFreeVoiceResources
 ========================
 */
-void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
+bool idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
 {
 	// Free only source objects that are not owned by an active sound channel.
 	// This is used when Classic Doom starts so its lazily-created sources can
@@ -611,7 +611,7 @@ void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
 		{
 			soundSystemLocal.SetNeedsRestart();
 		}
-		return;
+		return false;
 	}
 
 	bool cleanupFailed = false;
@@ -629,6 +629,8 @@ void idSoundHardware_OpenAL::ReleaseFreeVoiceResources()
 		idLib::Warning("OpenAL failed to release one or more free BFG sources; requesting sound restart");
 		soundSystemLocal.SetNeedsRestart();
 	}
+
+	return !cleanupFailed;
 }
 
 /*
