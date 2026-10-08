@@ -1839,7 +1839,26 @@ void I_PlaySong(const char* songname, int looping)
 		return;
 	}
 
-	I_StopSong(0);
+	const idStr requestedSong = songname != NULL ? songname : "";
+	if (!I_StopSong(0)) {
+		// The old source could not be stopped reliably. Do not continue
+		// configuring/uploading the replacement track against that source.
+		// I_StopSong() has already requested a full context restart; retain
+		// the new logical selection so the replacement context starts it.
+		currentMusicName = requestedSong;
+		currentMusicLooping = looping;
+		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
+		musicNeedsExplicitRetry = false;
+		if (!restoringMusicAfterHardwareRestart) {
+			musicHardwareRestartAttempted = false;
+			musicInitRetryAttempted = false;
+		}
+		if (DoomLib::GetPlayer() >= 0) {
+			::g->mus_looping = looping;
+		}
+		 return;
+		
+	}
 
 	// Clear old state
 	if (musicBuffer) {
@@ -2186,7 +2205,7 @@ void I_ResumeSong(int handle)
 I_StopSong
 ======================
 */
-void I_StopSong(int handle)
+bool I_StopSong(int handle)
 {
 	// This is a logical stop, not a hardware-only teardown. Do not allow the
 	// stopped track to be resurrected by a later sound-system restart.
@@ -2206,15 +2225,15 @@ void I_StopSong(int handle)
 	musicReady = false;
 
 	if (!Music_initialized) {
-		return;
+		return true;
 	}
 
 	if (!I_ValidateSoundHardwareContext()) {
-		return;
+		return false;
 	}
 	
 	if (!alMusicSourceVoice) {
-		return;
+		return true;
 	}
 	alGetError();
 	alSourceStop(alMusicSourceVoice);
@@ -2225,7 +2244,10 @@ void I_StopSong(int handle)
 		// context restart is used only to guarantee that any ghost playback
 		// from the failed stop is torn down.
 		soundSystemLocal.SetNeedsRestart();
+		return false;
 	}
+
+	return true;
 }
 
 /*

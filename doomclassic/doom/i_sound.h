@@ -102,7 +102,7 @@ int I_RegisterSong(void *data, int length);
 // Horrible thing to do, considering.
 void I_PlaySong( const char *songname, int looping );
 // Stops a song over 3 seconds.
-void I_StopSong(int handle);
+bool I_StopSong(int handle);
 // Returns true when the current logical track exhausted automatic hardware
 // recovery and an explicit same-track request should be allowed through.
 bool I_MusicNeedsExplicitRetry(void);
