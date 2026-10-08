@@ -1897,6 +1897,7 @@ void I_PlaySong(const char* songname, int looping)
 		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
 		if (!restoringMusicAfterHardwareRestart) {
 			musicInitRetryAttempted = false;
+			musicInitCleanupRestartAttempted = false;
 			if (retryingAbandonedTrack || explicitNewRequest) {
 				// A different track or an explicit retry of an abandoned
 				// same track begins a fresh bounded hardware-recovery
