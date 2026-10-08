@@ -235,6 +235,41 @@ static void FreeBuffer( void* p )
 
 /*
 ========================
+RetireOpenALBuffer
+
+Release an owned context-local buffer after a partial create/upload failure.
+The numeric name must never be silently discarded while the owning context
+remains live: if deletion itself fails, request a full context rebuild so the
+old object is reclaimed when that context is destroyed.
+========================
+*/
+static bool RetireOpenALBuffer(ALuint & buffer, const char* sampleName)
+{
+	if (buffer == 0)
+	{
+		return true;
+	}
+	
+	bool cleanupSucceeded = false;
+	if (soundSystemLocal.hardware.IsContextCurrent())
+	{
+		CheckALErrors();
+		alDeleteBuffers(1, &buffer);
+		cleanupSucceeded = (CheckALErrors() == AL_NO_ERROR);
+	}
+	
+	if (!cleanupSucceeded)
+	{
+		idLib::Warning("OpenAL failed to retire buffer for '%s'; requesting sound restart", sampleName != NULL ? sampleName : "<unnamed>");
+		soundSystemLocal.SetNeedsRestart();
+	}
+	
+	buffer = 0;
+	return cleanupSucceeded;
+}
+
+/*
+========================
 idSoundSample_OpenAL::idSoundSample_OpenAL
 ========================
 */
@@ -778,16 +813,14 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 	{
 		idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: could not generate OpenAL buffer for '%s' (0x%X)", GetName(), generateError);
 
-		// Do not discard a nonzero name returned by a failed generation call.
-		// If the implementation did create a valid object before reporting an
-		// error, reclaim it now so repeated lazy retries cannot leak buffers.
-		if (openalBuffer != 0 && generatedBufferValid == AL_TRUE)
+		// A nonzero name is an owned allocation candidate even when the
+		// validation query itself failed. Always attempt the authoritative
+		// delete instead of discarding the numeric name after alIsBuffer().
+		if (openalBuffer != 0)
 		{
-			alDeleteBuffers(1, &openalBuffer);
-			CheckALErrors();
+			RetireOpenALBuffer(openalBuffer, GetName());
 		}
 
-		openalBuffer = 0;
 		return;
 	}
 	
@@ -815,10 +848,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 				if (MS_ADPCM_decode((uint8**)&buffer, &bufferSize) < 0)
 				{
 					idLib::Warning("idSoundSample_OpenAL::CreateOpenALBuffer: could not decode ADPCM '%s' to 16 bit format", GetName());
-					CheckALErrors();
-					alDeleteBuffers(1, &openalBuffer);
-					CheckALErrors();
-					openalBuffer = 0;
+					RetireOpenALBuffer(openalBuffer, GetName());
 					return;
 				}
 				
@@ -863,10 +893,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		if (buffer == NULL || bytesPerFrame == 0 || playBegin < 0 || playLength <= 0 || (availableBytes % bytesPerFrame) != 0)
 		{
 			idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: invalid decoded playable range for '%s'", GetName());
-			CheckALErrors();
-			alDeleteBuffers(1, &openalBuffer);
-			CheckALErrors();
-			openalBuffer = 0;
+			RetireOpenALBuffer(openalBuffer, GetName());
 			return;
 		}
 		
@@ -877,10 +904,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		if (playBeginFrames > availableFrames || playLengthFrames > availableFrames - playBeginFrames)
 		{
 			idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: playable range exceeds decoded data for '%s'", GetName());
-			CheckALErrors();
-			alDeleteBuffers(1, &openalBuffer);
-			CheckALErrors();
-			openalBuffer = 0;
+			RetireOpenALBuffer(openalBuffer, GetName());
 			return;
 		}
 		
@@ -889,10 +913,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		if (uploadSizeBytes == 0 || uploadSizeBytes > static_cast<uint64>(INT_MAX))
 		{
 			idLib::Warning( "idSoundSample_OpenAL::CreateOpenALBuffer: playable data is too large for OpenAL '%s'", GetName());
-			CheckALErrors();
-			alDeleteBuffers(1, &openalBuffer);
-			CheckALErrors();
-			openalBuffer = 0;
+			RetireOpenALBuffer(openalBuffer, GetName());
 			return;
 		}
 		
@@ -917,10 +938,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 			if (remappedUploadBuffer == NULL)
 			{
 				idLib::Warning("idSoundSample_OpenAL::CreateOpenALBuffer: could not allocate 6.1 channel-remap buffer for '%s'", GetName());
-				CheckALErrors();
-				alDeleteBuffers(1, &openalBuffer);
-				CheckALErrors();
-				openalBuffer = 0;
+				RetireOpenALBuffer(openalBuffer, GetName());
 				return;
 			}
 			
@@ -973,10 +991,7 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		if( CheckALErrors() != AL_NO_ERROR )
 		{
 			idLib::Warning("idSoundSample_OpenAL::CreateOpenALBuffer: error loading '%s' into OpenAL hardware buffer", GetName());
-			CheckALErrors();
-			alDeleteBuffers(1, &openalBuffer);
-			CheckALErrors();
-			openalBuffer = 0;
+			RetireOpenALBuffer(openalBuffer, GetName());
 			return;
 		}
 	}
