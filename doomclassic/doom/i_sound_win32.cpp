@@ -1780,16 +1780,23 @@ void I_PlaySong(const char* songname, int looping)
 	const bool hardwareContextCurrent = I_ValidateSoundHardwareContext();
 
 	if (!Music_initialized) {
+		const idStr requestedSong = songname != NULL ? songname : "";
+		const bool explicitNewRequest = !restoringMusicAfterHardwareRestart && (requestedSong.Icmp(currentMusicName.c_str()) != 0 || currentMusicLooping != looping);
 		// S_ChangeMusic() records its logical selection even when the hardware
 		// start fails, and then suppresses repeated requests for that same
 		// track. Preserve the requested song here so a transient failure to
 		// create the Classic music source/buffer does not make the selected
 		// track permanently silent.
-		currentMusicName = songname != NULL ? songname : "";
+		currentMusicName = requestedSong;
 		currentMusicLooping = looping;
 		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
 		if (!restoringMusicAfterHardwareRestart) {
 			musicInitRetryAttempted = false;
+			if (explicitNewRequest) {
+				// A new logical song request begins a new bounded hardware
+				// recovery episode after an earlier track was abandoned.
+				musicHardwareRestartAttempted = false;
+			}
 		}
 		if (hardwareContextCurrent && soundHardwareInitialized && S_initialized) {
 			I_InitMusic();
@@ -1845,6 +1852,74 @@ void I_PlaySong(const char* songname, int looping)
 
 /*
 ======================
+I_DisableMusicHardwareAfterFailure
+
+The selected track has already consumed its one full sound-system recovery
+attempt. Retire only Classic Doom's music hardware so a persistent source
+failure cannot be retried/logged every frame. Classic SFX remain active.
+======================
+*/
+static void I_DisableMusicHardwareAfterFailure()
+{
+	bool cleanupFailed = false;
+	
+	if (soundSystemLocal.hardware.IsContextCurrent()) {
+		if (alMusicSourceVoice != 0) {
+			alGetError();
+			if (alIsSource(alMusicSourceVoice) == AL_TRUE) {
+				alDeleteSources(1, &alMusicSourceVoice);
+			}
+			if (alGetError() != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+		}
+		
+		if (alMusicBuffer != 0) {
+			alGetError();
+			if (alIsBuffer(alMusicBuffer) == AL_TRUE) {
+				alDeleteBuffers(1, &alMusicBuffer);
+			}
+			if (alGetError() != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+		}
+	}
+	
+	alMusicSourceVoice = 0;
+	alMusicBuffer = 0;
+	
+	if (musicBuffer != NULL) {
+		free(musicBuffer);
+		musicBuffer = NULL;
+	}
+	
+	if (Music_initialized) {
+		Timidity_Shutdown();
+	}
+	
+	doomMusic = NULL;
+	totalBufferSize = 0;
+	waitingForMusic = false;
+	musicReady = false;
+	Music_initialized = false;
+	
+	// No automatic retry remains for this failed track. A later explicit
+	// song request may initialize music again and starts a new recovery
+	// episode.
+	restoreMusicAfterHardwareRestart = false;
+	musicHardwareRestartAttempted = false;
+	musicInitRetryAttempted = true;
+	
+	if (cleanupFailed) {
+		// The track is deliberately not marked for restoration, so this
+		// restart exists only to destroy the context and reclaim an object
+		// that the driver refused to delete. It cannot form a restore loop.
+		soundSystemLocal.SetNeedsRestart();
+	}
+}
+
+/*
+======================
 I_HandleMusicHardwareFailure
 
 Give a selected Classic music track one full sound-system restart after an
@@ -1863,7 +1938,15 @@ static void I_HandleMusicHardwareFailure()
 		soundSystemLocal.SetNeedsRestart();
 	}
 	else {
-		restoreMusicAfterHardwareRestart = false;
+		// The replacement context has also failed (or there is no selected
+		// track to restore). Do not leave the bad music source alive for
+		// I_UpdateMusic() to touch again every frame.
+		if (musicHardwareRestartAttempted) {
+			I_DisableMusicHardwareAfterFailure();
+		}
+		else {
+			restoreMusicAfterHardwareRestart = false;
+		}
 	}
 }
 
