@@ -47,6 +47,16 @@ public:
 	void					SetPosition( const idVec3& p )
 	{
 		idSoundVoice_Base::SetPosition( p );
+
+		// Optional EFX cleanup can retire a source during the same logical
+		// channel update. Do not issue an AL call with source name 0 after
+		// that retirement; latch the failure so Update()/Start() can report
+		// it through the normal voice-release path.
+		if (openalSource == 0)
+		{
+			coreParameterUpdateFailed = true;
+			return;
+		}
 		
 		alGetError();
 		alSource3f( openalSource, AL_POSITION, -p.y, p.z, -p.x );
@@ -64,6 +74,13 @@ public:
 		const float openalGain = Max(0.0f, gain);
 		
 		idSoundVoice_Base::SetGain(openalGain);
+
+		if (openalSource == 0)
+		{
+			coreParameterUpdateFailed = true;
+			return;
+		}
+
 		alGetError();
 		alSourcef(openalSource, AL_GAIN, openalGain);
 		if (alGetError() != AL_NO_ERROR)
@@ -82,6 +99,13 @@ public:
 		const float openalPitch = (p > minPitch) ? p : minPitch;
 		
 		idSoundVoice_Base::SetPitch(openalPitch);
+
+		if (openalSource == 0)
+		{
+			coreParameterUpdateFailed = true;
+			return;
+		}
+
 		alGetError();
 		alSourcef(openalSource, AL_PITCH, openalPitch);
 		if (alGetError() != AL_NO_ERROR)
@@ -93,12 +117,29 @@ public:
 	void					SetOcclusion(float f)
 	{
 		idSoundVoice_Base::SetOcclusion(idMath::ClampFloat(0.0f, 1.0f, f));
+
+		// ApplyOcclusionFilter() deliberately retires an untrustworthy source
+		// when a direct-filter detach cannot be completed. DestroyInternal()
+		// clears its internal failure latch as part of teardown, so restore
+		// the logical failure state here for the active channel.
+		if (openalSource == 0)
+		{
+			coreParameterUpdateFailed = true;
+		}
+
 		ApplyOcclusionFilter();
 	}
 
 	void					SetInnerRadius(float r)
 	{
 		idSoundVoice_Base::SetInnerRadius(Max(0.0f, r));
+
+		if (openalSource == 0)
+		{
+			coreParameterUpdateFailed = true;
+			return;
+		}
+
 		ApplySourceRadius();
 	}
 	
