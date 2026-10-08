@@ -498,7 +498,10 @@ void S_ChangeMusic ( int			musicnum, int			looping )
 	else
 		music = &::g->S_music[musicnum];
 
-	if (::g->mus_playing == music)
+	// Normally a repeated request for the same logical track is redundant.
+	// If the backend exhausted its bounded hardware recovery, however, allow
+	// an explicit same-track request to start a fresh recovery episode.
+	if (::g->mus_playing == music && !I_MusicNeedsExplicitRetry())
 		return;
 
 	//I_Printf("S_ChangeMusic: Playing new track: '%s'\n", music->name);

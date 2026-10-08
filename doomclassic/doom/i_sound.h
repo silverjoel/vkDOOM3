@@ -103,6 +103,9 @@ int I_RegisterSong(void *data, int length);
 void I_PlaySong( const char *songname, int looping );
 // Stops a song over 3 seconds.
 void I_StopSong(int handle);
+// Returns true when the current logical track exhausted automatic hardware
+// recovery and an explicit same-track request should be allowed through.
+bool I_MusicNeedsExplicitRetry(void);
 // See above (register), then think backwards
 void I_UnRegisterSong(int handle);
 // Update Music (XMP), check for notifications

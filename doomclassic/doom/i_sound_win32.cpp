@@ -87,6 +87,7 @@ static bool	restoreMusicAfterHardwareRestart = false;
 static bool	musicHardwareRestartAttempted = false;
 static bool	restoringMusicAfterHardwareRestart = false;
 static bool	musicInitRetryAttempted = false;
+static bool	musicNeedsExplicitRetry = false;
 
 typedef struct {
 	float x;
@@ -1506,6 +1507,16 @@ void I_SetMusicVolume(int volume)
 
 /*
 ======================
+I_MusicNeedsExplicitRetry
+======================
+*/
+bool I_MusicNeedsExplicitRetry(void)
+ {
+	return musicNeedsExplicitRetry;
+}
+
+/*
+======================
 I_InitMusic
 ======================
 */
@@ -1779,6 +1790,12 @@ void I_PlaySong(const char* songname, int looping)
 {
 	const bool hardwareContextCurrent = I_ValidateSoundHardwareContext();
 
+	// An explicit request begins a new attempt even if the requested track
+	// matches the logical track that a previous hardware failure abandoned.
+	if (!restoringMusicAfterHardwareRestart) {
+		musicNeedsExplicitRetry = false;
+	}
+
 	if (!Music_initialized) {
 		const idStr requestedSong = songname != NULL ? songname : "";
 		const bool explicitNewRequest = !restoringMusicAfterHardwareRestart && (requestedSong.Icmp(currentMusicName.c_str()) != 0 || currentMusicLooping != looping);
@@ -1909,6 +1926,7 @@ static void I_DisableMusicHardwareAfterFailure()
 	restoreMusicAfterHardwareRestart = false;
 	musicHardwareRestartAttempted = false;
 	musicInitRetryAttempted = true;
+	musicNeedsExplicitRetry = !currentMusicName.IsEmpty();
 	
 	if (cleanupFailed) {
 		// The track is deliberately not marked for restoration, so this
@@ -1962,6 +1980,14 @@ void I_UpdateMusic(void)
 	}
 
 	if (!Music_initialized) {
+		// The one post-init retry has now been consumed. Keep the
+		// high-level selected-track identity, but allow a future
+		// explicit S_ChangeMusic() request for that same track to reach
+		// I_PlaySong() instead of being suppressed forever.
+		if (musicInitRetryAttempted && !currentMusicName.IsEmpty()) {
+			restoreMusicAfterHardwareRestart = false;
+			musicNeedsExplicitRetry = true;
+		}
 		// A hardware restart initializes Classic music before
 		// soundHardwareInitialized is published. If source/buffer creation
 		// failed at that point, give the retained logical track one bounded
@@ -2058,6 +2084,7 @@ void I_UpdateMusic(void)
 	restoreMusicAfterHardwareRestart = false;
 	musicHardwareRestartAttempted = false;
 	musicInitRetryAttempted = false;
+	musicNeedsExplicitRetry = false;
 }
 
 /*
@@ -2154,6 +2181,7 @@ void I_StopSong(int handle)
 	currentMusicName.Clear();
 	currentMusicLooping = 0;
 	restoreMusicAfterHardwareRestart = false;
+	musicNeedsExplicitRetry = false;
 
 	if (!restoringMusicAfterHardwareRestart) {
 		musicHardwareRestartAttempted = false;
