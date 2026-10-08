@@ -244,7 +244,11 @@ void idSoundSystemLocal::SetPlayingSoundWorld( idSoundWorld *soundWorld ) {
 
 	currentSoundWorld = static_cast<idSoundWorldLocal *>( soundWorld );
 
-	if ( oldSoundWorld != NULL ) {
+	// This update occurs outside Render(), so it does not pass through
+	// hardware.Update()'s context/device validation. Do not let the old
+	// world's voices issue AL calls using context-local source names when
+	// another/no context is current or the playback device is disconnected.
+	if (oldSoundWorld != NULL && hardware.IsContextCurrent()) {
 		oldSoundWorld->Update();
 	}
 }

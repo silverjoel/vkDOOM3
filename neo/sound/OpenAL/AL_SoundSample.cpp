@@ -1276,19 +1276,41 @@ void idSoundSample_OpenAL::FreeData()
 	openalDataDecoded = false;
 	defaultedForNoSound = false;
 	
-	if (openalBuffer != 0 && alcGetCurrentContext() != NULL && alIsBuffer(openalBuffer))
+	if (openalBuffer != 0)
 	{
-		CheckALErrors();
-		
-		alDeleteBuffers( 1, &openalBuffer );
-		if( CheckALErrors() != AL_NO_ERROR )
+		if (soundSystemLocal.hardware.IsContextCurrent())
 		{
-			// A device/context failure here should not turn a level-load purge
-			// into a fatal engine error. The buffer name is context-local and
-			// this sample is being unloaded, so discard the cached name and
-			// recover through the normal full sound restart. Context teardown
-			// will reclaim any buffer object the driver could not delete.
-			idLib::Warning("idSoundSample_OpenAL::FreeData: error unloading OpenAL buffer for '%s'; requesting sound restart", GetName());
+			// Isolate validation/deletion from sticky errors left by unrelated
+			// source operations. Never interpret this context-local numeric
+			// name while another OpenAL context is current.
+			CheckALErrors();
+			const ALboolean validBuffer = alIsBuffer(openalBuffer);
+			const ALenum validationError = CheckALErrors();
+			
+			if (validationError != AL_NO_ERROR)
+			{
+				idLib::Warning("idSoundSample_OpenAL::FreeData: error validating OpenAL buffer for '%s'; requesting sound restart", GetName());
+				soundSystemLocal.SetNeedsRestart();
+			}
+			else if (validBuffer == AL_TRUE)
+			{
+				alDeleteBuffers(1, &openalBuffer);
+				if (CheckALErrors() != AL_NO_ERROR)
+				{
+					// A device/context failure here should not turn a
+					// level-load purge into a fatal engine error.
+					idLib::Warning("idSoundSample_OpenAL::FreeData: error unloading OpenAL buffer for '%s'; requesting sound restart", GetName());
+					soundSystemLocal.SetNeedsRestart();
+				}
+			}
+		}
+		else
+		{
+			// The sample is intentionally discarding a name that may still
+			// belong to the owned context. Rebuild the sound hardware so
+			// context destruction can reclaim that otherwise unreachable
+			// object. Normal Restart()/Shutdown() invalidate sample names
+			// before FreeData(), so ordinary teardown does not enter here.
 			soundSystemLocal.SetNeedsRestart();
 		}
 	}
