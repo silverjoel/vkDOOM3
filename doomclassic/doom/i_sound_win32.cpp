@@ -308,6 +308,52 @@ static void I_RetireFailedSoundSource(activeSound_t* sound)
 
 /*
 ======================
+I_RetireFailedSfxBuffer
+
+Discard a Classic SFX buffer after creation/upload failure. Unlike source
+retirement, this helper is also used while I_InitSoundHardware() is rebuilding
+buffers into a freshly-created context, before soundHardwareInitialized is
+published. Rely on ownership of the current context rather than that flag.
+======================
+*/
+static void I_RetireFailedSfxBuffer(ALuint & buffer, int id)
+{
+	if (buffer == 0) {
+		return;
+	}
+	
+	bool cleanupFailed = false;
+	
+	if (soundSystemLocal.hardware.IsContextCurrent()) {
+		alGetError();
+		const ALboolean validBuffer = alIsBuffer(buffer);
+		const ALenum validationError = alGetError();
+		
+		if (validationError != AL_NO_ERROR) {
+			cleanupFailed = true;
+		}
+		else if (validBuffer == AL_TRUE) {
+			alDeleteBuffers(1, &buffer);
+			if (alGetError() != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+		}
+	}
+	else {
+		// The numeric name is being discarded without a trustworthy owning
+		// context. Rebuild the shared context so it can reclaim the object.
+		cleanupFailed = true;
+	}
+	
+	if (cleanupFailed) {
+		printf("[doomclassic] failed to retire SFX buffer %d; requesting sound restart\n", id);
+		soundSystemLocal.SetNeedsRestart();
+	}
+	buffer = 0;
+}
+
+/*
+======================
 I_CalculateRelativeSoundPosition
 
 The original XAudio2 backend calculated a separate output matrix for each
@@ -521,15 +567,7 @@ static bool I_EnsureSfxBuffer(int id)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || buffer == 0) {
 		printf("[doomclassic] failed to recreate SFX buffer %d: 0x%X\n", id, alError);
-		if (buffer != 0) {
-			alGetError();
-			if (alIsBuffer(buffer) == AL_TRUE) {
-				alDeleteBuffers(1, &buffer);
-			}
-		// A failed cleanup must not contaminate the next lazy retry.
-		alGetError();
-		}
-		buffer = 0;
+		I_RetireFailedSfxBuffer(buffer, id);
 		return false;
 	}
 	
@@ -537,9 +575,7 @@ static bool I_EnsureSfxBuffer(int id)
 	alError = alGetError();
 	if (alError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to repopulate SFX buffer %d: 0x%X\n", id, alError);
-		alGetError();
-		alDeleteBuffers(1, &buffer);
-		alGetError();
+		I_RetireFailedSfxBuffer(buffer, id);
 		return false;
 	}
 	
@@ -1160,14 +1196,7 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 		const ALenum bufferError = alGetError();
 		if (bufferError != AL_NO_ERROR || alBuffers[i] == 0) {
 			printf("[doomclassic] failed to create SFX buffer %d: 0x%X\n", i, bufferError);
-			if (alBuffers[i] != 0) {
-				alGetError();
-				if (alIsBuffer(alBuffers[i]) == AL_TRUE) {
-					alDeleteBuffers(1, &alBuffers[i]);
-				}
-				alGetError();
-			}
-			alBuffers[i] = 0;
+			I_RetireFailedSfxBuffer(alBuffers[i], i);
 		}
 	}
 
@@ -1207,8 +1236,7 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 				if( aerr != AL_NO_ERROR ) 
 				{
 					printf("[doomclassic] alBufferData restart error for buffer %d: 0x%X\n", i, aerr);
-					alDeleteBuffers(1, &alBuffers[i]);
-					alBuffers[i] = 0;
+					I_RetireFailedSfxBuffer(alBuffers[i], i);
 				}
 			}
 		}
