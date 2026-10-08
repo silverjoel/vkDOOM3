@@ -115,6 +115,15 @@ static const ALCchar * OpenAL_GetPlaybackDeviceList()
 	return NULL;
 }
 
+static const char* OpenAL_SafeDiagnosticString(const char* value)
+{
+	if (value == NULL)
+	{
+		return "<unavailable>";
+	}
+	return value;
+}
+
 /*
 ========================
 OpenAL_GetPlaybackDeviceName
@@ -183,7 +192,7 @@ void idSoundHardware_OpenAL::PrintALCInfo( ALCdevice* device )
 			devname = alcGetString( device, ALC_DEVICE_SPECIFIER );
 		}
 		
-		idLib::Printf( "** Info for device \"%s\" **\n", devname );
+		idLib::Printf("** Info for device \"%s\" **\n", OpenAL_SafeDiagnosticString(devname));
 	}
 	alcGetIntegerv( device, ALC_MAJOR_VERSION, 1, &major );
 	alcGetIntegerv( device, ALC_MINOR_VERSION, 1, &minor );
@@ -202,10 +211,10 @@ void idSoundHardware_OpenAL::PrintALCInfo( ALCdevice* device )
 
 void idSoundHardware_OpenAL::PrintALInfo()
 {
-	idLib::Printf( "OpenAL vendor string: %s\n", alGetString( AL_VENDOR ) );
-	idLib::Printf( "OpenAL renderer string: %s\n", alGetString( AL_RENDERER ) );
-	idLib::Printf( "OpenAL version string: %s\n", alGetString( AL_VERSION ) );
-	idLib::Printf( "OpenAL extensions: %s", alGetString( AL_EXTENSIONS ) );
+	idLib::Printf("OpenAL vendor string: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_VENDOR)));
+	idLib::Printf("OpenAL renderer string: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_RENDERER)));
+	idLib::Printf("OpenAL version string: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_VERSION)));
+	idLib::Printf("OpenAL extensions: %s", OpenAL_SafeDiagnosticString(alGetString(AL_EXTENSIONS)));
 	//PrintList(alGetString(AL_EXTENSIONS), ' ');
 	CheckALErrors();
 }
@@ -217,11 +226,11 @@ void listDevices_f( const idCmdArgs& args )
 	
 	if( alcIsExtensionPresent( NULL, "ALC_ENUMERATE_ALL_EXT" ) != AL_FALSE )
 	{
-		idLib::Printf( "Default playback device: %s\n", alcGetString( NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER ) );
+		idLib::Printf("Default playback device: %s\n", OpenAL_SafeDiagnosticString(alcGetString(NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER)));
 	}
 	else
 	{
-		idLib::Printf( "Default playback device: %s\n",  alcGetString( NULL, ALC_DEFAULT_DEVICE_SPECIFIER ) );
+		idLib::Printf("Default playback device: %s\n", OpenAL_SafeDiagnosticString(alcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER)));
 	}
 	
 	//idLib::Printf("Default capture device: %s\n", alcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER));
@@ -311,10 +320,10 @@ void idSoundHardware_OpenAL::Init()
 	
 	common->Printf( "Done.\n" );
 	
-	common->Printf( "OpenAL vendor: %s\n", alGetString( AL_VENDOR ) );
-	common->Printf( "OpenAL renderer: %s\n", alGetString( AL_RENDERER ) );
-	common->Printf( "OpenAL version: %s\n", alGetString( AL_VERSION ) );
-	common->Printf( "OpenAL extensions: %s\n", alGetString( AL_EXTENSIONS ) );
+	common->Printf("OpenAL vendor: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_VENDOR)));
+	common->Printf("OpenAL renderer: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_RENDERER)));
+	common->Printf("OpenAL version: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_VERSION)));
+	common->Printf("OpenAL extensions: %s\n", OpenAL_SafeDiagnosticString(alGetString(AL_EXTENSIONS)));
 	
 	// ---------------------
 	// Initialize the Doom classic sound system.
