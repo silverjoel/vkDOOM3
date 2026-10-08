@@ -564,6 +564,12 @@ bool idSoundSample_OpenAL::LoadGeneratedSample( const idStr& filename )
 			}
 			
 			sampleBuffer.buffer = AllocBuffer(sampleBuffer.bufferSize, GetName());
+			if (sampleBuffer.buffer == NULL)
+			{
+				idLib::Warning("LoadGeneratedSample( %s ): could not allocate %d bytes for buffer %d", filename.c_str(), sampleBuffer.bufferSize, i);
+				FreeData();
+				return false;
+			}
 			if (fileIn->Read(sampleBuffer.buffer, sampleBuffer.bufferSize) != sampleBuffer.bufferSize)
 			{
 				FreeBuffer(sampleBuffer.buffer);
@@ -1133,6 +1139,12 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		buffers[0].bufferSize = totalBufferSize;
 		buffers[0].numSamples = playLength;
 		buffers[0].buffer = AllocBuffer( totalBufferSize, GetName() );
+		if (buffers[0].buffer == NULL)
+		{
+			idLib::Warning("LoadWav( %s ): could not allocate %d bytes for PCM sample data", filename.c_str(), totalBufferSize);
+			FreeData();
+			return false;
+		}
 		
 		
 		if (wave.Read(buffers[0].buffer, totalBufferSize) != (size_t)totalBufferSize)
@@ -1183,6 +1195,12 @@ bool idSoundSample_OpenAL::LoadWav( const idStr& filename )
 		buffers[0].bufferSize = totalBufferSize;
 		buffers[0].numSamples = playLength;
 		buffers[0].buffer  = AllocBuffer( totalBufferSize, GetName() );
+		if (buffers[0].buffer == NULL)
+		{
+			idLib::Warning("LoadWav( %s ): could not allocate %d bytes for MS ADPCM sample data", filename.c_str(), totalBufferSize);
+			FreeData();
+			return false;
+		}
 		
 		if (wave.Read(buffers[0].buffer, totalBufferSize) != (size_t)totalBufferSize)
 		{
@@ -1239,6 +1257,12 @@ void idSoundSample_OpenAL::MakeDefault()
 	totalBufferSize = DEFAULT_NUM_SAMPLES * 2;// * sizeof( short );
 	
 	short* defaultBuffer = ( short* )AllocBuffer( totalBufferSize, GetName() );
+	if (defaultBuffer == NULL)
+	{
+		idLib::Warning("idSoundSample_OpenAL::MakeDefault: could not allocate %d bytes for '%s'", totalBufferSize, GetName());
+		FreeData();
+		return;
+	}
 	for( int i = 0; i < DEFAULT_NUM_SAMPLES; i += 2 )
 	{
 		float v = sin( idMath::PI * 2 * i / 64 );
