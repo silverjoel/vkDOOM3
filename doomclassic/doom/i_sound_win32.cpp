@@ -1375,14 +1375,7 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || soundchannel->alSourceVoice == 0) {
 		printf("[doomclassic] failed to create SFX source %d: 0x%X\n", channel, alError);
-		if (soundchannel->alSourceVoice != 0) {
-			alGetError();
-			if (alIsSource(soundchannel->alSourceVoice) == AL_TRUE) {
-				alDeleteSources(1, &soundchannel->alSourceVoice);
-			}
-			alGetError();
-		}
-		soundchannel->alSourceVoice = 0;
+		I_RetireFailedSoundSource(soundchannel);
 		return;
 	}
 
@@ -1399,8 +1392,7 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	alError = alGetError();
 	if (alError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to configure SFX source %d: 0x%X\n", channel, alError);
-		alDeleteSources(1, &soundchannel->alSourceVoice);
-		soundchannel->alSourceVoice = 0;
+		I_RetireFailedSoundSource(soundchannel);
 	}
 }
 
