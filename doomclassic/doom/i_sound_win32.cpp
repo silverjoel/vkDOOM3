@@ -156,7 +156,32 @@ static uint32		nextSoundHandle = 1;
 
 doomListener_t		doom_Listener;
 
+void			I_InvalidateSoundHardware();
 void			I_InitSoundChannel(int channel, int numOutputChannels_);
+
+/*
+======================
+I_ValidateSoundHardwareContext
+
+Classic Doom sound code can run before the main sound-system Render() for the
+frame. If the shared OpenAL context has been lost or another context became
+current, invalidate Classic's cached context-local names immediately and let
+the normal full sound restart rebuild them. No AL calls are made by the
+invalidation path.
+======================
+*/
+static bool I_ValidateSoundHardwareContext()
+{
+	if (soundSystemLocal.hardware.IsContextCurrent()) {
+		return true;
+	}
+	
+	if (soundHardwareInitialized || Music_initialized) {
+		I_InvalidateSoundHardware();
+		soundSystemLocal.SetNeedsRestart();
+	}
+	return false;
+}
 
 /*
 ======================
@@ -385,7 +410,7 @@ void I_SetSfxVolume(int volume)
 	// New sounds pick up x_SoundVolume in I_StartSound2(), but existing
 	// OpenAL sources otherwise keep the gain they had when they were started.
 	// Apply master-volume changes to currently active Classic Doom sounds too.
-	if (!soundHardwareInitialized) {
+	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext()) {
 		return;
 	}
 	
@@ -443,7 +468,7 @@ static bool I_EnsureSfxBuffer(int id)
 		return true;
 	}
 	
-	if (!soundHardwareInitialized || S_sfx[id].data == NULL || lengths[id] <= 0) {
+	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext() || S_sfx[id].data == NULL || lengths[id] <= 0) {
 		return false;
 	}
 	
@@ -485,7 +510,7 @@ static void I_RetireFailedSoundSource(activeSound_t * sound)
 		return;
 	}
 	
-	if (sound->alSourceVoice != 0 && soundHardwareInitialized) {
+	if (sound->alSourceVoice != 0 && soundHardwareInitialized && soundSystemLocal.hardware.IsContextCurrent()) {
 		ALuint source = sound->alSourceVoice;
 		alGetError();
 		if (alIsSource(source) == AL_TRUE) {
@@ -524,7 +549,7 @@ I_StartSound2
 //
 int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, int pitch, int priority, int handle)
 {
-	if (!soundHardwareInitialized || id <= 0 || id >= NUMSFX || handle <= 0) {
+	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext() || id <= 0 || id >= NUMSFX || handle <= 0) {
 		return 0;
 	}
 	
@@ -781,6 +806,10 @@ void I_StopSound(int handle, int player)
 		return;
 	}
 
+	if (!I_ValidateSoundHardwareContext()) {
+		return;
+	}
+
 	// Stop the sound. CPU-side state is cleared regardless of whether the
 	// OpenAL stop succeeds so a stale source cannot remain logically active.
 	if (sound->alSourceVoice != 0) {
@@ -805,7 +834,7 @@ I_SoundIsPlaying
 */
 int I_SoundIsPlaying(int handle)
 {
-	if (!soundHardwareInitialized) {
+	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext()) {
 		return 0;
 	}
 
@@ -873,7 +902,7 @@ I_UpdateSound
 // channels and update sound positions.
 void I_UpdateSound(void)
 {
-	if (!soundHardwareInitialized) {
+	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext()) {
 		return;
 	}
 
@@ -991,6 +1020,8 @@ void I_ShutdownSound(void)
 
 	if (S_initialized) 
 	{
+		I_ValidateSoundHardwareContext();
+
 		bool hardwareCleanupFailed = false;
 		// Stop and detach every source. I_StopSound() filters by player, which
 		// can leave split-screen sounds active, and a stopped OpenAL source still
@@ -1365,6 +1396,11 @@ void I_InitSound()
 		doom_Listener.Position.y = 0.f;
 		doom_Listener.Position.z = 0.f;
 
+		// I_InitSound() can be entered outside the main sound-system Render()
+		// path. Retire stale Classic AL names before any BFG-source handoff,
+		// music creation, or SFX buffer upload.
+		I_ValidateSoundHardwareContext();
+
 		// Doom 3 keeps stopped OpenAL source objects cached for fast voice
 		// reuse. Release only those idle BFG sources before Classic allocates
 		// its music/SFX sources so both backends can share devices with a
@@ -1713,6 +1749,8 @@ I_PlaySong
 */
 void I_PlaySong(const char* songname, int looping)
 {
+	const bool hardwareContextCurrent = I_ValidateSoundHardwareContext();
+
 	if (!Music_initialized) {
 		// S_ChangeMusic() records its logical selection even when the hardware
 		// start fails, and then suppresses repeated requests for that same
@@ -1725,11 +1763,15 @@ void I_PlaySong(const char* songname, int looping)
 		if (!restoringMusicAfterHardwareRestart) {
 			musicInitRetryAttempted = false;
 		}
-		if (soundHardwareInitialized && S_initialized) {
+		if (hardwareContextCurrent && soundHardwareInitialized && S_initialized) {
 			I_InitMusic();
 		}
 		// A successful I_InitMusic() re-enters I_PlaySong() through its
 		// retained-track restore path, so either way this request is complete.
+		return;
+	}
+
+	if (!hardwareContextCurrent) {
 		return;
 	}
 
@@ -1804,6 +1846,10 @@ I_UpdateMusic
 */
 void I_UpdateMusic(void)
 {
+	if (!I_ValidateSoundHardwareContext()) {
+		return;
+	}
+
 	if (!Music_initialized) {
 		// A hardware restart initializes Classic music before
 		// soundHardwareInitialized is published. If source/buffer creation
@@ -1903,7 +1949,7 @@ I_PauseSong
 */
 void I_PauseSong(int handle)
 {
-	if (!Music_initialized || !alMusicSourceVoice) {
+	if (!Music_initialized || !alMusicSourceVoice || !I_ValidateSoundHardwareContext()) {
 		return;
 	}
 
@@ -1932,7 +1978,7 @@ I_ResumeSong
 */
 void I_ResumeSong(int handle)
 {
-	if (!Music_initialized || !alMusicSourceVoice) {
+	if (!Music_initialized || !alMusicSourceVoice || !I_ValidateSoundHardwareContext()) {
 		return;
 	}
 
@@ -1978,6 +2024,10 @@ void I_StopSong(int handle)
 	musicReady = false;
 
 	if (!Music_initialized) {
+		return;
+	}
+
+	if (!I_ValidateSoundHardwareContext()) {
 		return;
 	}
 	

@@ -56,6 +56,15 @@ public:
 	idSoundVoice* 	AllocateVoice( const idSoundSample* leadinSample, const idSoundSample* loopingSample );
 	void			FreeVoice( idSoundVoice* voice );
 	void			ReleaseFreeVoiceResources();
+
+	// Classic Doom also shares this OpenAL context and can run sound code
+	// outside idSoundSystemLocal::Render(). Let it cheaply verify ownership
+	// before issuing AL calls so stale numeric object names are never used
+	// against another/no current context.
+	bool			IsContextCurrent() const
+	{
+		return openalDevice != NULL && openalContext != NULL && alcGetCurrentContext() == openalContext;
+	}
 	
 	// listDevices needs this
 	ALCdevice* 		GetOpenALDevice() const
