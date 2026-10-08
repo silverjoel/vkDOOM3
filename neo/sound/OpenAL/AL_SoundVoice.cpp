@@ -1205,7 +1205,13 @@ void idSoundVoice_OpenAL::Stop()
 		idLib::Warning("idSoundVoice_OpenAL::Stop: failed to stop/detach source %u; retiring source", openalSource);
 		// The source is no longer trusted. DestroyInternal() will still try
 		// alDeleteSources(), which OpenAL permits even for a playing source.
-		DestroyInternal();
+		if (!DestroyInternal())
+		{
+			// Runtime FreeVoice() recycles this voice immediately. If retirement
+			// itself failed, rebuild the context so an unreachable source or EFX
+			// filter cannot remain allocated for the rest of the session.
+			soundSystemLocal.SetNeedsRestart();
+		}
 	}
 }
 
