@@ -235,7 +235,8 @@ idSoundVoice_OpenAL::idSoundVoice_OpenAL()
 	numChannels(0),
 	sampleRate(0),
 	trackAmplitude(false),
-	paused(true)
+	paused(true),
+	coreParameterUpdateFailed(false)
 {
 }
 
@@ -417,6 +418,7 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	}
 	
 	paused = true;
+	coreParameterUpdateFailed = false;
 	return true;
 }
 
@@ -446,6 +448,7 @@ void idSoundVoice_OpenAL::DestroyInternal()
 
 	openalSource = 0;
 	trackAmplitude = false;
+	coreParameterUpdateFailed = false;
 
 	DestroyOcclusionFilter();
 }
@@ -465,6 +468,7 @@ void idSoundVoice_OpenAL::InvalidateContextObjects()
 	sampleRate = 0;
 	trackAmplitude = false;
 	paused = true;
+	coreParameterUpdateFailed = false;
 }
 
 /*
@@ -624,6 +628,11 @@ bool idSoundVoice_OpenAL::Start(int offsetMS, int ssFlags)
 	}
 	
 	if( !leadinSample )
+	{
+		return false;
+	}
+
+	if (coreParameterUpdateFailed)
 	{
 		return false;
 	}
@@ -833,6 +842,11 @@ idSoundVoice_OpenAL::Update
 */
 bool idSoundVoice_OpenAL::Update()
 {
+	if (coreParameterUpdateFailed)
+	{
+		return false;
+	}
+
 	if( !alIsSource( openalSource ) || leadinSample == NULL )
 	{
 		return false;

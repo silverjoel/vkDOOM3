@@ -48,7 +48,12 @@ public:
 	{
 		idSoundVoice_Base::SetPosition( p );
 		
+		alGetError();
 		alSource3f( openalSource, AL_POSITION, -p.y, p.z, -p.x );
+		if (alGetError() != AL_NO_ERROR)
+		{
+			coreParameterUpdateFailed = true;
+		}
 	}
 	
 	void					SetGain( float gain )
@@ -59,7 +64,12 @@ public:
 		const float openalGain = Max(0.0f, gain);
 		
 		idSoundVoice_Base::SetGain(openalGain);
+		alGetError();
 		alSourcef(openalSource, AL_GAIN, openalGain);
+		if (alGetError() != AL_NO_ERROR)
+		{
+			coreParameterUpdateFailed = true;
+		}
 	}
 	
 	void		SetPitch( float p )
@@ -72,7 +82,12 @@ public:
 		const float openalPitch = (p > minPitch) ? p : minPitch;
 		
 		idSoundVoice_Base::SetPitch(openalPitch);
+		alGetError();
 		alSourcef(openalSource, AL_PITCH, openalPitch);
+		if (alGetError() != AL_NO_ERROR)
+		{
+			coreParameterUpdateFailed = true;
+		}
 	}
 
 	void					SetOcclusion(float f)
@@ -161,6 +176,11 @@ private:
 	
 	bool					trackAmplitude;
 	bool					paused;
+
+	// SetPosition/SetGain/SetPitch are void at the shared sound interface.
+	// Latch any rejected core source update until Start()/Update() can report
+	// failure to idSoundChannel and retire the voice safely.
+	bool					coreParameterUpdateFailed;
 };
 
 /*
