@@ -1132,6 +1132,8 @@ static void I_ReleaseMusicForClassicShutdown()
 	waitingForMusic = false;
 	musicReady = false;
 	Music_initialized = false;
+	currentMusicName.Clear();
+	currentMusicLooping = 0;
 	restoreMusicAfterHardwareRestart = false;
 	restoringMusicAfterHardwareRestart = false;
 	musicHardwareRestartAttempted = false;
@@ -1238,9 +1240,9 @@ void I_ShutdownSound(void)
 			soundSystemLocal.SetNeedsRestart();
 	}
 
-	// Clear the logical selection first so leaving Classic can never resurrect
-	// the previous track, then return all Classic music resources to BFG.
-	I_StopSong(0);
+	// Return all Classic music resources to BFG. Source deletion itself stops
+	// playback, so do not call I_StopSong() first: a rejected alSourceStop()
+	// would request a redundant full restart even if deletion succeeds here.
 	I_ReleaseMusicForClassicShutdown();
 
 	S_initialized = 0;
