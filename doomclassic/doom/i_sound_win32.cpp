@@ -1064,6 +1064,89 @@ void I_UpdateSoundParams(int handle, int vol, int sep, int pitch)
 
 /*
 ======================
+I_ReleaseMusicForClassicShutdown
+
+I_ShutdownSound() leaves the shared OpenAL context alive for the main BFG
+sound system. Release Classic's music source/buffer and CPU-side decoder state
+instead of keeping them dormant until the next hardware restart. Unlike
+I_ShutdownMusic(), which runs immediately before context destruction, this
+path must verify live-context cleanup and request a rebuild if the driver
+refuses to release an object.
+======================
+*/
+static void I_ReleaseMusicForClassicShutdown()
+{
+	bool cleanupFailed = false;
+	
+	if (soundSystemLocal.hardware.IsContextCurrent()) {
+		if (alMusicSourceVoice != 0) {
+			alGetError();
+			const ALboolean validSource = alIsSource(alMusicSourceVoice);
+			const ALenum validationError = alGetError();
+			
+			if (validationError != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+			else if (validSource == AL_TRUE) {
+				alDeleteSources(1, &alMusicSourceVoice);
+				if (alGetError() != AL_NO_ERROR) {
+					cleanupFailed = true;
+				}
+			}
+		}
+		
+		if (alMusicBuffer != 0) {
+			alGetError();
+			const ALboolean validBuffer = alIsBuffer(alMusicBuffer);
+			const ALenum validationError = alGetError();
+			
+			if (validationError != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+			else if (validBuffer == AL_TRUE) {
+				alDeleteBuffers(1, &alMusicBuffer);
+				if (alGetError() != AL_NO_ERROR) {
+					cleanupFailed = true;
+				}
+			}
+		}
+	}
+	else if (alMusicSourceVoice != 0 || alMusicBuffer != 0) {
+		cleanupFailed = true;
+	}
+	
+	alMusicSourceVoice = 0;
+	alMusicBuffer = 0;
+	
+	if (musicBuffer != NULL) {
+		free(musicBuffer);
+		musicBuffer = NULL;
+	}
+	
+	if (Music_initialized) {
+		Timidity_Shutdown();
+	}
+	
+	doomMusic = NULL;
+	totalBufferSize = 0;
+	waitingForMusic = false;
+	musicReady = false;
+	Music_initialized = false;
+	restoreMusicAfterHardwareRestart = false;
+	restoringMusicAfterHardwareRestart = false;
+	musicHardwareRestartAttempted = false;
+	musicInitRetryAttempted = false;
+	musicInitCleanupRestartAttempted = false;
+	musicNeedsExplicitRetry = false;
+	
+	if (cleanupFailed) {
+		printf("[doomclassic] failed to release Classic music hardware; requesting sound restart\n");
+		soundSystemLocal.SetNeedsRestart();
+	}
+}
+
+/*
+======================
 I_ShutdownSound
 ======================
 */
@@ -1155,7 +1238,10 @@ void I_ShutdownSound(void)
 			soundSystemLocal.SetNeedsRestart();
 	}
 
+	// Clear the logical selection first so leaving Classic can never resurrect
+	// the previous track, then return all Classic music resources to BFG.
 	I_StopSong(0);
+	I_ReleaseMusicForClassicShutdown();
 
 	S_initialized = 0;
 }
