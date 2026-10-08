@@ -739,10 +739,12 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 	}
 
 	// Resource loading can legitimately happen while sound hardware is
-	// disabled (s_noSound) or before an OpenAL context is available. Keep the
-	// CPU sample data resident and defer the hardware upload until a context
-	// exists; Restart() will rebuild loaded samples when sound is enabled.
-	if( alcGetCurrentContext() == NULL )
+	// disabled (s_noSound), before an OpenAL context is available, or while
+	// some unrelated OpenAL context is current. Keep the CPU sample data
+	// resident and defer the hardware upload until vkDOOM3's owned context is
+	// current and its device is still connected. Restart() will rebuild loaded
+	// samples when the sound hardware is usable again.
+	if (!soundSystemLocal.hardware.IsContextCurrent())
 	{
 		openalBuffer = 0;
 		return;
