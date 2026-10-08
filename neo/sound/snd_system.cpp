@@ -310,6 +310,26 @@ void idSoundSystemLocal::Render() {
 	// logical sound time advancing while hardware is unavailable so expired
 	// one-shots do not resume later.
 	if (!hardware.Update()) {
+		// A missing/wrong/disconnected context can persist for many frames.
+		// Do not freeze the sound world's CPU-side bookkeeping for the whole
+		// outage: completed emitters/channels should still age out while the
+		// game continues creating sounds. First release every hardware voice
+		// through the context-safe FreeVoice() path. AllocateVoice() uses the
+		// same IsContextCurrent() gate, so this Update() remains logical-only
+		// until a valid owned context exists again.
+		if (currentSoundWorld != NULL && !hardware.IsContextCurrent()) {
+			for (int e = 0; e < currentSoundWorld->emitters.Num(); ++e) {
+				idSoundEmitterLocal * emitter = currentSoundWorld->emitters[e];
+				if (emitter == NULL) {
+					continue;
+				}
+				for (int c = 0; c < emitter->channels.Num(); ++c) {
+					emitter->channels[c]->Mute();
+				}
+			}
+			
+			currentSoundWorld->Update();
+		}
 		soundTime = Sys_Milliseconds();
 		return;
 	}
