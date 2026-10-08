@@ -169,6 +169,7 @@ private:
 	
 	ALuint					openalSource;
 	ALuint					openalLowPassFilter;
+	bool					openalLowPassFilterConfigured;
 	
 	idSoundSample_OpenAL*	leadinSample;
 	idSoundSample_OpenAL*	loopingSample;

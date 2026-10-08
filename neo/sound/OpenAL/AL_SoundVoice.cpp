@@ -230,6 +230,7 @@ idSoundVoice_OpenAL::idSoundVoice_OpenAL()
 	:
 	openalSource(0),
 	openalLowPassFilter(0),
+	openalLowPassFilterConfigured(false),
 	leadinSample(NULL),
 	loopingSample(NULL),
 	numChannels(0),
@@ -519,6 +520,7 @@ void idSoundVoice_OpenAL::InvalidateContextObjects()
 {
 	openalSource = 0;
 	openalLowPassFilter = 0;
+	openalLowPassFilterConfigured = false;
 	leadinSample = NULL;
 	loopingSample = NULL;
 	numChannels = 0;
@@ -542,22 +544,33 @@ bool idSoundVoice_OpenAL::EnsureOcclusionFilter()
 	
 	if( openalLowPassFilter != 0 )
 	{
-		return true;
+		if (openalLowPassFilterConfigured)
+		{
+			return true;
+		}
+		
+		// A previous creation/configuration attempt returned a filter name but
+		// could not retire it. Never treat that untrusted object as usable or
+		// allocate another filter on top of it.
+		if (!DestroyOcclusionFilter())
+		{
+			soundSystemLocal.SetNeedsRestart();
+			return false;
+		}
 	}
 	
+	openalLowPassFilterConfigured = false;
 	CheckALErrors();
 	qalGenFilters( 1, &openalLowPassFilter );
 	const ALenum generateError = CheckALErrors();
 	if (generateError != AL_NO_ERROR || openalLowPassFilter == 0)
 	{
-		// EFX allocation is optional, but a nonzero name returned together
-		// with an error must not become unreachable on repeated retries.
-		if (openalLowPassFilter != 0)
+		if (openalLowPassFilter != 0 && !DestroyOcclusionFilter())
 		{
-			qalDeleteFilters(1, &openalLowPassFilter);
-			CheckALErrors();
+			// EFX is optional, but losing ownership of a partially-created AL
+			// object is not. Rebuild the context if even cleanup is rejected.
+			soundSystemLocal.SetNeedsRestart();
 		}
-		openalLowPassFilter = 0;
 		return false;
 	}
 	
@@ -567,12 +580,14 @@ bool idSoundVoice_OpenAL::EnsureOcclusionFilter()
 	
 	if( CheckALErrors() != AL_NO_ERROR )
 	{
-		qalDeleteFilters(1, &openalLowPassFilter);
-		openalLowPassFilter = 0;
-		CheckALErrors();
+		if (!DestroyOcclusionFilter())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
 		return false;
 	}
 	
+	openalLowPassFilterConfigured = true;
 	return true;
 }
 
@@ -629,6 +644,7 @@ bool idSoundVoice_OpenAL::DestroyOcclusionFilter()
 {
 	if( openalLowPassFilter == 0 )
 	{
+		openalLowPassFilterConfigured = false;
 		return true;
 	}
 	
@@ -648,6 +664,7 @@ bool idSoundVoice_OpenAL::DestroyOcclusionFilter()
 	}
 	
 	openalLowPassFilter = 0;
+	openalLowPassFilterConfigured = false;
 	return true;
 }
 
