@@ -453,7 +453,7 @@ idSoundVoice_OpenAL::DestroyInternal
 */
 void idSoundVoice_OpenAL::DestroyInternal()
 {
-	if (openalSource != 0 && alIsSource(openalSource))
+	if (openalSource != 0)
 	{
 		if( s_debugHardware.GetBool() )
 		{
@@ -461,9 +461,10 @@ void idSoundVoice_OpenAL::DestroyInternal()
 		}
 
 		// OpenAL permits deleting a playing source; deletion stops it
-		// automatically and releases the source object. Do not run the
-		// stop/detach sequence again here, since DestroyInternal() is also
-		// the recovery path after FlushSourceBuffers() itself has failed.
+		// automatically and releases the source object. The cached nonzero
+		// name is authoritative here; do not gate deletion on alIsSource(),
+		// because a failed validation query could otherwise make us discard
+		// a still-deletable source without ever attempting the delete.
 		CheckALErrors();
 		
 		alDeleteSources( 1, &openalSource );
