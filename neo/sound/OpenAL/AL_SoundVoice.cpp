@@ -611,7 +611,19 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 		{
 			CheckALErrors();
 			alSourcei( openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL );
-			CheckALErrors();
+			if (CheckALErrors() != AL_NO_ERROR)
+			{
+				idLib::Warning("OpenAL failed to detach stale EFX filter from source %u; retiring source", openalSource);
+				
+				// A source that cannot shed its old direct filter must not be
+				// reused for an unoccluded sound. Deleting the source releases
+				// the filter attachment; DestroyInternal() then retires the
+				// owned filter through the checked cleanup path.
+				if (!DestroyInternal())
+				{
+					soundSystemLocal.SetNeedsRestart();
+				}
+				return;
 		}
 		return;
 	}
@@ -646,9 +658,14 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 		
 		if (detachError != AL_NO_ERROR)
 		{
-			// Keep the filter handle tracked. A context restart will safely
-			// reclaim both the source attachment and the filter object.
-			soundSystemLocal.SetNeedsRestart();
+			idLib::Warning("OpenAL failed to detach rejected EFX filter from source %u; retiring source", openalSource);
+			
+			// Source deletion is the authoritative way to release a direct
+			// filter attachment when AL_DIRECT_FILTER = AL_FILTER_NULL fails.
+			if (!DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+			}
 			return;
 		}
 		
@@ -1243,7 +1260,7 @@ float idSoundVoice_OpenAL::GetAmplitude()
 	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
 	alGetSourcei( openalSource, AL_SAMPLE_OFFSET, &sampleOffset );
 	
-	if( CheckALErrors() != AL_NO_ERROR )
+	if (openalSource == 0 || CheckALErrors() != AL_NO_ERROR)
 	{
 		return 0.0f;
 	}
