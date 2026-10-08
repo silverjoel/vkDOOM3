@@ -785,7 +785,11 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		return;
 	}
 	
-	if (alIsBuffer(openalBuffer))
+	// The generated name was already validated above with its AL error
+	// isolated. Do not query it a second time here: if that redundant query
+	// fails during a transient device/context problem, the old code skipped
+	// the upload body while leaving a nonzero, unpopulated buffer cached.
+	if (generatedBufferValid == AL_TRUE)
 	{
 		CheckALErrors();
 		
