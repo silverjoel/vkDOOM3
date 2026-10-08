@@ -152,7 +152,10 @@ private:
 	// EFX low-pass filter used to reproduce the XAudio2 occlusion/muffling path.
 	bool					EnsureOcclusionFilter();
 	void					ApplyOcclusionFilter();
-	void					DestroyOcclusionFilter();
+
+	// Returns false when an owned EFX filter could not be released. Keep the
+	// name tracked on failure so a later teardown/restart can retry or reclaim it.
+	bool					DestroyOcclusionFilter();
 
 	// AL_EXT_SOURCE_RADIUS is used when available to reproduce the original
 	// near-listener omni-to-directional blend for mono sources.

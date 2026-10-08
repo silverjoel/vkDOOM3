@@ -502,7 +502,10 @@ bool idSoundVoice_OpenAL::DestroyInternal()
 	trackAmplitude = false;
 	coreParameterUpdateFailed = false;
 
-	DestroyOcclusionFilter();
+	if (!DestroyOcclusionFilter())
+	{
+		sourceCleanupSucceeded = false;
+	}
 
 	return sourceCleanupSucceeded;
 }
@@ -622,21 +625,30 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 idSoundVoice_OpenAL::DestroyOcclusionFilter
 ========================
 */
-void idSoundVoice_OpenAL::DestroyOcclusionFilter()
+bool idSoundVoice_OpenAL::DestroyOcclusionFilter()
 {
 	if( openalLowPassFilter == 0 )
 	{
-		return;
+		return true;
 	}
 	
-	if( OpenAL_LoadEfxFilterProcs() )
+	if (!OpenAL_LoadEfxFilterProcs())
 	{
-		CheckALErrors();
-		qalDeleteFilters( 1, &openalLowPassFilter );
-		CheckALErrors();
+		return false;
+	}
+
+	CheckALErrors();
+	qalDeleteFilters(1, &openalLowPassFilter);
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		// Do not discard the only handle to an object whose deletion was
+		// rejected. Runtime callers will request a context rebuild; normal
+		// hardware shutdown can simply let context destruction reclaim it.
+		return false;
 	}
 	
 	openalLowPassFilter = 0;
+	return true;
 }
 
 /*
