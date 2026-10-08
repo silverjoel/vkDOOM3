@@ -920,47 +920,11 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 		buffer = static_cast<byte*>(buffer) + static_cast<size_t>(uploadOffsetBytes);
 		bufferSize = static_cast<uint32>(uploadSizeBytes);
 		
-		// WAVE_FORMAT_EXTENSIBLE orders the validated 6.1 layout as:
-		//   FL, FR, FC, LFE, BC, SL, SR
-		// while AL_EXT_MCFORMATS AL_FORMAT_61CHN16 expects:
-		//   FL, FR, FC, LFE, BL, BR, BC
-		//
-		// Uploading the WAVE frames unchanged would therefore send BC to BL,
-		// SL to BR, and SR to BC. OpenAL's 6.1 format has no side-speaker
-		// representation, so map the WAVE side pair to the OpenAL back pair
-		// and move the actual back-center sample into OpenAL's BC slot. Keep
-		// the resident CPU data in its original WAVE order; this remap exists
-		// only for the context-local OpenAL upload.
-		void* remappedUploadBuffer = NULL;
-		if (format.basic.formatTag == idWaveFile::FORMAT_EXTENSIBLE && NumChannels() == 7)
-		{
-			remappedUploadBuffer = Mem_Alloc((int)bufferSize, TAG_AUDIO);
-			if (remappedUploadBuffer == NULL)
-			{
-				idLib::Warning("idSoundSample_OpenAL::CreateOpenALBuffer: could not allocate 6.1 channel-remap buffer for '%s'", GetName());
-				RetireOpenALBuffer(openalBuffer, GetName());
-				return;
-			}
-			
-			const int16 * src = static_cast<const int16*>(buffer);
-			int16 * dst = static_cast<int16*>(remappedUploadBuffer);
-			const int frameCount = (int)(bufferSize / (7 * sizeof(int16)));
-			
-			for (int frame = 0; frame < frameCount; ++frame)
-			{
-				const int16 * in = src + frame * 7;
-				int16 * out = dst + frame * 7;
-				out[0] = in[0]; // FL
-				out[1] = in[1]; // FR
-				out[2] = in[2]; // FC
-				out[3] = in[3]; // LFE
-				out[4] = in[5]; // SL -> BL
-				out[5] = in[6]; // SR -> BR
-				out[6] = in[4]; // BC
-			}
-			
-			buffer = remappedUploadBuffer;
-		}
+		// The validated WAVE_FORMAT_EXTENSIBLE channel order already matches
+		// AL_EXT_MCFORMATS. In particular, 6.1 is:
+		//   FL, FR, FC, LFE, rear-center, side-left, side-right.
+		// Upload it unchanged; remapping this layout would swap the surround
+		// channels and produce incorrect 6.1 playback on OpenAL Soft.
 
 #if 0 //#if defined(AL_SOFT_buffer_samples)
 		if( alIsExtensionPresent( "AL_SOFT_buffer_samples" ) )
@@ -981,11 +945,6 @@ void idSoundSample_OpenAL::CreateOpenALBuffer()
 #endif
 		{
 			alBufferData(openalBuffer, alFormat, buffer, bufferSize, format.basic.samplesPerSec);
-		}
-
-		if (remappedUploadBuffer != NULL)
-		{
-			Mem_Free(remappedUploadBuffer);
 		}
 		
 		if( CheckALErrors() != AL_NO_ERROR )
