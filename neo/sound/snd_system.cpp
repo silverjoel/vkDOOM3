@@ -244,11 +244,25 @@ void idSoundSystemLocal::SetPlayingSoundWorld( idSoundWorld *soundWorld ) {
 
 	currentSoundWorld = static_cast<idSoundWorldLocal *>( soundWorld );
 
-	// This update occurs outside Render(), so it does not pass through
-	// hardware.Update()'s context/device validation. Do not let the old
-	// world's voices issue AL calls using context-local source names when
-	// another/no context is current or the playback device is disconnected.
-	if (oldSoundWorld != NULL && hardware.IsContextCurrent()) {
+	if (oldSoundWorld != NULL) {
+		// This update occurs outside Render(), so it does not pass through
+		// hardware.Update()'s context/device validation. Preserve the old
+		// world's logical housekeeping even when the OpenAL context is
+		// unusable, but first release every hardware voice through the guarded
+		// FreeVoice() path. With hardwareVoice pointers cleared, Update() can
+		// remove completed emitters/update logical state safely, while any
+		// attempted voice reacquisition is rejected by AllocateVoice().
+		if (!hardware.IsContextCurrent()) {
+			for (int e = 0; e < oldSoundWorld->emitters.Num(); ++e) {
+				idSoundEmitterLocal * emitter = oldSoundWorld->emitters[e];
+				if (emitter == NULL) {
+					continue;
+				}
+				for (int c = 0; c < emitter->channels.Num(); ++c) {
+					emitter->channels[c]->Mute();
+				}
+			}
+		}
 		oldSoundWorld->Update();
 	}
 }
