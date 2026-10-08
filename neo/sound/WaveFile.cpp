@@ -328,11 +328,15 @@ const char * idWaveFile::ReadWaveFormat( waveFmt_t & format ) {
 		swap.Little( format.extra.extensible.subFormat.data3 );
 		swap.Little( format.extra.extensible.subFormat.data4 );
 		swap.LittleArray( format.extra.extensible.subFormat.data5, 6 );
+
+		// Keep generated .idwav validation identical to the normal WAV path.
+		// The PCM GUID's raw 80 00 bytes are represented as 0x0080 after the
+		// legacy uint16 data4 field is normalized with Little().
 		waveFmt_t::extra_t::extensible_t::guid_t pcmGuid = {
 			FORMAT_PCM,
 			0x0000,
 			0x0010,
-			0x8000,
+			0x0080,
 			{ 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 }
 		};
 		if ( memcmp( &pcmGuid, &format.extra.extensible.subFormat, sizeof( pcmGuid ) ) != 0 ) {
@@ -438,11 +442,18 @@ bool idWaveFile::ReadWaveFormatDirect( waveFmt_t & format, idFile *file ) {
 		swap.Little( format.extra.extensible.subFormat.data3 );
 		swap.Little( format.extra.extensible.subFormat.data4 );
 		swap.LittleArray( format.extra.extensible.subFormat.data5, 6 );
+
+		// The final eight bytes of a GUID are stored byte-for-byte. This
+		// legacy struct represents the first two of those bytes as a uint16,
+		// and the reader normalizes that field with Little() above. The
+		// standard PCM subtype bytes are 80 00, which therefore compare as
+		// numeric 0x0080 after that normalization, not 0x8000.
+
 		waveFmt_t::extra_t::extensible_t::guid_t pcmGuid = {
 			FORMAT_PCM,
 			0x0000,
 			0x0010,
-			0x8000,
+			0x0080,
 			{ 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 }
 		};
 		if ( memcmp( &pcmGuid, &format.extra.extensible.subFormat, sizeof( pcmGuid ) ) != 0 ) {
