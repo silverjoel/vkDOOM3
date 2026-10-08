@@ -118,16 +118,17 @@ public:
 	{
 		idSoundVoice_Base::SetOcclusion(idMath::ClampFloat(0.0f, 1.0f, f));
 
+		ApplyOcclusionFilter();
+
 		// ApplyOcclusionFilter() deliberately retires an untrustworthy source
 		// when a direct-filter detach cannot be completed. DestroyInternal()
 		// clears its internal failure latch as part of teardown, so restore
-		// the logical failure state here for the active channel.
+		// the logical failure state after the filter update for the active
+		// channel.
 		if (openalSource == 0)
 		{
 			coreParameterUpdateFailed = true;
 		}
-
-		ApplyOcclusionFilter();
 	}
 
 	void					SetInnerRadius(float r)
