@@ -1790,6 +1790,8 @@ void I_PlaySong(const char* songname, int looping)
 {
 	const bool hardwareContextCurrent = I_ValidateSoundHardwareContext();
 
+	const bool retryingAbandonedTrack = !restoringMusicAfterHardwareRestart && musicNeedsExplicitRetry;
+
 	// An explicit request begins a new attempt even if the requested track
 	// matches the logical track that a previous hardware failure abandoned.
 	if (!restoringMusicAfterHardwareRestart) {
@@ -1809,9 +1811,10 @@ void I_PlaySong(const char* songname, int looping)
 		restoreMusicAfterHardwareRestart = !currentMusicName.IsEmpty();
 		if (!restoringMusicAfterHardwareRestart) {
 			musicInitRetryAttempted = false;
-			if (explicitNewRequest) {
-				// A new logical song request begins a new bounded hardware
-				// recovery episode after an earlier track was abandoned.
+			if (retryingAbandonedTrack || explicitNewRequest) {
+				// A different track or an explicit retry of an abandoned
+				// same track begins a fresh bounded hardware-recovery
+				// episode.
 				musicHardwareRestartAttempted = false;
 			}
 		}
