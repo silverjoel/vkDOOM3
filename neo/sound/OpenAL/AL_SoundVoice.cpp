@@ -367,6 +367,15 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 		alSourcef( openalSource, AL_ROLLOFF_FACTOR, 0.0f );
 		
 		alSourcei(openalSource, AL_BUFFER, 0);
+
+		// These are mandatory baseline properties for every newly-created
+		// BFG source. Do not let a later CheckALErrors() merely discard a
+		// failure and then publish this source as reusable.
+		if (CheckALErrors() != AL_NO_ERROR)
+		{
+			DestroyInternal();
+			return false;
+		}
 		
 		if( s_debugHardware.GetBool() )
 		{
@@ -385,6 +394,12 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	numChannels = leadinSample->format.basic.numChannels;
 	sampleRate = leadinSample->format.basic.samplesPerSec;
 
+	// Resolve optional gain-limit support before beginning the mandatory
+	// source-configuration sequence. The extension helper performs its own
+	// AL error isolation on first use and must not be allowed to consume an
+	// error produced by AL_SOURCE_RELATIVE or AL_POSITION below.
+	const float gainLimit = OpenAL_GetGainLimit();
+
 	CheckALErrors();
 	
 	alSourcei( openalSource, AL_SOURCE_RELATIVE, AL_TRUE );
@@ -395,10 +410,19 @@ bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSo
 	// the implementation supports it. This makes SSF_UNCLAMPED gain > 1.0
 	// effective on supporting OpenAL implementations while preserving the
 	// core-compatible 1.0 ceiling everywhere else.
-	alSourcef(openalSource, AL_MAX_GAIN, OpenAL_GetGainLimit());
+	alSourcef(openalSource, AL_MAX_GAIN, gainLimit);
 	
 	alSourcef( openalSource, AL_GAIN, 1.0f );
 	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
+
+	// Everything above is required for correct voice behavior. Check it
+	// before optional EFX/source-radius helpers, which intentionally isolate
+	// and consume their own extension errors.
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		DestroyInternal();
+		return false;
+	}
 
 	// A source may be reused from a previously occluded sound. Start each
 	// allocation with an unfiltered direct path; UpdateHardware() will call
