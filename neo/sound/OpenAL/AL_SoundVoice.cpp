@@ -434,9 +434,11 @@ void idSoundVoice_OpenAL::DestroyInternal()
 			idLib::Printf( "%dms: %i destroyed\n", Sys_Milliseconds(), openalSource );
 		}
 
-		// Deleting a playing source is legal in OpenAL, so deletion remains
-		// the final cleanup path even if stop/detach itself fails.
-		FlushSourceBuffers();
+		// OpenAL permits deleting a playing source; deletion stops it
+		// automatically and releases the source object. Do not run the
+		// stop/detach sequence again here, since DestroyInternal() is also
+		// the recovery path after FlushSourceBuffers() itself has failed.
+		CheckALErrors();
 		
 		alDeleteSources( 1, &openalSource );
 		CheckALErrors();
