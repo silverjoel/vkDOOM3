@@ -87,6 +87,7 @@ static bool	restoreMusicAfterHardwareRestart = false;
 static bool	musicHardwareRestartAttempted = false;
 static bool	restoringMusicAfterHardwareRestart = false;
 static bool	musicInitRetryAttempted = false;
+static bool	musicInitCleanupRestartAttempted = false;
 static bool	musicNeedsExplicitRetry = false;
 
 typedef struct {
@@ -1432,6 +1433,10 @@ I_InitSound
 void I_InitSound()
 {
 	if (S_initialized == 0) {
+		// A newly-entered Classic session gets a fresh bounded cleanup
+		// recovery episode for partial music initialization failures.
+		musicInitCleanupRestartAttempted = false;
+
 		// Debug: announce entry to doomclassic I_InitSound
 		printf("[doomclassic] I_InitSound: entry\n");
 		// Set up listener parameters
@@ -1546,6 +1551,70 @@ bool I_MusicNeedsExplicitRetry(void)
 
 /*
 ======================
+I_CleanupFailedMusicInitObjects
+
+Music initialization can run either after Classic Doom is already active or
+inside idSoundHardware_OpenAL::Init(), before soundHardwareInitialized is
+published. Clean up against the owned current context rather than relying on
+that flag. If the driver refuses to release a partially-created object, allow
+one follow-up full sound restart to reclaim it through context destruction.
+The guard survives that restart so a persistently broken replacement context
+cannot create an every-frame restart loop.
+======================
+*/
+static void I_CleanupFailedMusicInitObjects()
+{
+	bool cleanupFailed = false;
+	
+	if (soundSystemLocal.hardware.IsContextCurrent()) {
+		if (alMusicSourceVoice != 0) {
+			alGetError();
+			const ALboolean validSource = alIsSource(alMusicSourceVoice);
+			const ALenum validationError = alGetError();
+			
+			if (validationError != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+			else if (validSource == AL_TRUE) {
+				alDeleteSources(1, &alMusicSourceVoice);
+				if (alGetError() != AL_NO_ERROR) {
+					cleanupFailed = true;
+				}
+			}
+		}
+		
+		if (alMusicBuffer != 0) {
+			alGetError();
+			const ALboolean validBuffer = alIsBuffer(alMusicBuffer);
+			const ALenum validationError = alGetError();
+			
+			if (validationError != AL_NO_ERROR) {
+				cleanupFailed = true;
+			}
+			else if (validBuffer == AL_TRUE) {
+				alDeleteBuffers(1, &alMusicBuffer);
+				if (alGetError() != AL_NO_ERROR) {
+					cleanupFailed = true;
+				}
+			}
+		}
+	}
+	else if (alMusicSourceVoice != 0 || alMusicBuffer != 0) {
+		cleanupFailed = true;
+	}
+	
+	alMusicSourceVoice = 0;
+	alMusicBuffer = 0;
+	
+	if (cleanupFailed && !musicInitCleanupRestartAttempted) {
+		printf("[doomclassic] failed to retire partial music initialization objects; requesting one cleanup restart\n");
+		musicInitCleanupRestartAttempted = true;
+		soundSystemLocal.SetNeedsRestart();
+	}
+}
+
+/*
+======================
 I_InitMusic
 ======================
 */
@@ -1576,14 +1645,7 @@ void I_InitMusic(void)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || alMusicSourceVoice == 0) {
 		printf("[doomclassic] failed to create music source: 0x%X\n", alError);
-		if (alMusicSourceVoice != 0) {
-			alGetError();
-			if (alIsSource(alMusicSourceVoice) == AL_TRUE) {
-				alDeleteSources(1, &alMusicSourceVoice);
-			}
-			alGetError();
-		}
-		alMusicSourceVoice = 0;
+		I_CleanupFailedMusicInitObjects();
 		Timidity_Shutdown();
 		return;
 	}
@@ -1595,8 +1657,7 @@ void I_InitMusic(void)
 	alError = alGetError();
 	if (alError != AL_NO_ERROR) {
 		printf("[doomclassic] failed to configure music source: 0x%X\n", alError);
-		alDeleteSources(1, &alMusicSourceVoice);
-		alMusicSourceVoice = 0;
+		I_CleanupFailedMusicInitObjects();
 		Timidity_Shutdown();
 		return;
 	}
@@ -1605,17 +1666,13 @@ void I_InitMusic(void)
 	alError = alGetError();
 	if (alError != AL_NO_ERROR || alMusicBuffer == 0) {
 		printf("[doomclassic] failed to create music buffer: 0x%X\n", alError);
-		if (alMusicBuffer != 0) {
-			alDeleteBuffers(1, &alMusicBuffer);
-			alMusicBuffer = 0;
-		}
-		 alDeleteSources(1, &alMusicSourceVoice);
-		alMusicSourceVoice = 0;
+		I_CleanupFailedMusicInitObjects();
 		Timidity_Shutdown();
 		return;
 	}
 	
 	Music_initialized = true;
+	musicInitCleanupRestartAttempted = false;
 
 	// A hardware-only restart destroys the OpenAL music objects while the
 	// Classic Doom game still considers its current track selected. Requeue
