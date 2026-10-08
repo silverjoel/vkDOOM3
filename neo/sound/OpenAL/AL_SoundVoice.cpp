@@ -625,8 +625,10 @@ void idSoundVoice_OpenAL::ApplyOcclusionFilter()
 				}
 				return;
 			}
-			return;
 		}
+
+		// No occlusion means no EFX filter is needed on this source.
+		return;
 	}
 	if( !EnsureOcclusionFilter() )
 	{
