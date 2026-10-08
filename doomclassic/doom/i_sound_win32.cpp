@@ -153,6 +153,7 @@ activeSound_t		activeSounds[NUM_SOUNDBUFFERS] = { 0 };
 int			S_initialized = 0;
 bool			Music_initialized = false;
 static bool		soundHardwareInitialized = false;
+static bool		classicHardwareDeferredUntilRestart = false;
 static int		numOutputChannels = 0;
 static uint32		nextSoundHandle = 1;
 
@@ -558,7 +559,7 @@ static bool I_EnsureSfxBuffer(int id)
 		return true;
 	}
 	
-	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext() || S_sfx[id].data == NULL || lengths[id] <= 0) {
+	if (classicHardwareDeferredUntilRestart || !soundHardwareInitialized || !I_ValidateSoundHardwareContext() || S_sfx[id].data == NULL || lengths[id] <= 0) {
 		return false;
 	}
 	
@@ -1262,6 +1263,12 @@ sound channels.
 void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 {
 	::numOutputChannels = numOutputChannels_;
+
+	// This function is entered only after the OpenAL hardware layer has made
+	// its target context current. Any Classic allocations deferred for a
+	// pending restart may now be rebuilt against this context.
+	classicHardwareDeferredUntilRestart = false;
+
 	// Debug: announce entry to doomclassic sound hardware init
 	printf("[doomclassic] I_InitSoundHardware: numOutputChannels=%d channelMask=0x%X\n", numOutputChannels_, channelMask);
 
@@ -1557,6 +1564,10 @@ void I_InitSound()
 			classicHardwareReady = soundSystemLocal.hardware.ReleaseFreeVoiceResources();
 		}
 
+		// Persist this decision across same-frame music/SFX requests until the
+		// pending hardware restart actually installs its replacement context.
+		classicHardwareDeferredUntilRestart = !classicHardwareReady;
+
 		// Classic music gets the first Classic-owned OpenAL source. SFX
 		// sources are allocated lazily afterward, so a limited-source device
 		// cannot lose music merely because 64 dormant SFX channels were created
@@ -1713,7 +1724,7 @@ I_InitMusic
 */
 void I_InitMusic(void)
 {
-	if (Music_initialized) {
+	if (Music_initialized || classicHardwareDeferredUntilRestart) {
 		return;
 	}
 
@@ -1998,7 +2009,7 @@ void I_PlaySong(const char* songname, int looping)
 				musicHardwareRestartAttempted = false;
 			}
 		}
-		if (hardwareContextCurrent && soundHardwareInitialized && S_initialized) {
+		if (!classicHardwareDeferredUntilRestart && hardwareContextCurrent && soundHardwareInitialized && S_initialized) {
 			I_InitMusic();
 		}
 		// A successful I_InitMusic() re-enters I_PlaySong() through its
@@ -2196,6 +2207,7 @@ void I_UpdateMusic(void)
 		// retry after the new context is fully live. Do not retry every frame.
 		if (restoreMusicAfterHardwareRestart &&
 			!musicInitRetryAttempted &&
+			!classicHardwareDeferredUntilRestart &&
 			soundHardwareInitialized &&
 			S_initialized &&
 			!currentMusicName.IsEmpty()) {
