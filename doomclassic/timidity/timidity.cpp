@@ -370,7 +370,7 @@ int Timidity_Init(int rate, int format, int channels, int samples, const char* c
 	}
 	AUDIO_BUFFER_SIZE = samples;
 
-	/* Allocate memory for mixing (WARNING:  Memory leak!) */
+	/* Allocate memory for mixing. */
 	resample_buffer = (sample_t*)safe_malloc(AUDIO_BUFFER_SIZE*sizeof(sample_t));
 	common_buffer = (int32*)safe_malloc(AUDIO_BUFFER_SIZE*2*sizeof(int32_t));
 
@@ -378,6 +378,18 @@ int Timidity_Init(int rate, int format, int channels, int samples, const char* c
 
 	if (ctl->open(0, 0)) {
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "Couldn't open %s\n", ctl->id_name);
+		// Timidity_Init() owns these allocations until initialization
+		// succeeds. The caller cannot safely be expected to call Shutdown()
+		// after a failed Init(), so release partial state here.
+		if (resample_buffer != NULL) {
+			Real_Tim_Free(resample_buffer);
+			resample_buffer = NULL;
+		}
+		if (common_buffer != NULL) {
+			Real_Tim_Free(common_buffer);
+			common_buffer = NULL;
+		}
+		AUDIO_BUFFER_SIZE = 0;
 		return(-1);
 	}
 

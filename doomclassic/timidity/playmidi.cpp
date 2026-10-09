@@ -1011,8 +1011,29 @@ extern sample_t *resample_buffer;
 extern  int32_t *common_buffer;
 
 void Timidity_Shutdown(void) {
+	// Make teardown safe after partial initialization and safe to repeat.
+	midi_playing = 0;
+	
+	if (ctl->opened && ctl->close) {
+		ctl->close();
+	}
+
 	free_instruments();
 
-	Real_Tim_Free( resample_buffer );
-	Real_Tim_Free( common_buffer );
+	if (resample_buffer != NULL) {
+		Real_Tim_Free(resample_buffer);
+		resample_buffer = NULL;
+	}
+	if (common_buffer != NULL) {
+		Real_Tim_Free(common_buffer);
+		common_buffer = NULL;
+	}
+	
+	AUDIO_BUFFER_SIZE = 0;
+	buffer_pointer = NULL;
+	buffered_count = 0;
+	event_list = NULL;
+	current_event = NULL;
+	sample_count = 0;
+	current_sample = 0;
 }

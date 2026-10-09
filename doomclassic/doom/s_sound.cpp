@@ -251,7 +251,7 @@ S_StartSoundAtVolume
 	sfx_id, S_sfx[sfx_id].name );*/
 
 	// check for bogus sound #
-	if (sfx_id < 1 || sfx_id > NUMSFX)
+	if (sfx_id < 1 || sfx_id >= NUMSFX)
 		I_Error("Bad sfx #: %d", sfx_id);
 
 	sfx = &S_sfx[sfx_id];
@@ -498,7 +498,10 @@ void S_ChangeMusic ( int			musicnum, int			looping )
 	else
 		music = &::g->S_music[musicnum];
 
-	if (::g->mus_playing == music)
+	// Normally a repeated request for the same logical track is redundant.
+	// If the backend exhausted its bounded hardware recovery, however, allow
+	// an explicit same-track request to start a fresh recovery episode.
+	if (::g->mus_playing == music && !I_MusicNeedsExplicitRetry())
 		return;
 
 	//I_Printf("S_ChangeMusic: Playing new track: '%s'\n", music->name);
@@ -567,6 +570,8 @@ void S_StopChannel(int cnum)
 		c->sfxinfo->usefulness--;
 
 		c->sfxinfo = 0;
+		c->handle = 0;
+		c->origin = 0;
 	}
 }
 
@@ -639,8 +644,7 @@ S_getChannel
 	{
 		if (!::g->channels[cnum].sfxinfo)
 			break;
-		else if ( origin && ::g->channels[cnum].origin == origin && 
-				(::g->channels[cnum].handle == sfx_sawidl || ::g->channels[cnum].handle == sfx_sawful) )
+		else if (origin && ::g->channels[cnum].origin == origin && (::g->channels[cnum].sfxinfo == &S_sfx[sfx_sawidl] || ::g->channels[cnum].sfxinfo == &S_sfx[sfx_sawful]))
 		{
 			S_StopChannel(cnum);
 			break;
