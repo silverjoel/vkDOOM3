@@ -32,8 +32,9 @@ Event are used for scheduling tasks and for linking script commands.
 
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 
 #define MAX_EVENTSPERFRAME			4096
@@ -74,7 +75,7 @@ idEventDef::idEventDef( const char *command, const char *formatspec, char return
 	this->formatspec = formatspec;
 	this->returnType = returnType;
 
-	numargs = strlen( formatspec );
+	numargs = static_cast<int>(strlen(formatspec));
 	assert( numargs <= D_EVENT_MAXARGS );
 	if ( numargs > D_EVENT_MAXARGS ) {
 		eventError = true;
@@ -87,7 +88,8 @@ idEventDef::idEventDef( const char *command, const char *formatspec, char return
 	argsize = 0;
 	memset( argOffset, 0, sizeof( argOffset ) );
 	for( i = 0; i < numargs;i++ ) {
-		argOffset[ i ] = argsize;
+		assert(argsize <= INT_MAX);
+		argOffset[ i ] = static_cast<int>(argsize);
 		switch( formatspec[ i ] ) {
 		case D_EVENT_FLOAT :
 			bits |= 1 << i;
@@ -259,7 +261,8 @@ idEvent *idEvent::Alloc( const idEventDef *evdef, int numargs, va_list args ) {
 
 	size = evdef->GetArgSize();
 	if ( size ) {
-		ev->data = eventDataAllocator.Alloc( size );
+		assert(size <= INT_MAX);
+		ev->data = eventDataAllocator.Alloc(static_cast<int>(size));
 		memset( ev->data, 0, size );
 	} else {
 		ev->data = NULL;
@@ -281,7 +284,7 @@ idEvent *idEvent::Alloc( const idEventDef *evdef, int numargs, va_list args ) {
 		switch( format[ i ] ) {
 		case D_EVENT_FLOAT :
 		case D_EVENT_INTEGER :
-			*reinterpret_cast<int *>( dataPtr ) = arg->value;
+			*reinterpret_cast<int *>( dataPtr ) = static_cast<int>(arg->value);
 			break;
 
 		case D_EVENT_VECTOR :
@@ -332,7 +335,7 @@ idEvent *idEvent::Alloc( const idEventDef *evdef, int numargs, va_list args ) {
 idEvent::CopyArgs
 ================
 */
-void idEvent::CopyArgs( const idEventDef *evdef, int numargs, va_list args, int data[ D_EVENT_MAXARGS ] ) {
+void idEvent::CopyArgs( const idEventDef *evdef, int numargs, va_list args, intptr_t data[D_EVENT_MAXARGS] ) {
 	int			i;
 	const char	*format;
 	idEventArg	*arg;
@@ -487,7 +490,7 @@ idEvent::ServiceEvents
 void idEvent::ServiceEvents() {
 	idEvent		*event;
 	int			num;
-	int			args[ D_EVENT_MAXARGS ];
+	intptr_t	args[ D_EVENT_MAXARGS ];
 	int			offset;
 	int			i;
 	int			numargs;
@@ -588,7 +591,7 @@ idEvent::ServiceFastEvents
 void idEvent::ServiceFastEvents() {
 	idEvent	*event;
 	int		num;
-	int			args[ D_EVENT_MAXARGS ];
+	intptr_t	args[ D_EVENT_MAXARGS ];
 	int			offset;
 	int			i;
 	int			numargs;
@@ -741,7 +744,8 @@ idEvent::Save
 */
 void idEvent::Save( idSaveGame *savefile ) {
 	char *str;
-	int i, size;
+	int i;
+	size_t size;
 	idEvent	*event;
 	byte *dataPtr;
 	bool validTrace;
@@ -755,7 +759,9 @@ void idEvent::Save( idSaveGame *savefile ) {
 		savefile->WriteString( event->eventdef->GetName() );
 		savefile->WriteString( event->typeinfo->classname );
 		savefile->WriteObject( event->object );
-		savefile->WriteInt( event->eventdef->GetArgSize() );
+		const size_t argSize = event->eventdef->GetArgSize();
+		assert(argSize <= INT_MAX);
+		savefile->WriteInt(static_cast<int>(argSize));
 		format = event->eventdef->GetArgFormat();
 		for ( i = 0, size = 0; i < event->eventdef->GetNumArgs(); ++i) {
 			dataPtr = &event->data[ event->eventdef->GetArgOffset( i ) ];
@@ -793,7 +799,7 @@ void idEvent::Save( idSaveGame *savefile ) {
 					break;
 			}
 		}
-		assert( size == (int)event->eventdef->GetArgSize() );
+		assert(size == event->eventdef->GetArgSize());
 		event = event->eventNode.Next();
 	}
 
@@ -806,8 +812,10 @@ void idEvent::Save( idSaveGame *savefile ) {
 		savefile->WriteString( event->eventdef->GetName() );
 		savefile->WriteString( event->typeinfo->classname );
 		savefile->WriteObject( event->object );
-		savefile->WriteInt( event->eventdef->GetArgSize() );
-		savefile->Write( event->data, event->eventdef->GetArgSize() );
+		const size_t argSize = event->eventdef->GetArgSize();
+		assert(argSize <= INT_MAX);
+		savefile->WriteInt(static_cast<int>(argSize));
+		savefile->Write( event->data, static_cast<int>(argSize));
 
 		event = event->eventNode.Next();
 	}

@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 
 // simple types.  function types are dynamically allocated
@@ -776,7 +777,7 @@ void idVarDef::PrintInfo( idFile *file, int instructionPointer ) const {
 			switch( etype ) {
 			case ev_string :
 				file->Printf( "\"" );
-				len = strlen( value.stringPtr );
+				len = static_cast<int>(strlen(value.stringPtr));
 				ch = value.stringPtr;
 				for( i = 0; i < len; i++, ch++ ) {
 					if ( idStr::CharIsPrintable( *ch ) ) {
@@ -906,8 +907,9 @@ void idScriptObject::Save( idSaveGame *savefile ) const {
 	} else {
 		savefile->WriteString( type->Name() );
 		size = type->Size();
-		savefile->WriteInt( size );
-		savefile->Write( data, size );
+		assert(size <= INT_MAX);
+		savefile->WriteInt(static_cast<int>(size));
+		savefile->Write( data, static_cast<int>(size));
 	}
 }
 
@@ -1705,52 +1707,65 @@ called after all files are compiled to report memory usage.
 ==============
 */
 void idProgram::CompileStats() {
-	int	memused;
-	int	memallocated;
-	int	numdefs;
-	int	stringspace;
-	int funcMem;
-	int	i;
+	size_t memused;
+	size_t memallocated;
+	int numdefs;
+	size_t stringspace;
+	size_t funcMem;
+	int i;
 
 	gameLocal.Printf( "---------- Compile stats ----------\n" );
 	gameLocal.DPrintf( "Files loaded:\n" );
 
 	stringspace = 0;
-	for( i = 0; i < fileList.Num(); i++ ) {
-		gameLocal.DPrintf( "   %s\n", fileList[ i ].c_str() );
-		stringspace += fileList[ i ].Allocated();
+
+	for (i = 0; i < fileList.Num(); i++) {
+		gameLocal.DPrintf(
+			"   %s\n",
+			fileList[i].c_str()
+		);
+
+		stringspace += fileList[i].Allocated();
 	}
+
 	stringspace += fileList.Size();
 
 	numdefs = varDefs.Num();
-	memused = varDefs.Num() * sizeof( idVarDef );
-	memused += types.Num() * sizeof( idTypeDef );
+
+	memused =
+		static_cast<size_t>(varDefs.Num()) *
+		sizeof(idVarDef);
+
+	memused +=
+		static_cast<size_t>(types.Num()) *
+		sizeof(idTypeDef);
+
 	memused += stringspace;
 
-	for( i = 0; i < types.Num(); i++ ) {
-		memused += types[ i ]->Allocated();
+	for (i = 0; i < types.Num(); i++) {
+		memused += types[i]->Allocated();
 	}
 
 	funcMem = functions.MemoryUsed();
-	for( i = 0; i < functions.Num(); i++ ) {
-		funcMem += functions[ i ].Allocated();
+
+	for (i = 0; i < functions.Num(); i++) {
+		funcMem += functions[i].Allocated();
 	}
 
-	memallocated = funcMem + memused + sizeof( idProgram );
+	memallocated =	funcMem + memused + sizeof(idProgram);
 
 	memused += statements.MemoryUsed();
-	memused += functions.MemoryUsed();	// name and filename of functions are shared, so no need to include them
-	memused += sizeof( variables );
+	memused += functions.MemoryUsed();
+	memused += sizeof(variables);
 
 	gameLocal.Printf( "\nMemory usage:\n" );
-	gameLocal.Printf( "     Strings: %d, %d bytes\n", fileList.Num(), stringspace );
-	gameLocal.Printf( "  Statements: %d, %d bytes\n", statements.Num(), statements.MemoryUsed() );
-	gameLocal.Printf( "   Functions: %d, %d bytes\n", functions.Num(), funcMem );
-	gameLocal.Printf( "   Variables: %d bytes\n", numVariables );
-	gameLocal.Printf( "    Mem used: %d bytes\n", memused );
-	gameLocal.Printf( " Static data: %d bytes\n", sizeof( idProgram ) );
-	gameLocal.Printf( "   Allocated: %d bytes\n", memallocated );
-	gameLocal.Printf( " Thread size: %d bytes\n\n", sizeof( idThread ) );
+	gameLocal.Printf( "     Strings: %d, %llu bytes\n", fileList.Num(), static_cast<unsigned long long>(stringspace));
+	gameLocal.Printf( "  Statements: %d, %llu bytes\n", statements.Num(), static_cast<unsigned long long>( statements.MemoryUsed() ));
+	gameLocal.Printf( "   Functions: %d, %llu bytes\n", functions.Num(), static_cast<unsigned long long>(funcMem));
+	gameLocal.Printf( "    Mem used: %llu bytes\n", static_cast<unsigned long long>(memused));
+	gameLocal.Printf( " Static data: %llu bytes\n", static_cast<unsigned long long>(sizeof(idProgram)));
+	gameLocal.Printf( "   Allocated: %llu bytes\n", static_cast<unsigned long long>(memallocated));
+	gameLocal.Printf( " Thread size: %llu bytes\n\n", static_cast<unsigned long long>(sizeof(idThread)));
 }
 
 /*

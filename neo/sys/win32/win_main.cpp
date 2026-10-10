@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../../idlib/precompiled.h"
+#pragma hdrstop
+
 #include "../../renderer/RenderSystem.h"
 
 #include <direct.h>
@@ -540,7 +541,7 @@ Sys_ListFiles
 int Sys_ListFiles( const char *directory, const char *extension, idStrList &list ) {
 	idStr		search;
 	struct _finddata_t findinfo;
-	int			findhandle;
+	intptr_t findhandle;
 	int			flag;
 
 	if ( !extension) {
@@ -817,9 +818,10 @@ DLL Loading
 Sys_DLL_Load
 =====================
 */
-int Sys_DLL_Load( const char *dllName ) {
-	HINSTANCE libHandle = LoadLibrary( dllName );
-	return (int)libHandle;
+dllHandle_t Sys_DLL_Load(const char* dllName) {
+	HMODULE libHandle = LoadLibrary(dllName);
+
+	return reinterpret_cast<dllHandle_t>(libHandle);
 }
 
 /*
@@ -827,8 +829,10 @@ int Sys_DLL_Load( const char *dllName ) {
 Sys_DLL_GetProcAddress
 =====================
 */
-void *Sys_DLL_GetProcAddress( int dllHandle, const char *procName ) {
-	return GetProcAddress( (HINSTANCE)dllHandle, procName ); 
+void* Sys_DLL_GetProcAddress(dllHandle_t dllHandle, const char* procName) {
+	HMODULE libHandle = reinterpret_cast<HMODULE>(dllHandle);
+
+	return reinterpret_cast<void*>(GetProcAddress(libHandle, procName));
 }
 
 /*
@@ -836,23 +840,32 @@ void *Sys_DLL_GetProcAddress( int dllHandle, const char *procName ) {
 Sys_DLL_Unload
 =====================
 */
-void Sys_DLL_Unload( int dllHandle ) {
-	if ( !dllHandle ) {
+void Sys_DLL_Unload(dllHandle_t dllHandle) {
+	if (dllHandle == 0) {
 		return;
 	}
-	if ( FreeLibrary( (HINSTANCE)dllHandle ) == 0 ) {
+
+	HMODULE libHandle = reinterpret_cast<HMODULE>(dllHandle);
+
+	if (FreeLibrary(libHandle) == 0) {
 		int lastError = GetLastError();
 		LPVOID lpMsgBuf;
+
 		FormatMessage(
 			FORMAT_MESSAGE_ALLOCATE_BUFFER,
-		    NULL,
+			NULL,
 			lastError,
-			MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
-			(LPTSTR) &lpMsgBuf,
+			MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+			(LPTSTR)&lpMsgBuf,
 			0,
-			NULL 
+			NULL
 		);
-		Sys_Error( "Sys_DLL_Unload: FreeLibrary failed - %s (%d)", lpMsgBuf, lastError );
+
+		Sys_Error(
+			"Sys_DLL_Unload: FreeLibrary failed - %s (%d)",
+			lpMsgBuf,
+			lastError
+		);
 	}
 }
 
@@ -952,14 +965,18 @@ void Sys_GenerateEvents() {
 
 	// check for console commands
 	s = Sys_ConsoleInput();
-	if ( s ) {
-		char	*b;
-		int		len;
+	if (s) {
+		char* b;
+		const size_t stringLength = strlen(s);
+		assert(stringLength < INT_MAX);
 
-		len = strlen( s ) + 1;
-		b = (char *)Mem_Alloc( len, TAG_EVENTS );
-		strcpy( b, s );
-		Sys_QueEvent( SE_CONSOLE, 0, 0, len, b, 0 );
+		const int len =	static_cast<int>(stringLength) + 1;
+
+		b = static_cast<char*>(Mem_Alloc(len, TAG_EVENTS));
+
+		strcpy(b, s);
+
+		Sys_QueEvent( SE_CONSOLE, 0, 0, len, b, 0);
 	}
 
 	entered = false;
@@ -1245,6 +1262,8 @@ const char *GetExceptionCodeInfo( UINT code ) {
 	}
 }
 
+#if !defined(_WIN64)
+
 int Sys_FPU_PrintStateFlags( char *ptr, int ctrl, int stat, int tags, int inof, int inse, int opof, int opse );
 
 /*
@@ -1316,6 +1335,7 @@ EXCEPTION_DISPOSITION __cdecl _except_handler( struct _EXCEPTION_RECORD *Excepti
     // Tell the OS to restart the faulting instruction
     return ExceptionContinueExecution;
 }
+#endif
 
 #define TEST_FPU_EXCEPTIONS	/*	FPU_EXCEPTION_INVALID_OPERATION |		*/	\
 							/*	FPU_EXCEPTION_DENORMALIZED_OPERAND |	*/	\

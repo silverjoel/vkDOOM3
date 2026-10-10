@@ -26,8 +26,8 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../idlib/precompiled.h"
+#pragma hdrstop
 
 //===============================================================
 //
@@ -42,12 +42,12 @@ If you have questions concerning this license or the applicable additional terms
 Mem_Alloc16
 ==================
 */
-void * Mem_Alloc16( const int size, const memTag_t tag ) {
+void * Mem_Alloc16( const size_t size, const memTag_t tag ) {
 	if ( !size ) {
 		return NULL;
 	}
-	const int paddedSize = ( size + 15 ) & ~15;
-	return _aligned_malloc( paddedSize, 16 );
+	const size_t paddedSize = (size + 15) & ~size_t(15);
+	return _aligned_malloc(paddedSize, 16);
 }
 
 /*

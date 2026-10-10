@@ -26,8 +26,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../../renderer/RenderWorld.h"
 #include "../Game_local.h"
 
@@ -620,9 +621,13 @@ void idThread::KillThread( const char *name ) {
 	// see if the name uses a wild card
 	ptr = strchr( name, '*' );
 	if ( ptr ) {
-		len = ptr - name;
+		const ptrdiff_t length = ptr - name;
+		assert(length <= INT_MAX);
+		len = static_cast<int>(length);
 	} else {
-		len = strlen( name );
+		const size_t length = strlen(name);
+		assert(length <= INT_MAX);
+		len = static_cast<int>(length);
 	}
 
 	// kill only those threads whose name matches name
@@ -1692,7 +1697,7 @@ idThread::Event_StrLen
 void idThread::Event_StrLen( const char *string ) {
 	int len;
 
-	len = strlen( string );
+	len = static_cast<int>(strlen(string));
 	idThread::ReturnInt( len );
 }
 
@@ -1709,7 +1714,7 @@ void idThread::Event_StrLeft( const char *string, int num ) {
 		return;
 	}
 
-	len = strlen( string );
+	len = static_cast<int>(strlen(string));
 	if ( len < num ) {
 		idThread::ReturnString( string );
 		return;
@@ -1732,7 +1737,7 @@ void idThread::Event_StrRight( const char *string, int num ) {
 		return;
 	}
 
-	len = strlen( string );
+	len = static_cast<int>(strlen(string));
 	if ( len < num ) {
 		idThread::ReturnString( string );
 		return;
@@ -1754,7 +1759,7 @@ void idThread::Event_StrSkip( const char *string, int num ) {
 		return;
 	}
 
-	len = strlen( string );
+	len = static_cast<int>(strlen(string));
 	if ( len < num ) {
 		idThread::ReturnString( "" );
 		return;
@@ -1779,7 +1784,7 @@ void idThread::Event_StrMid( const char *string, int start, int num ) {
 	if ( start < 0 ) {
 		start = 0;
 	}
-	len = strlen( string );
+	len = static_cast<int>(strlen(string));
 	if ( start > len ) {
 		start = len;
 	}

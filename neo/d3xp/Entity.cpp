@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "precompiled.h"
+#pragma hdrstop
+
 #include "../renderer/RenderWorld.h"
 #include "../ui/ListGUI.h"
 #include "../ui/UserInterface.h"
@@ -3604,7 +3605,7 @@ bool idEntity::HandleGuiCommands( idEntity *entityGui, const char *cmds ) {
 	if ( entityGui && cmds && *cmds ) {
 		idLexer src;
 		idToken token, token2, token3, token4;
-		src.LoadMemory( cmds, strlen( cmds ), "guiCommands" );
+		src.LoadMemory( cmds, static_cast<int>(strlen(cmds)), "guiCommands" );
 		while( 1 ) {
 
 			if ( !src.ReadToken( &token ) ) {
@@ -3933,7 +3934,7 @@ idCurve_Spline<idVec3> *idEntity::GetSpline() const {
 		return NULL;
 	}
 
-	idStr str = kv->GetKey().Right( kv->GetKey().Length() - strlen( curveTag ) );
+	idStr str = kv->GetKey().Right( kv->GetKey().Length() - static_cast<int>(strlen(curveTag)) );
 	if ( str.Icmp( "CatmullRomSpline" ) == 0 ) {
 		spline = new (TAG_ENTITY) idCurve_CatmullRomSpline<idVec3>();
 	} else if ( str.Icmp( "nubs" ) == 0 ) {

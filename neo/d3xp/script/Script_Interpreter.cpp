@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 
 /*
@@ -690,7 +691,7 @@ void idInterpreter::CallEvent( const function_t *func, int argsize ) {
 	varEval_t			var;
 	int 				pos;
 	int 				start;
-	int					data[ D_EVENT_MAXARGS ];
+	intptr_t data[D_EVENT_MAXARGS] = {};
 	const idEventDef	*evdef;
 	const char			*format;
 
@@ -750,7 +751,7 @@ void idInterpreter::CallEvent( const function_t *func, int argsize ) {
 		switch( format[ i ] ) {
 		case D_EVENT_INTEGER :
 			var.intPtr = ( int * )&localstack[ start + pos ];
-			data[ i ] = int( *var.floatPtr );
+			data[ i ] = static_cast<intptr_t>(static_cast<int>(*var.floatPtr));
 			break;
 
 		case D_EVENT_FLOAT :
@@ -862,7 +863,7 @@ void idInterpreter::CallSysEvent( const function_t *func, int argsize ) {
 	varEval_t			source;
 	int 				pos;
 	int 				start;
-	int					data[ D_EVENT_MAXARGS ];
+	intptr_t data[D_EVENT_MAXARGS] = {};
 	const idEventDef	*evdef;
 	const char			*format;
 
@@ -881,7 +882,7 @@ void idInterpreter::CallSysEvent( const function_t *func, int argsize ) {
 		switch( format[ i ] ) {
 		case D_EVENT_INTEGER :
 			source.intPtr = ( int * )&localstack[ start + pos ];
-			*( int * )&data[ i ] = int( *source.floatPtr );
+			*( int * )&data[ i ] = static_cast<intptr_t>(static_cast<int>(*source.floatPtr));
 			break;
 
 		case D_EVENT_FLOAT :

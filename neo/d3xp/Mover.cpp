@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "precompiled.h"
+#pragma hdrstop
+
 #include "../renderer/RenderWorld.h"
 #include "../ui/ListGUI.h"
 #include "../ui/UserInterface.h"
@@ -1703,7 +1704,7 @@ void idElevator::Spawn() {
 	returnTime = spawnArgs.GetFloat( "returnTime" );
 	returnFloor = spawnArgs.GetInt( "returnFloor" );
 
-	len1 = strlen( "floorPos_" );
+	len1 = static_cast<int>(strlen("floorPos_"));
 	const idKeyValue *kv = spawnArgs.MatchPrefix( "floorPos_", NULL );
 	while( kv ) {
 		str = kv->GetKey().Right( kv->GetKey().Length() - len1 );

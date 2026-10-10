@@ -50,10 +50,10 @@ static const int MAX_TAGS = 256;
 
 
 
-void *		Mem_Alloc16( const int size, const memTag_t tag );
+void *		Mem_Alloc16( const size_t size, const memTag_t tag );
 void		Mem_Free16( void *ptr );
 
-ID_INLINE void *	Mem_Alloc( const int size, const memTag_t tag ) { return Mem_Alloc16( size, tag ); }
+ID_INLINE void *	Mem_Alloc( const size_t size, const memTag_t tag ) { return Mem_Alloc16( size, tag ); }
 ID_INLINE void		Mem_Free( void *ptr ) { Mem_Free16( ptr ); }
 
 void *		Mem_ClearedAlloc( const int size, const memTag_t tag );

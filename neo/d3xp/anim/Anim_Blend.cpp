@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../../renderer/RenderWorld.h"
 #include "../Game_local.h"
 
@@ -2932,7 +2933,7 @@ int idDeclModelDef::GetAnim( const char *name ) const {
 	int				numAnims;
 	int				len;
 
-	len = strlen( name );
+	len = static_cast<int>(strlen(name));
 	if ( len && idStr::CharIsNumeric( name[ len - 1 ] ) ) {
 		// find a specific animation
 		return GetSpecificAnim( name );

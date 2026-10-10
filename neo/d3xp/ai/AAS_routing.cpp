@@ -26,8 +26,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../precompiled.h"
+#pragma hdrstop
+
 #include "../Game_local.h"
 #include "AAS_local.h"
 
@@ -166,7 +167,7 @@ void idAASLocal::CalculateAreaTravelTimes() {
 		}
 	}
 
-	assert( ( (unsigned int) bytePtr - (unsigned int) areaTravelTimes ) <= numAreaTravelTimes * sizeof( unsigned short ) );
+	assert( (bytePtr - reinterpret_cast<byte*>(areaTravelTimes)) <= static_cast<ptrdiff_t>( numAreaTravelTimes * sizeof(unsigned short)	));
 }
 
 /*
