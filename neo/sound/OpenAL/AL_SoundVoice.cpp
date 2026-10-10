@@ -1,0 +1,1365 @@
+/*
+===========================================================================
+
+Doom 3 BFG Edition GPL Source Code
+Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+Copyright (C) 2013 Robert Beckebans
+
+This file is part of the Doom 3 BFG Edition GPL Source Code ("Doom 3 BFG Edition Source Code").
+
+Doom 3 BFG Edition Source Code is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Doom 3 BFG Edition Source Code is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Doom 3 BFG Edition Source Code.  If not, see <http://www.gnu.org/licenses/>.
+
+In addition, the Doom 3 BFG Edition Source Code is also subject to certain additional terms. You should have received a copy of these additional terms immediately following the terms and conditions of the GNU General Public License which accompanied the Doom 3 BFG Edition Source Code.  If not, please request a copy in writing from id Software at the address below.
+
+If you have questions concerning this license or the applicable additional terms, you may contact in writing id Software LLC, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
+
+===========================================================================
+*/
+
+#include "../../framework/precompiled.h"
+#pragma hdrstop
+
+#include "../snd_local.h"
+#include <AL/efx.h>
+
+idCVar s_debugHardware( "s_debugHardware", "0", CVAR_BOOL, "Print a message any time a hardware voice changes" );
+
+typedef LPALGENFILTERS			openalGenFilters_t;
+typedef LPALDELETEFILTERS		openalDeleteFilters_t;
+typedef LPALFILTERI				openalFilteri_t;
+typedef LPALFILTERF				openalFilterf_t;
+
+static openalGenFilters_t		qalGenFilters = NULL;
+static openalDeleteFilters_t	qalDeleteFilters = NULL;
+static openalFilteri_t			qalFilteri = NULL;
+static openalFilterf_t			qalFilterf = NULL;
+static ALCcontext*				openalEfxContext = NULL;
+static bool						openalEfxAvailable = false;
+
+// The XAudio2 backend used a low-pass cutoff of 1000 / occlusion Hz.
+// EFX exposes high-frequency gain instead of the same cutoff control, so use
+// a smooth HF attenuation that gives a similar muffling effect without
+// changing the source's overall gain.
+static const float OPENAL_OCCLUSION_HF_ATTENUATION_DB = -16.0f;
+
+// The bundled OpenAL headers predate AL_EXT_SOURCE_RADIUS. Query the enum at
+// runtime instead of hard-coding a newer header dependency. Cache per context
+// so a device/context restart can select a different OpenAL implementation.
+static ALCcontext * openalSourceRadiusContext = NULL;
+static ALenum openalSourceRadiusEnum = AL_NONE;
+
+// Core OpenAL restricts AL_MAX_GAIN to 1.0, which would silently defeat
+// BFG's SSF_UNCLAMPED source gains above unity. AL_SOFT_gain_clamp_ex raises
+// that limit and exposes the implementation's final gain ceiling. Cache the
+// result per context because extension support can change after a restart.
+static ALCcontext * openalGainClampContext = NULL;
+static float openalGainLimit = 1.0f;
+
+/*
+========================
+OpenAL_ResetContextCaches
+========================
+*/
+void OpenAL_ResetContextCaches()
+{
+	openalSourceRadiusContext = NULL;
+	openalSourceRadiusEnum = AL_NONE;
+
+	openalGainClampContext = NULL;
+	openalGainLimit = 1.0f;
+
+	openalEfxContext = NULL;
+	openalEfxAvailable = false;
+	qalGenFilters = NULL;
+	qalDeleteFilters = NULL;
+	qalFilteri = NULL;
+	qalFilterf = NULL;
+}
+
+static ALenum OpenAL_GetSourceRadiusEnum()
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if( context == NULL )
+	{
+		OpenAL_ResetContextCaches();
+		return AL_NONE;
+	}
+	
+	if( context == openalSourceRadiusContext )
+	{
+		return openalSourceRadiusEnum;
+	}
+	
+	openalSourceRadiusContext = context;
+	openalSourceRadiusEnum = AL_NONE;
+	
+	CheckALErrors();
+	if( alIsExtensionPresent("AL_EXT_SOURCE_RADIUS") != AL_TRUE )
+	{
+		CheckALErrors();
+		return AL_NONE;
+	}
+	
+	const ALenum sourceRadius = alGetEnumValue( "AL_SOURCE_RADIUS" );
+	if (CheckALErrors() == AL_NO_ERROR && sourceRadius > AL_NONE)
+	{
+		openalSourceRadiusEnum = sourceRadius;
+	}
+	
+	return openalSourceRadiusEnum;
+}
+
+/*
+========================
+OpenAL_GetGainLimit
+
+AL_SOFT_gain_clamp_ex extends the legal AL_MAX_GAIN range beyond the core
+OpenAL 1.0 ceiling. The extension's AL_GAIN_LIMIT_SOFT value is the
+implementation's final mixing gain limit, so using it for AL_MAX_GAIN lets
+SSF_UNCLAMPED sources retain their intended gain above unity when supported.
+========================
+*/
+static float OpenAL_GetGainLimit()
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if (context == NULL)
+	{
+		OpenAL_ResetContextCaches();
+		return 1.0f;
+	}
+	
+	if (context == openalGainClampContext)
+	{
+		return openalGainLimit;
+	}
+	
+	openalGainClampContext = context;
+	openalGainLimit = 1.0f;
+	
+	CheckALErrors();
+	if (alIsExtensionPresent("AL_SOFT_gain_clamp_ex") != AL_TRUE)
+	{
+		CheckALErrors();
+		return openalGainLimit;
+	}
+	
+	// The bundled headers predate AL_SOFT_gain_clamp_ex, so resolve the
+	// standardized token at runtime just as we do for AL_EXT_SOURCE_RADIUS.
+	const ALenum gainLimitEnum = alGetEnumValue("AL_GAIN_LIMIT_SOFT");
+	if (CheckALErrors() != AL_NO_ERROR || gainLimitEnum <= AL_NONE)
+	{
+		return openalGainLimit;
+	}
+	
+	const ALfloat gainLimit = alGetFloat(gainLimitEnum);
+	if (CheckALErrors() == AL_NO_ERROR && gainLimit >= 1.0f)
+	{
+		openalGainLimit = gainLimit;
+	}
+	
+	return openalGainLimit;
+}
+
+static bool OpenAL_LoadEfxFilterProcs()
+{
+	ALCcontext * context = alcGetCurrentContext();
+	if( context == NULL )
+	{
+		OpenAL_ResetContextCaches();
+		return false;
+	}
+
+	if (context == openalEfxContext)
+	{
+		return openalEfxAvailable;
+	}
+	
+	openalEfxContext = context;
+	openalEfxAvailable = false;
+	qalGenFilters = NULL;
+	qalDeleteFilters = NULL;
+	qalFilteri = NULL;
+	qalFilterf = NULL;
+	
+	ALCdevice * device = alcGetContextsDevice( context );
+	if (device == NULL || alcIsExtensionPresent(device, ALC_EXT_EFX_NAME) != ALC_TRUE)
+	{
+		return false;
+	}
+	
+	qalGenFilters = reinterpret_cast<openalGenFilters_t>( alGetProcAddress( "alGenFilters" ) );
+	qalDeleteFilters = reinterpret_cast<openalDeleteFilters_t>(alGetProcAddress("alDeleteFilters"));
+	qalFilteri = reinterpret_cast<openalFilteri_t>(alGetProcAddress("alFilteri"));
+	qalFilterf = reinterpret_cast<openalFilterf_t>(alGetProcAddress("alFilterf"));
+	
+	openalEfxAvailable =
+		qalGenFilters != NULL &&
+		qalDeleteFilters != NULL &&
+		qalFilteri != NULL &&
+		qalFilterf != NULL;
+	
+	if (!openalEfxAvailable)
+	{
+		qalGenFilters = NULL;
+		qalDeleteFilters = NULL;
+		qalFilteri = NULL;
+		qalFilterf = NULL;
+	}
+	
+	return openalEfxAvailable;
+}
+
+
+/*
+========================
+idSoundVoice_OpenAL::idSoundVoice_OpenAL
+========================
+*/
+idSoundVoice_OpenAL::idSoundVoice_OpenAL()
+	:
+	openalSource(0),
+	openalLowPassFilter(0),
+	openalLowPassFilterConfigured(false),
+	leadinSample(NULL),
+	loopingSample(NULL),
+	numChannels(0),
+	sampleRate(0),
+	trackAmplitude(false),
+	paused(true),
+	coreParameterUpdateFailed(false)
+{
+}
+
+/*
+========================
+idSoundVoice_OpenAL::~idSoundVoice_OpenAL
+========================
+*/
+idSoundVoice_OpenAL::~idSoundVoice_OpenAL()
+{
+	DestroyInternal();
+}
+
+/*
+========================
+idSoundVoice_OpenAL::CompatibleFormat
+========================
+*/
+bool idSoundVoice_OpenAL::CompatibleFormat( idSoundSample_OpenAL* s )
+{
+	// OpenAL sources are not tied to a PCM format the way XAudio2 source
+	// voices are. Playback state is checked by AllocateVoice() and Create()
+	// before this compatibility test, so avoid a redundant AL state query.
+	return s != NULL;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::Create
+========================
+*/
+bool idSoundVoice_OpenAL::Create( const idSoundSample* leadinSample_, const idSoundSample* loopingSample_ )
+{
+	if( IsPlaying() )
+	{
+		// AllocateVoice() should only hand us a free voice. Be defensive in
+		// case the bookkeeping ever gets out of sync.
+		Stop();
+		
+		if( IsPlaying() )
+		{
+			return false;
+		}
+	}
+	
+	leadinSample = ( idSoundSample_OpenAL* )leadinSample_;
+	loopingSample = ( idSoundSample_OpenAL* )loopingSample_;
+
+	// A context restart or transient OpenAL allocation/upload failure can
+	// leave a loaded sample resident on the CPU with no hardware buffer.
+	// Retry that upload lazily when the sample is actually needed. Avoid
+	// retrying permanently unsupported formats every frame.
+	if (leadinSample != NULL && leadinSample->openalBuffer == 0 && leadinSample->IsLoaded() && leadinSample->GetOpenALBufferFormat() != AL_NONE)
+	{
+		leadinSample->RecreateOpenALBuffer();
+	}
+	if (loopingSample != NULL && loopingSample != leadinSample && loopingSample->openalBuffer == 0 && loopingSample->IsLoaded() && loopingSample->GetOpenALBufferFormat() != AL_NONE)
+	{
+		loopingSample->RecreateOpenALBuffer();
+	}
+
+	// PC PCM/ADPCM samples are decoded as needed and uploaded by
+	// idSoundSample_OpenAL::CreateOpenALBuffer(). The old CPU-streaming
+	// fallback was incomplete (one of three buffers was refilled/queued and
+	// playback offsets were ignored), so reject a missing hardware buffer
+	// instead of entering a path that cannot play the sample correctly.
+	if( leadinSample == NULL ||
+		leadinSample->openalBuffer == 0 ||
+		(loopingSample != NULL && loopingSample->openalBuffer == 0) )
+	{
+		if( alIsSource(openalSource) )
+		{
+			if (!FlushSourceBuffers())
+			{
+				if (!DestroyInternal())
+				{
+					soundSystemLocal.SetNeedsRestart();
+				}
+			}
+		}
+		
+		idLib::Warning(
+			"idSoundVoice_OpenAL::Create: sample has no OpenAL buffer: %s%s%s",
+			leadinSample != NULL ? leadinSample->GetName() : "<null>",
+			loopingSample != NULL ? " / " : "",
+			loopingSample != NULL ? loopingSample->GetName() : "");
+		
+		leadinSample = NULL;
+		loopingSample = NULL;
+		return false;
+	}
+	
+	if( alIsSource( openalSource ) && CompatibleFormat( leadinSample ) )
+	{
+		// A reused OpenAL source may still have an old static buffer or queue
+		// attached. Clear it before configuring the new sample. If cleanup
+		// fails, retire the source and create a fresh one instead of reusing
+		// a source whose old playback/binding state is unknown.
+		if (!FlushSourceBuffers())
+		{
+			if (!DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+				leadinSample = NULL;
+				loopingSample = NULL;
+				return false;
+			}
+		}
+	}
+	
+	if (!alIsSource(openalSource))
+	{
+		if (!DestroyInternal())
+		{
+			soundSystemLocal.SetNeedsRestart();
+			leadinSample = NULL;
+			loopingSample = NULL;
+			return false;
+		}
+		CheckALErrors();
+		
+		openalSource = 0;
+
+		alGenSources( 1, &openalSource );
+
+		const ALenum generateError = CheckALErrors();
+		const ALboolean generatedSourceValid = openalSource != 0 ? alIsSource(openalSource) : AL_FALSE;
+		const ALenum validationError = CheckALErrors();
+		
+		if (generateError != AL_NO_ERROR || validationError != AL_NO_ERROR || openalSource == 0 || generatedSourceValid != AL_TRUE)
+		{
+			if (openalSource != 0 && !DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+			}
+			leadinSample = NULL;
+			loopingSample = NULL;
+			return false;
+		}
+		
+		alSourcef( openalSource, AL_ROLLOFF_FACTOR, 0.0f );
+		
+		alSourcei(openalSource, AL_BUFFER, 0);
+
+		// These are mandatory baseline properties for every newly-created
+		// BFG source. Do not let a later CheckALErrors() merely discard a
+		// failure and then publish this source as reusable.
+		if (CheckALErrors() != AL_NO_ERROR)
+		{
+			if (!DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+			}
+			return false;
+		}
+		
+		if( s_debugHardware.GetBool() )
+		{
+			if( loopingSample == NULL || loopingSample == leadinSample )
+			{
+				idLib::Printf( "%dms: %i created for %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
+			}
+			else
+			{
+				idLib::Printf( "%dms: %i created for %s and %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>", loopingSample ? loopingSample->GetName() : "<null>" );
+			}
+		}
+	}
+	
+	// Keep these fields current even when an existing OpenAL source is reused.
+	numChannels = leadinSample->format.basic.numChannels;
+	sampleRate = leadinSample->format.basic.samplesPerSec;
+
+	// Resolve optional gain-limit support before beginning the mandatory
+	// source-configuration sequence. The extension helper performs its own
+	// AL error isolation on first use and must not be allowed to consume an
+	// error produced by AL_SOURCE_RELATIVE or AL_POSITION below.
+	const float gainLimit = OpenAL_GetGainLimit();
+
+	CheckALErrors();
+	
+	alSourcei( openalSource, AL_SOURCE_RELATIVE, AL_TRUE );
+	alSource3f( openalSource, AL_POSITION, 0.0f, 0.0f, 0.0f );
+
+	// Core OpenAL clamps a source's effective gain to AL_MAX_GAIN, whose
+	// default is 1.0. Raise that ceiling only when AL_SOFT_gain_clamp_ex says
+	// the implementation supports it. This makes SSF_UNCLAMPED gain > 1.0
+	// effective on supporting OpenAL implementations while preserving the
+	// core-compatible 1.0 ceiling everywhere else.
+	alSourcef(openalSource, AL_MAX_GAIN, gainLimit);
+	
+	alSourcef( openalSource, AL_GAIN, 1.0f );
+	alSourcei(openalSource, AL_LOOPING, AL_FALSE);
+
+	// Everything above is required for correct voice behavior. Check it
+	// before optional EFX/source-radius helpers, which intentionally isolate
+	// and consume their own extension errors.
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		if (!DestroyInternal())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return false;
+	}
+
+	// A source may be reused from a previously occluded sound. Start each
+	// allocation with an unfiltered direct path; UpdateHardware() will call
+	// SetOcclusion() before playback starts.
+	idSoundVoice_Base::SetOcclusion(0.0f);
+	ApplyOcclusionFilter();
+	
+	// Reset any source-radius state inherited from a reused OpenAL source.
+	// UpdateHardware() supplies the shader's actual minDistance before Start().
+	idSoundVoice_Base::SetInnerRadius(0.0f);
+	ApplySourceRadius();
+
+	if (openalSource == 0 || CheckALErrors() != AL_NO_ERROR)
+	{
+		if (!DestroyInternal())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return false;
+	}
+	
+	paused = true;
+	coreParameterUpdateFailed = false;
+	return true;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::DestroyInternal
+========================
+*/
+bool idSoundVoice_OpenAL::DestroyInternal()
+{
+	bool sourceCleanupSucceeded = true;
+
+	if (openalSource != 0)
+	{
+		if( s_debugHardware.GetBool() )
+		{
+			idLib::Printf( "%dms: %i destroyed\n", Sys_Milliseconds(), openalSource );
+		}
+
+		// OpenAL permits deleting a playing source; deletion stops it
+		// automatically and releases the source object. The cached nonzero
+		// name is authoritative here; do not gate deletion on alIsSource(),
+		// because a failed validation query could otherwise make us discard
+		// a still-deletable source without ever attempting the delete.
+		CheckALErrors();
+		
+		alDeleteSources( 1, &openalSource );
+		if (CheckALErrors() != AL_NO_ERROR)
+		{
+			sourceCleanupSucceeded = false;
+		}
+	}
+
+	openalSource = 0;
+	trackAmplitude = false;
+	coreParameterUpdateFailed = false;
+
+	if (!DestroyOcclusionFilter())
+	{
+		sourceCleanupSucceeded = false;
+	}
+
+	return sourceCleanupSucceeded;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::InvalidateContextObjects
+========================
+*/
+void idSoundVoice_OpenAL::InvalidateContextObjects()
+{
+	openalSource = 0;
+	openalLowPassFilter = 0;
+	openalLowPassFilterConfigured = false;
+	leadinSample = NULL;
+	loopingSample = NULL;
+	numChannels = 0;
+	sampleRate = 0;
+	trackAmplitude = false;
+	paused = true;
+	coreParameterUpdateFailed = false;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::EnsureOcclusionFilter
+========================
+*/
+bool idSoundVoice_OpenAL::EnsureOcclusionFilter()
+ {
+	if( !OpenAL_LoadEfxFilterProcs() )
+	{
+		return false;
+	}
+	
+	if( openalLowPassFilter != 0 )
+	{
+		if (openalLowPassFilterConfigured)
+		{
+			return true;
+		}
+		
+		// A previous creation/configuration attempt returned a filter name but
+		// could not retire it. Never treat that untrusted object as usable or
+		// allocate another filter on top of it.
+		if (!DestroyOcclusionFilter())
+		{
+			soundSystemLocal.SetNeedsRestart();
+			return false;
+		}
+	}
+	
+	openalLowPassFilterConfigured = false;
+	CheckALErrors();
+	qalGenFilters( 1, &openalLowPassFilter );
+	const ALenum generateError = CheckALErrors();
+	if (generateError != AL_NO_ERROR || openalLowPassFilter == 0)
+	{
+		if (openalLowPassFilter != 0 && !DestroyOcclusionFilter())
+		{
+			// EFX is optional, but losing ownership of a partially-created AL
+			// object is not. Rebuild the context if even cleanup is rejected.
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return false;
+	}
+	
+	qalFilteri( openalLowPassFilter, AL_FILTER_TYPE, AL_FILTER_LOWPASS );
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAIN, 1.0f );
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAINHF, 1.0f );
+	
+	if( CheckALErrors() != AL_NO_ERROR )
+	{
+		if (!DestroyOcclusionFilter())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return false;
+	}
+	
+	openalLowPassFilterConfigured = true;
+	return true;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::ApplyOcclusionFilter
+========================
+*/
+void idSoundVoice_OpenAL::ApplyOcclusionFilter()
+{
+	if( !alIsSource(openalSource) )
+	{
+		return;
+	}
+	
+	const float amount = idMath::ClampFloat( 0.0f, 1.0f, occlusion );
+	
+	if (amount <= 0.0f)
+	{
+		if (openalLowPassFilter != 0 && OpenAL_LoadEfxFilterProcs())
+		{
+			CheckALErrors();
+			alSourcei(openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL);
+			if (CheckALErrors() != AL_NO_ERROR)
+			{
+				idLib::Warning("OpenAL failed to detach stale EFX filter from source %u; retiring source", openalSource);
+
+				// A source that cannot shed its old direct filter must not be
+				// reused for an unoccluded sound. Deleting the source releases
+				// the filter attachment; DestroyInternal() then retires the
+				// owned filter through the checked cleanup path.
+				if (!DestroyInternal())
+				{
+					soundSystemLocal.SetNeedsRestart();
+				}
+				return;
+			}
+		}
+
+		// No occlusion means no EFX filter is needed on this source.
+		return;
+	}
+	if( !EnsureOcclusionFilter() )
+	{
+		// EFX is optional. If the current OpenAL device does not expose it,
+		// leave the source unfiltered rather than failing voice playback.
+		return;
+	}
+	
+	const float gainHF = idMath::ClampFloat(
+		0.0f,
+		1.0f,
+		DBtoLinear( OPENAL_OCCLUSION_HF_ATTENUATION_DB * amount ) );
+	
+	CheckALErrors();
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAIN, 1.0f );
+	qalFilterf( openalLowPassFilter, AL_LOWPASS_GAINHF, gainHF );
+
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		// The filter object still belongs to this voice, but its parameter
+		// state can no longer be trusted. Detach it before retiring it so a
+		// failed optional EFX update cannot leave a stale muffling filter on
+		// the source or be reused as a configured filter later.
+		openalLowPassFilterConfigured = false;
+		
+		CheckALErrors();
+		alSourcei(openalSource, AL_DIRECT_FILTER, AL_FILTER_NULL);
+		const ALenum detachError = CheckALErrors();
+		
+		if (detachError != AL_NO_ERROR)
+		{
+			idLib::Warning("OpenAL failed to detach rejected EFX filter from source %u; retiring source", openalSource);
+			
+			// Source deletion is the authoritative way to release a direct
+			// filter attachment when AL_DIRECT_FILTER = AL_FILTER_NULL fails.
+			if (!DestroyInternal())
+			{
+				soundSystemLocal.SetNeedsRestart();
+			}
+			return;
+		}
+		
+		if (!DestroyOcclusionFilter())
+		{
+			soundSystemLocal.SetNeedsRestart();
+		}
+		return;
+	}
+	alSourcei( openalSource, AL_DIRECT_FILTER, openalLowPassFilter );
+	// Attaching EFX is optional. Consume an attachment error without
+	// invalidating an otherwise correctly configured filter.
+	CheckALErrors();
+}
+
+
+/*
+========================
+idSoundVoice_OpenAL::DestroyOcclusionFilter
+========================
+*/
+bool idSoundVoice_OpenAL::DestroyOcclusionFilter()
+{
+	if( openalLowPassFilter == 0 )
+	{
+		openalLowPassFilterConfigured = false;
+		return true;
+	}
+	
+	if (!OpenAL_LoadEfxFilterProcs())
+	{
+		return false;
+	}
+
+	CheckALErrors();
+	qalDeleteFilters(1, &openalLowPassFilter);
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		// Do not discard the only handle to an object whose deletion was
+		// rejected. Runtime callers will request a context rebuild; normal
+		// hardware shutdown can simply let context destruction reclaim it.
+		return false;
+	}
+	
+	openalLowPassFilter = 0;
+	openalLowPassFilterConfigured = false;
+	return true;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::ApplySourceRadius
+========================
+*/
+void idSoundVoice_OpenAL::ApplySourceRadius()
+{
+	if( !alIsSource( openalSource ) )
+	{
+		return;
+	}
+	
+	const ALenum sourceRadiusEnum = OpenAL_GetSourceRadiusEnum();
+	if( sourceRadiusEnum == AL_NONE )
+	{
+		// AL_EXT_SOURCE_RADIUS is optional. Older OpenAL implementations keep
+		// the existing point-source spatialization behavior.
+		return;
+	}
+	
+	// The original BFG surround matrix applied innerRadius blending only to
+	// mono sources. Stereo samples were routed as stereo rather than treated
+	// as a positionable mono point source, so do not give them a source radius.
+	const float radius = ( numChannels == 1 ) ? Max( 0.0f, innerRadius ) : 0.0f;
+	
+	CheckALErrors();
+	alSourcef( openalSource, sourceRadiusEnum, radius );
+	CheckALErrors();
+}
+
+/*
+========================
+idSoundVoice_OpenAL::Start
+========================
+*/
+bool idSoundVoice_OpenAL::Start(int offsetMS, int ssFlags)
+{
+	if( s_debugHardware.GetBool() )
+	{
+		idLib::Printf( "%dms: %i starting %s @ %dms\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>", offsetMS );
+	}
+	
+	if( !leadinSample )
+	{
+		return false;
+	}
+
+	if (coreParameterUpdateFailed)
+	{
+		return false;
+	}
+	
+	if( !alIsSource( openalSource ) )
+	{
+		return false;
+	}
+	
+	if( leadinSample->IsDefault() )
+	{
+		idLib::Warning( "Starting defaulted sound sample %s", leadinSample->GetName() );
+	}
+	
+	trackAmplitude = ( ssFlags & SSF_NO_FLICKER ) == 0;
+	
+	assert( offsetMS >= 0 );
+	const int safeOffsetMS = Max(0, offsetMS);
+	const int64 offsetSamples = (static_cast<int64>(safeOffsetMS) * static_cast<int64>(leadinSample->SampleRate())) / 1000;
+	if( loopingSample == NULL && offsetSamples >= leadinSample->playLength )
+	{
+		return false;
+	}
+
+	if( RestartAt( offsetSamples ) <= 0 )
+	{
+		return false;
+	}
+
+	// Validate the freshly prepared source/queue before starting playback.
+	// Do not let a state/queue error be masked by a later alSourcePlay().
+	if (!Update())
+	{
+		return false;
+	}
+	UnPause();
+
+	return IsPlaying();
+}
+
+/*
+========================
+idSoundVoice_OpenAL::RestartAt
+========================
+*/
+int idSoundVoice_OpenAL::RestartAt(int64 offsetSamples)
+{
+	if (offsetSamples < 0)
+	{
+		offsetSamples = 0;
+	}
+	
+	if( leadinSample == NULL || leadinSample->playLength <= 0 )
+	{
+		return 0;
+	}
+	
+	idSoundSample_OpenAL* sample = leadinSample;
+	if( offsetSamples >= leadinSample->playLength )
+	{
+		if( loopingSample == NULL || loopingSample->playLength <= 0 )
+		{
+			return 0;
+		}
+		
+		if( loopingSample == leadinSample )
+		{
+			offsetSamples %= loopingSample->playLength;
+		}
+		else if( loopingSample->SampleRate() == leadinSample->SampleRate() )
+		{
+			// offsetSamples is measured from the start of the lead-in.
+			offsetSamples = ( offsetSamples - leadinSample->playLength ) % loopingSample->playLength;
+		}
+		else
+		{
+			// Convert through milliseconds using 64-bit intermediates. Start()
+			// receives a signed 32-bit millisecond offset and validated sample
+			// rates are <= INT_MAX, so these products remain within int64.
+			const int64 elapsedMS = (offsetSamples * 1000) / static_cast<int64>(leadinSample->SampleRate());
+			const int64 leadinMS = (static_cast<int64>(leadinSample->playLength) * 1000) / static_cast<int64>(leadinSample->SampleRate());
+			const int64 loopElapsedMS = elapsedMS > leadinMS ? elapsedMS - leadinMS : 0;
+			offsetSamples = (loopElapsedMS * static_cast<int64>(loopingSample->SampleRate())) / 1000;
+			offsetSamples %= loopingSample->playLength;
+		}
+
+		sample = loopingSample;
+	}
+
+	// A start offset can skip the lead-in and begin directly in a loop whose
+	// channel count or native rate differs. Keep the cached active-sample
+	// state synchronized so mono source-radius handling and diagnostics use
+	// the sample that is actually bound to the OpenAL source.
+	if (numChannels != sample->format.basic.numChannels || sampleRate != sample->format.basic.samplesPerSec)
+	{
+		numChannels = sample->format.basic.numChannels;
+		sampleRate = sample->format.basic.samplesPerSec;
+		ApplySourceRadius();
+	}
+	
+	// A distinct lead-in followed by a loop is best represented as a two-buffer
+	// OpenAL queue.  Start with looping disabled; Update() removes the processed
+	// lead-in and enables AL_LOOPING once only the loop buffer remains.
+	const bool queueLeadinAndLoop =
+		sample == leadinSample &&
+		loopingSample != NULL &&
+		loopingSample != leadinSample &&
+		leadinSample->openalBuffer != 0 &&
+		loopingSample->openalBuffer != 0 &&
+		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
+		leadinSample->SampleRate() == loopingSample->SampleRate();
+
+	if( queueLeadinAndLoop )
+	{
+		if (!FlushSourceBuffers())
+		{
+			return 0;
+		}
+	
+		ALuint queuedBuffers[2] =
+		{
+			leadinSample->openalBuffer,
+			loopingSample->openalBuffer
+		};
+
+		CheckALErrors();
+		alSourcei( openalSource, AL_LOOPING, AL_FALSE );
+		alSourceQueueBuffers( openalSource, 2, queuedBuffers );
+	
+		// The OpenAL buffer contains only the playable range, beginning at
+		// leadinSample->playBegin in the CPU-side asset.  Source offsets are
+		// therefore relative to the logical start of the lead-in.
+		const int64 queueOffset64 = offsetSamples;
+		if (queueOffset64 > INT_MAX)
+		{
+			FlushSourceBuffers();
+			return 0;
+		}
+		const int queueOffset = static_cast<int>(queueOffset64);
+		if( queueOffset > 0 )
+		{
+			alSourcei( openalSource, AL_SAMPLE_OFFSET, queueOffset );
+		}
+	
+		if( CheckALErrors() != AL_NO_ERROR )
+		{
+			FlushSourceBuffers();
+			return 0;
+		}
+	
+		return Max( 1, leadinSample->totalBufferSize );
+	}
+
+	// PCM/MS-ADPCM samples are represented by one OpenAL hardware buffer,
+	// trimmed during upload to [playBegin, playBegin + playLength).  Keep
+	// AL_SAMPLE_OFFSET relative to that logical range.
+	if (offsetSamples >= sample->playLength || offsetSamples > INT_MAX)
+	{
+		return 0;
+	}
+	
+	return SubmitBuffer(sample, 0, static_cast<int>(offsetSamples));
+}
+
+/*
+========================
+idSoundVoice_OpenAL::SubmitBuffer
+========================
+*/
+int idSoundVoice_OpenAL::SubmitBuffer( idSoundSample_OpenAL* sample, int bufferNumber, int offset )
+{
+	if( sample == NULL || ( bufferNumber < 0 ) || ( bufferNumber >= sample->buffers.Num() ) )
+	{
+		return 0;
+	}
+
+	if( sample->openalBuffer == 0 )
+	{
+		return 0;
+	}
+
+	// OpenAL keeps the first error until alGetError() consumes it.  Clear and
+	// report any error left by an earlier operation so the result below only
+	// reflects this buffer submission.
+	CheckALErrors();
+	
+	alSourcei( openalSource, AL_BUFFER, sample->openalBuffer );
+	alSourcei( openalSource, AL_LOOPING, (sample == loopingSample && loopingSample != NULL ? AL_TRUE : AL_FALSE) );
+	
+	if( offset > 0 )
+	{
+		alSourcei( openalSource, AL_SAMPLE_OFFSET, offset );
+	}
+	
+	if( CheckALErrors() != AL_NO_ERROR )
+	{
+		return 0;
+	}
+	
+	return sample->totalBufferSize;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::Update
+========================
+*/
+bool idSoundVoice_OpenAL::Update()
+{
+	if (coreParameterUpdateFailed)
+	{
+		return false;
+	}
+
+	if( !alIsSource( openalSource ) || leadinSample == NULL )
+	{
+		return false;
+	}
+
+	ALint state = AL_INITIAL;
+	ALint sourceType = AL_UNDETERMINED;
+
+	// Do not let a sticky error from an unrelated source operation make a
+	// valid voice look dead.
+	CheckALErrors();
+	
+	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
+	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
+	if( CheckALErrors() != AL_NO_ERROR )
+	{
+		return false;
+	}
+
+	if( loopingSample != NULL && loopingSample != leadinSample )
+	{
+		const bool compatibleQueuedPair =
+		leadinSample->openalBuffer != 0 &&
+		loopingSample->openalBuffer != 0 &&
+		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
+		leadinSample->SampleRate() == loopingSample->SampleRate();
+		
+		if( compatibleQueuedPair && sourceType == AL_STREAMING )
+		{
+			ALint processedBuffers = 0;
+			alGetSourcei( openalSource, AL_BUFFERS_PROCESSED, &processedBuffers );
+			if( CheckALErrors() != AL_NO_ERROR )
+			{
+				return false;
+			}
+			
+			if( processedBuffers > 0 )
+			{
+				ALuint processedBuffer = 0;
+				alSourceUnqueueBuffers(openalSource, 1, &processedBuffer);
+				if( CheckALErrors() != AL_NO_ERROR )
+				{
+					return false;
+				}
+				
+				if( processedBuffer == leadinSample->openalBuffer )
+				{
+					// The queue now contains only the loop buffer.  Enabling
+					// source looping here repeats only that remaining buffer,
+					// not the lead-in.
+					alSourcei(openalSource, AL_LOOPING, AL_TRUE);
+					
+					alGetSourcei(openalSource, AL_SOURCE_STATE, &state);
+					if( CheckALErrors() != AL_NO_ERROR )
+					{
+						return false;
+					}
+					
+					// If both buffers finished between engine updates, the
+					// source is stopped but the loop buffer is still queued.
+					// Restart it; it will now loop indefinitely.
+					if( !paused && state != AL_PLAYING )
+					{
+						alSourcePlay(openalSource);
+						if( CheckALErrors() != AL_NO_ERROR )
+						{
+							return false;
+						}
+					}
+				}
+			}
+		}
+		else if( sourceType == AL_STATIC && state == AL_STOPPED && !paused )
+		{
+			// Different buffer attributes cannot share an OpenAL queue.
+			// Fall back to switching to the loop after the lead-in stops.
+			ALint currentBuffer = 0;
+			alGetSourcei(openalSource, AL_BUFFER, &currentBuffer);
+			if( CheckALErrors() != AL_NO_ERROR )
+			{
+				return false;
+			}
+			
+			if( (ALuint)currentBuffer == leadinSample->openalBuffer )
+			{
+
+				// Static-buffer fallback also supports a loop whose format
+				// differs from the lead-in. Update the cached sample state
+				// before binding it so source-radius behavior follows the
+				// active mono/stereo/multichannel buffer.
+				numChannels = loopingSample->format.basic.numChannels;
+				sampleRate = loopingSample->format.basic.samplesPerSec;
+				ApplySourceRadius();
+				if (SubmitBuffer(loopingSample, 0, 0) <= 0)
+				{
+					return false;
+				}
+				
+				alSourcePlay( openalSource );
+				paused = false;
+				return CheckALErrors() == AL_NO_ERROR;
+			}
+		}
+	}
+	
+		return true;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::IsPlaying
+========================
+*/
+bool idSoundVoice_OpenAL::IsPlaying()
+{
+	if( !alIsSource( openalSource ) )
+	{
+		return false;
+	}
+	
+	ALint state = AL_INITIAL;
+
+	// Isolate this state query from any error left by a previous AL call.
+	CheckALErrors();
+	
+	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
+	
+	if( CheckALErrors() != AL_NO_ERROR )
+	{
+		return false;
+	}
+	
+	return ( state == AL_PLAYING || state == AL_PAUSED );
+}
+
+/*
+========================
+idSoundVoice_OpenAL::FlushSourceBuffers
+========================
+*/
+bool idSoundVoice_OpenAL::FlushSourceBuffers()
+{
+	if( !alIsSource( openalSource ) )
+	{
+		return openalSource == 0;
+	}
+
+	// AL_BUFFER = AL_NONE is legal on a stopped/initial source and releases
+	// the complete source queue, including a streaming queue.  This is both
+	// simpler and safer than manually unqueueing every processed buffer.
+	CheckALErrors();
+	alSourceStop( openalSource );
+
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		return false;
+	}
+
+	alSourcei( openalSource, AL_BUFFER, 0 );
+	alSourcei( openalSource, AL_LOOPING, AL_FALSE );
+
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		return false;
+	}
+
+	paused = true;
+	return true;
+}
+
+/*
+========================
+idSoundVoice_OpenAL::Pause
+========================
+*/
+void idSoundVoice_OpenAL::Pause()
+{
+	if (!alIsSource(openalSource) || paused)
+	{
+		return;
+	}
+
+	if (s_debugHardware.GetBool())
+	{
+		idLib::Printf("%dms: %i pausing %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>");
+	}
+
+	CheckALErrors();
+	alSourcePause(openalSource);
+
+	if (CheckALErrors() == AL_NO_ERROR)
+	{
+		paused = true;
+	}
+}
+/*
+========================
+idSoundVoice_OpenAL::UnPause
+========================
+*/
+void idSoundVoice_OpenAL::UnPause()
+{
+	if( !alIsSource( openalSource ) || !paused )
+	{
+		return;
+	}
+	
+	if( s_debugHardware.GetBool() )
+	{
+		idLib::Printf( "%dms: %i unpausing %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
+	}
+	
+	CheckALErrors();
+	alSourcePlay( openalSource );
+
+	if (CheckALErrors() == AL_NO_ERROR)
+	{
+		paused = false;
+	}
+}
+
+/*
+========================
+idSoundVoice_OpenAL::Stop
+========================
+*/
+void idSoundVoice_OpenAL::Stop()
+{
+	if( !alIsSource( openalSource ) )
+	{
+		return;
+	}
+	
+	if( s_debugHardware.GetBool() )
+	{
+		idLib::Printf( "%dms: %i stopping %s\n", Sys_Milliseconds(), openalSource, leadinSample ? leadinSample->GetName() : "<null>" );
+	}
+
+	// Flush even when our bookkeeping already says "paused".  A paused source
+	// may still have a static buffer or a lead-in/loop queue attached.
+	if (!FlushSourceBuffers())
+	{
+		idLib::Warning("idSoundVoice_OpenAL::Stop: failed to stop/detach source %u; retiring source", openalSource);
+		// The source is no longer trusted. DestroyInternal() will still try
+		// alDeleteSources(), which OpenAL permits even for a playing source.
+		if (!DestroyInternal())
+		{
+			// Runtime FreeVoice() recycles this voice immediately. If retirement
+			// itself failed, rebuild the context so an unreachable source or EFX
+			// filter cannot remain allocated for the rest of the session.
+			soundSystemLocal.SetNeedsRestart();
+		}
+	}
+}
+
+/*
+========================
+idSoundVoice_OpenAL::GetAmplitude
+========================
+*/
+float idSoundVoice_OpenAL::GetAmplitude()
+{
+	if( !trackAmplitude )
+	{
+		return 1.0f;
+	}
+	
+	if( !alIsSource( openalSource ) || leadinSample == NULL )
+	{
+		return 0.0f;
+	}
+	
+	ALint state = AL_INITIAL;
+	ALint sourceType = AL_UNDETERMINED;
+	ALint sampleOffset = 0;
+
+	// Keep an unrelated sticky error from suppressing a valid amplitude query.
+	CheckALErrors();
+	
+	alGetSourcei( openalSource, AL_SOURCE_STATE, &state );
+	alGetSourcei( openalSource, AL_SOURCE_TYPE, &sourceType );
+	alGetSourcei( openalSource, AL_SAMPLE_OFFSET, &sampleOffset );
+	
+	if (CheckALErrors() != AL_NO_ERROR)
+	{
+		return 0.0f;
+	}
+	
+	// A stopped or paused voice is not currently producing audible output.
+	if( state != AL_PLAYING )
+	{
+		return 0.0f;
+	}
+	
+	idSoundSample_OpenAL* currentSample = leadinSample;
+	int currentSampleOffset = Max( 0, sampleOffset );
+	
+	if( sourceType == AL_STATIC )
+	{
+		ALint currentBuffer = 0;
+		alGetSourcei( openalSource, AL_BUFFER, &currentBuffer );
+		if( CheckALErrors() != AL_NO_ERROR )
+		{
+			return 0.0f;
+		}
+
+		if( loopingSample != NULL &&
+			loopingSample != leadinSample &&
+			(ALuint)currentBuffer == loopingSample->openalBuffer )
+		{
+			currentSample = loopingSample;
+		}
+	}
+	else if( sourceType == AL_STREAMING )
+	{
+		// The static lead-in + static loop implementation uses a two-buffer
+		// OpenAL queue. AL_SAMPLE_OFFSET is relative to the beginning of the
+		// currently queued buffers, so use the queue size to determine whether
+		// the lead-in has already been removed by Update().
+		const bool queuedLeadinAndLoop =
+		loopingSample != NULL &&
+		loopingSample != leadinSample &&
+		leadinSample->openalBuffer != 0 &&
+		loopingSample->openalBuffer != 0 &&
+		leadinSample->GetOpenALBufferFormat() == loopingSample->GetOpenALBufferFormat() &&
+		leadinSample->SampleRate() == loopingSample->SampleRate();
+		
+		if( !queuedLeadinAndLoop )
+		 {
+			// The legacy CPU streaming fallback does not currently retain
+			// enough source-sample position state for an accurate envelope
+			// lookup. Preserve the old non-flickering fallback rather than
+			// reporting a false zero amplitude.
+			return 1.0f;
+		}
+		
+		ALint queuedBuffers = 0;
+		alGetSourcei( openalSource, AL_BUFFERS_QUEUED, &queuedBuffers );
+		if( CheckALErrors() != AL_NO_ERROR || queuedBuffers <= 0 )
+		{
+			return 0.0f;
+		}
+		
+		if( queuedBuffers == 1 )
+		{
+			// Update() has removed the processed lead-in, leaving only the
+			// looping buffer in the queue.
+			currentSample = loopingSample;
+		}
+		else if( leadinSample->buffers.Num() > 0 )
+		{
+			const int leadinBufferSamples = leadinSample->playLength;
+			if( currentSampleOffset >= leadinBufferSamples )
+			{
+				currentSampleOffset -= leadinBufferSamples;
+				currentSample = loopingSample;
+			}
+		}
+	}
+	else
+	{
+		return 0.0f;
+	}
+	
+	if( currentSample == NULL )
+	{
+		return 0.0f;
+	}
+	
+	// Generated samples normally carry a precomputed 60 Hz amplitude envelope.
+	// Raw WAVs may not have a matching .amp file; in that case retaining 1.0f
+	// is preferable to making an audible sound appear silent to the game.
+	if( currentSample->IsDefault() || currentSample->amplitude.Num() == 0 )
+	{
+		return 1.0f;
+	}
+	
+	// Hardware offsets are already relative to the trimmed playable range.
+	const int relativeSample = Max(0, currentSampleOffset);
+	const int64 timeMS64 = (static_cast<int64>(relativeSample) * 1000) / static_cast<int64>(currentSample->SampleRate());
+	const int timeMS = timeMS64 > INT_MAX ? INT_MAX : static_cast<int>(timeMS64);
+	
+	return currentSample->GetAmplitude( timeMS );
+}

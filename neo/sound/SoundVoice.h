@@ -61,7 +61,7 @@ public:
 
 protected:
 	idVec3		position;			// Position of the sound relative to listener
-	float		gain;				// Volume (0-1)
+	float		gain;				// Linear volume; ordinary sounds are 0-1, SSF_UNCLAMPED may exceed 1
 	float		centerChannel;		// Value (0-1) which indicates how much of this voice goes to the center channel
 	float		pitch;				// Pitch multiplier
 	float		innerRadius;		// Anything closer than this is omni

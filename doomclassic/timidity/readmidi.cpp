@@ -48,67 +48,123 @@ static unsigned char* local_buffer = 0;
 static size_t local_buffer_length = 0;
 static size_t local_buffer_cur = 0;
 
-/* These would both fit into 32 bits, but they are often added in
-large multiples, so it's simpler to have two roomy ints */
-static  int32_t sample_increment, sample_correction; /*samples per MIDI delta-t*/
+/*
+Keep the fixed-point samples-per-delta value in 64 bits. MIDI tempo is a
+24-bit value, and the intermediate 16.16 representation can exceed int32_t
+for small timing divisions even though the final samples-per-delta value is
+well within range.
+*/
+static int64_t sample_increment, sample_correction; /* samples per MIDI delta-t */
 
 static  int32_t read_local(void* buffer, size_t len, size_t count)
 {
-	if (fp && len > 0) {
-		return (int32_t)fp->Read(buffer, len * count ) / len;
-	} else if( local_buffer != NULL ) {
-		if (len * count + local_buffer_cur > local_buffer_length) {
-			memcpy(buffer, &local_buffer[local_buffer_cur], local_buffer_length - local_buffer_cur);
-			return(int32_t)(local_buffer_length - local_buffer_cur)/len;
-		} else {
-			memcpy(buffer, &local_buffer[local_buffer_cur], len * count);
-			local_buffer_cur += len * count;
-			return(count);
+	if (buffer == NULL || len == 0 || count == 0) {
+		return 0;
+	}
+	if (count > ((size_t)-1) / len) {
+		return 0;
+	}
+	
+	const size_t requestedBytes = len * count;
+	
+	if (fp) {
+		return (int32_t)fp->Read(buffer, requestedBytes) / (int32_t)len;
+	}
+	else if (local_buffer != NULL) {
+		if (local_buffer_cur > local_buffer_length) {
+			return 0;
 		}
+
+		const size_t availableBytes = local_buffer_length - local_buffer_cur;
+		const size_t copyBytes = requestedBytes < availableBytes ? requestedBytes : availableBytes;
+		if (copyBytes > 0) {
+			memcpy(buffer, &local_buffer[local_buffer_cur], copyBytes);
+			local_buffer_cur += copyBytes;
+		}
+		return (int32_t)(copyBytes / len);
 	}
 
 	return 0;
 }
 
-static void skip_local(size_t len)
+static bool skip_local(size_t len)
 {
 	if (fp) {
 		skip(fp, len);
-	} else {
-		if (len + local_buffer_cur > local_buffer_length) {
-			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "skip_local failed on memory buffer");
-		} else {
-			local_buffer_cur += len;
-		}
+		return true;
 	}
+	if (local_buffer == NULL || local_buffer_cur > local_buffer_length ||
+		len > local_buffer_length - local_buffer_cur) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "skip_local failed on memory buffer");
+		return false;
+	}
+	local_buffer_cur += len;
+	return true;
 }
 
 /* Computes how many (fractional) samples one MIDI delta-time unit contains */
 static void compute_sample_increment( int32_t tempo,  int32_t divisions)
 {
-	double a;
-	a = (double) (tempo) * (double) (play_mode->rate) * (65536.0/1000000.0) /
+	const double fixedSamplesPerDelta =
+		(double)(tempo) * (double)(play_mode->rate) * (65536.0 / 1000000.0) /
 		(double)(divisions);
 
-	sample_correction = (int32_t)(a) & 0xFFFF;
-	sample_increment = (int32_t)(a) >> 16;
+	const int64_t fixedIncrement = (int64_t)fixedSamplesPerDelta;
+
+	sample_correction = fixedIncrement & 0xFFFF;
+	sample_increment = fixedIncrement >> 16;
 
 	ctl->cmsg(CMSG_INFO, VERB_DEBUG, "Samples per delta-t: %d (correction %d)",
-		sample_increment, sample_correction);
+		(int)sample_increment, (int)sample_correction);
 }
 
-/* Read variable-length number (7 bits per byte, MSB first) */
-static  int32_t getvl(void)
+static void compute_smpte_sample_increment(int frameRateCode, int ticksPerFrame)
 {
-	 int32_t l=0;
-	uint8_t c;
-	for (;;)
+	double framesPerSecond = 0.0;
+	
+	switch (frameRateCode)
 	{
-		read_local(&c,1,1);
-		l += (c & 0x7f);
-		if (!(c & 0x80)) return l;
-		l<<=7;
+		case -24: framesPerSecond = 24.0; break;
+		case -25: framesPerSecond = 25.0; break;
+		case -29:
+			// Standard MIDI uses -29 for 29.97 fps drop-frame timing.
+			framesPerSecond = 30000.0 / 1001.0;
+			break;
+		case -30: framesPerSecond = 30.0; break;
+		default:
+			return;
 	}
+	
+	const double fixedSamplesPerTick =
+		(double)(play_mode->rate) * 65536.0 /
+		(framesPerSecond * (double)ticksPerFrame);
+	const int64_t fixedIncrement = (int64_t)fixedSamplesPerTick;
+	
+	sample_correction = fixedIncrement & 0xFFFF;
+	sample_increment = fixedIncrement >> 16;
+	
+	ctl->cmsg(CMSG_INFO, VERB_DEBUG,
+		"SMPTE samples per tick: %d (correction %d)",
+		(int)sample_increment, (int)sample_correction);
+}
+
+/* Read a standard MIDI variable-length quantity (maximum four bytes). */
+static bool getvl(int32_t & value)
+{
+	value = 0;
+	for (int i = 0; i < 4; i++)
+	{
+		uint8_t c = 0;
+		if (read_local(&c, 1, 1) != 1) {
+			return false;
+		}
+		value = (value << 7) | (c & 0x7f);
+		if (!(c & 0x80)) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /* Print a string from the file, followed by a newline. Any non-ASCII
@@ -142,54 +198,99 @@ static int dumpstring( int32_t len, char *label)
 
 /* Read a MIDI event, returning a freshly allocated element that can
 be linked to the event list */
-static MidiEventList *read_midi_event(void)
+static MidiEventList* read_midi_event(bool resetRunningStatus)
 {
-	static uint8_t laststatus, lastchan;
-	static uint8_t nrpn=0, rpn_msb[16], rpn_lsb[16]; /* one per channel */
+	static uint8_t laststatus = 0, lastchan = 0;
+	static bool runningStatusValid = false;
+	static bool nrpn[16] = { false };
+	static uint8_t rpn_msb[16] = {
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F,
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F
+	};
+	static uint8_t rpn_lsb[16] = {
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F,
+	0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F
+	};
 	uint8_t me, type, a,b,c;
 	 int32_t len;
 	MidiEventList *newEventList;
 
+	if (resetRunningStatus) {
+		laststatus = 0;
+		lastchan = 0;
+		runningStatusValid = false;
+		// RPN/NRPN selection is channel state. Reset it at each MTrk
+		// boundary because tracks are parsed independently and must not inherit
+		// selector state from a previously parsed track or song.
+		for (int channel = 0; channel < 16; ++channel) {
+			nrpn[channel] = false;
+			rpn_msb[channel] = 0x7F;
+			rpn_lsb[channel] = 0x7F;
+		}
+	}
+
 	for (;;)
 	{
-		at+=getvl();
+		int32_t delta = 0;
+		if (!getvl(delta) || delta > 0x7FFFFFFF - at) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: invalid MIDI delta time", current_filename);
+			return 0;
+		}
+		at += delta;
+
 		if (read_local(&me,1,1)!=1)
 		{
-			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: read_midi_event: %s", 
-				current_filename, strerror(errno));
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: truncated MIDI event", current_filename);
 			return 0;
 		}
 
 		if(me==0xF0 || me == 0xF7) /* SysEx event */
 		{
-			len=getvl();
-			skip_local(len);
+			if (!getvl(len) || !skip_local((size_t)len)) {
+				return 0;
+			}
 		}
 		else if(me==0xFF) /* Meta event */
 		{
-			read_local(&type,1,1);
-			len=getvl();
+			if (read_local(&type, 1, 1) != 1 || !getvl(len)) {
+				return 0;
+			}
+
 			if (type>0 && type<16)
 			{
 				static char *label[]={
 					"Text event: ", "Text: ", "Copyright: ", "Track name: ",
 						"Instrument: ", "Lyric: ", "Marker: ", "Cue point: "};
-					dumpstring(len, label[(type>7) ? 0 : type]);
+				if (dumpstring(len, label[(type > 7) ? 0 : type]) != 0) {
+					return 0;
+				}
 			}
 			else
 				switch(type)
 			{
 				case 0x2F: /* End of Track */
+					// Standard MIDI files require a zero-length EOT event.
+					if (len != 0) {
+						ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: invalid End-of-Track length %d", current_filename, len);
+						return 0;
+					}
 					return MAGIC_EOT;
 
 				case 0x51: /* Tempo */
-					read_local(&a,1,1); read_local(&b,1,1); read_local(&c,1,1);
+					if (len != 3 ||
+						read_local(&a, 1, 1) != 1 ||
+						read_local(&b, 1, 1) != 1 ||
+						read_local(&c, 1, 1) != 1) {
+						return 0;
+					}
 					MIDIEVENT(at, ME_TEMPO, c, a, b);
 
 				default:
 					ctl->cmsg(CMSG_INFO, VERB_DEBUG, 
 						"(Meta event type 0x%02x, length %ld)", type, len);
-					skip_local(len);
+					if (!skip_local((size_t)len)) {
+						return 0;
+					}
 					break;
 			}
 		}
@@ -198,30 +299,45 @@ static MidiEventList *read_midi_event(void)
 			a=me;
 			if (a & 0x80) /* status byte */
 			{
+				// Only channel voice messages participate in running status.
+				// Other system status bytes are unsupported in this parser and
+				// must not be reinterpreted as channel messages.
+				if ((a & 0xF0) == 0xF0) {ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: unsupported MIDI status 0x%02X", current_filename, a);
+					return 0;
+				}
 				lastchan=a & 0x0F;
 				laststatus=(a>>4) & 0x07;
-				read_local(&a, 1,1);
+				runningStatusValid = true;
+				if (read_local(&a, 1, 1) != 1) {
+					return 0;
+				}
 				a &= 0x7F;
+			}
+			else if (!runningStatusValid)
+			{
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+					"%s: MIDI running status used before a status byte", current_filename);
+				return 0;
 			}
 			switch(laststatus)
 			{
 			case 0: /* Note off */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_NOTEOFF, lastchan, a,b);
 
 			case 1: /* Note on */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_NOTEON, lastchan, a,b);
 
 			case 2: /* Key Pressure */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_KEYPRESSURE, lastchan, a, b);
 
 			case 3: /* Control change */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				{
 					int control=255;
@@ -250,13 +366,13 @@ static MidiEventList *read_midi_event(void)
 							control=ME_TONE_BANK;
 						break;
 
-					case 100: nrpn=0; rpn_msb[lastchan]=b; break;
-					case 101: nrpn=0; rpn_lsb[lastchan]=b; break;
-					case 99: nrpn=1; rpn_msb[lastchan]=b; break;
-					case 98: nrpn=1; rpn_lsb[lastchan]=b; break;
+					case 100: nrpn[lastchan] = false; rpn_msb[lastchan] = b; break;
+					case 101: nrpn[lastchan] = false; rpn_lsb[lastchan] = b; break;
+					case 99: nrpn[lastchan] = true; rpn_msb[lastchan] = b; break;
+					case 98: nrpn[lastchan] = true; rpn_lsb[lastchan] = b; break;
 
 					case 6:
-						if (nrpn)
+						if (nrpn[lastchan])
 						{
 							ctl->cmsg(CMSG_INFO, VERB_DEBUG, 
 								"(Data entry (MSB) for NRPN %02x,%02x: %ld)",
@@ -271,9 +387,8 @@ static MidiEventList *read_midi_event(void)
 							control=ME_PITCH_SENS;
 							break;
 
-						case 0x7F7F: /* RPN reset */
-							/* reset pitch bend sensitivity to 2 */
-							MIDIEVENT(at, ME_PITCH_SENS, lastchan, 2, 0);
+						case 0x7F7F: /* Null RPN: no parameter selected */
+							break;
 
 						default:
 							ctl->cmsg(CMSG_INFO, VERB_DEBUG, 
@@ -304,7 +419,7 @@ static MidiEventList *read_midi_event(void)
 				break;
 
 			case 6: /* Pitch wheel */
-				read_local(&b, 1,1);
+				if (read_local(&b, 1, 1) != 1) return 0;
 				b &= 0x7F;
 				MIDIEVENT(at, ME_PITCHWHEEL, lastchan, a, b);
 
@@ -358,17 +473,85 @@ static int read_track(int append)
 		return -2;
 	}
 
+	if (len < 0) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+		"%s: Invalid negative MIDI track length.", current_filename);
+		return -2;
+	}
+	
+	size_t trackStart = 0;
+	size_t sourceLength = 0;
+	
+	if (fp) {
+		const int filePosition = fp->Tell();
+		const int fileLength = fp->Length();
+		if (filePosition < 0 || fileLength < filePosition) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: Invalid MIDI file position.", current_filename);
+			return -2;
+		}
+		trackStart = (size_t)filePosition;
+		sourceLength = (size_t)fileLength;
+		
+	} else {
+		if (local_buffer == NULL || local_buffer_cur > local_buffer_length) {
+			return -2;
+		}
+		trackStart = local_buffer_cur;
+		sourceLength = local_buffer_length;
+	}
+	
+	if ((size_t)len > sourceLength - trackStart) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+		"%s: MIDI track length exceeds remaining input.", current_filename);
+		return -2;
+	}
+	
+	const size_t trackEnd = trackStart + (size_t)len;
+
+	bool firstEvent = true;
+
 	for (;;)
 	{
-		if (!(newEventList=read_midi_event())) /* Some kind of error  */
+		if (!(newEventList = read_midi_event(firstEvent))) /* Some kind of error  */
 			return -2;
+		firstEvent = false;
+
+		size_t currentPosition = 0;
+		if (fp) {
+			const int filePosition = fp->Tell();
+			if (filePosition < 0) {
+				return -2;
+			}
+			 currentPosition = (size_t)filePosition;
+		} else {
+			currentPosition = local_buffer_cur;
+		}
+		
+		if (currentPosition > trackEnd) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: MIDI event crosses track boundary.", current_filename);
+			return -2;
+		}
 
 		if (newEventList==MAGIC_EOT) /* End-of-track Hack. */
 		{
+			// A valid EOT may be followed by padding or unused bytes inside the
+			// declared MTrk payload. Position the reader at the next chunk.
+			if (currentPosition < trackEnd && !skip_local(trackEnd - currentPosition)) {
+				return -2;
+			}
 			return 0;
+		}
+		
+		if (currentPosition == trackEnd) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: MIDI track ended without End-of-Track event.", current_filename);
+			return -2;
 		}
 
 		next=(MidiEventList *)meep->next;
+
 		while (next && (next->event.time < newEventList->event.time))
 		{
 			meep=next;
@@ -401,12 +584,14 @@ static void free_midi_list(void)
 events, marking used instruments for loading. Convert event times to
 samples: handle tempo changes. Strip unnecessary events from the list.
 Free the linked list. */
-static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samplesp)
+static MidiEvent* groom_list(int32_t divisions, bool smpteTiming, int smpteFrameRate,
+	int smpteTicksPerFrame, int32_t* eventsp, int32_t* samplesp)
 {
 	MidiEvent *groomed_list, *lp;
 	MidiEventList *meep;
 	 int32_t i, our_event_count, tempo, skip_local_this_event, new_value;
-	 int32_t sample_cum, samples_to_do, at, st, dt, counting_time;
+	 int32_t at, dt, counting_time;
+	 int64_t sample_cum, samples_to_do, st;
 
 	int current_bank[16], current_set[16], current_program[16]; 
 	/* Or should each bank have its own current program? */
@@ -419,7 +604,11 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 	}
 
 	tempo=500000;
-	compute_sample_increment(tempo, divisions);
+	if (smpteTiming) {
+		compute_smpte_sample_increment(smpteFrameRate, smpteTicksPerFrame);
+	} else {
+		compute_sample_increment(tempo, divisions);
+	}
 
 	/* This may allocate a bit more than we need */
 	groomed_list=lp=(MidiEvent*)safe_malloc(sizeof(MidiEvent) * (event_count+1));
@@ -441,7 +630,10 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		{
 			tempo=
 				meep->event.channel + meep->event.b * 256 + meep->event.a * 65536;
-			compute_sample_increment(tempo, divisions);
+			// Tempo meta-events do not affect SMPTE-timed MIDI files.
+			if (!smpteTiming) {
+				compute_sample_increment(tempo, divisions);
+			}
 			skip_local_this_event=1;
 		}
 		else if ((quietchannels & (1<<meep->event.channel)))
@@ -521,15 +713,26 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		break;
 		}
 
-		/* Recompute time in samples*/
+		/* Recompute time in samples using 64-bit intermediates. */
 		if ((dt=meep->event.time - at) && !counting_time)
 		{
-			samples_to_do=sample_increment * dt;
-			sample_cum += sample_correction * dt;
-			if (sample_cum & 0xFFFF0000)
+			samples_to_do = sample_increment * (int64_t)dt;
+			sample_cum += sample_correction * (int64_t)dt;
+			
+			// Carry every accumulated 16.16 fractional sample, even for a
+			// very large MIDI delta.
+			samples_to_do += sample_cum >> 16;
+			sample_cum &= 0xFFFF;
+			
+			if (samples_to_do < 0 || st > 0x7FFFFFFFLL - samples_to_do)
 			{
-				samples_to_do += ((sample_cum >> 16) & 0xFFFF);
-				sample_cum &= 0x0000FFFF;
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+					"%s: MIDI duration exceeds supported sample range", current_filename);
+				Real_Tim_Free(groomed_list);
+				free_midi_list();
+				*eventsp = 0;
+				*samplesp = 0;
+				return 0;
 			}
 			st += samples_to_do;
 		}
@@ -538,7 +741,7 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		{
 			/* Add the event to the list */
 			*lp=meep->event;
-			lp->time=st;
+			lp->time = (int32_t)st;
 			lp++;
 			our_event_count++;
 		}
@@ -546,20 +749,24 @@ static MidiEvent *groom_list( int32_t divisions, int32_t *eventsp, int32_t *samp
 		meep=(MidiEventList *)meep->next;
 	}
 	/* Add an End-of-Track event */
-	lp->time=st;
+	lp->time = (int32_t)st;
 	lp->type=ME_EOT;
 	our_event_count++;
 	free_midi_list();
 
 	*eventsp=our_event_count;
-	*samplesp=st;
+	*samplesp = (int32_t)st;
 	return groomed_list;
 }
 
 MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 {
-	 int32_t len, divisions;
-	int16_t format, tracks, divisions_tmp;
+	int32_t len, divisions;
+	int16_t format, tracks_tmp, divisions_tmp;
+	int tracks;
+	bool smpteTiming = false;
+	int smpteFrameRate = 0;
+	int smpteTicksPerFrame = 0;
 	int i;
 	char tmp[4];
 
@@ -593,32 +800,65 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 		return 0;
 	}
 
-	read_local(&format, 2, 1);
-	read_local(&tracks, 2, 1);
-	read_local(&divisions_tmp, 2, 1);
+	if (read_local(&format, 2, 1) != 1 ||
+		read_local(&tracks_tmp, 2, 1) != 1 ||
+		read_local(&divisions_tmp, 2, 1) != 1) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: Truncated MIDI header.", current_filename);
+		return 0;
+	}
 	format=BE_SHORT(format);
-	tracks=BE_SHORT(tracks);
+	tracks_tmp = BE_SHORT(tracks_tmp);
+	tracks = (int)(uint16_t)tracks_tmp;
 	divisions_tmp=BE_SHORT(divisions_tmp);
 
-	if (divisions_tmp<0)
+	if (divisions_tmp < 0)
 	{
-		/* SMPTE time -- totally untested. Got a MIDI file that uses this? */
-		divisions=
-			(int32_t)(-(divisions_tmp/256)) * (int32_t)(divisions_tmp & 0xFF);
-	}
-	else divisions=(int32_t)(divisions_tmp);
+		const uint16_t divisionBits = (uint16_t)divisions_tmp;
+		const int frameRateCode = (int)(int8_t)(divisionBits >> 8);
+		const int ticksPerFrame = (int)(divisionBits & 0xFF);
 
+		if ((frameRateCode != -24 && frameRateCode != -25 &&
+			frameRateCode != -29 && frameRateCode != -30) ||
+			ticksPerFrame <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid SMPTE MIDI timing division 0x%04X",
+				current_filename, (unsigned int)divisionBits);
+			return 0;
+		}
+
+		smpteTiming = true;
+		smpteFrameRate = frameRateCode;
+		smpteTicksPerFrame = ticksPerFrame;
+		divisions = 0;
+	}
+	else {
+		divisions = (int32_t)(divisions_tmp);
+		if (divisions <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid MIDI timing division %d", current_filename, divisions);
+			return 0;
+		}
+	}
 	if (len > 6)
 	{
 		ctl->cmsg(CMSG_WARNING, VERB_NORMAL, 
 			"%s: MIDI file header size %ld bytes", 
 			current_filename, len);
-		skip_local(len-6); /* skip_local the excess */
+		if (!skip_local((size_t)(len - 6))) {
+			return 0;
+		}
 	}
 	if (format<0 || format >2)
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, 
 			"%s: Unknown MIDI file format %d", current_filename, format);
+		return 0;
+	}
+	if (tracks <= 0 || (format == 0 && tracks != 1))
+	{
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: Invalid MIDI track count %d for format %d",
+			current_filename, tracks, format);
 		return 0;
 	}
 	//ctl->cmsg(CMSG_INFO, VERB_VERBOSE, 
@@ -659,13 +899,18 @@ MidiEvent *read_midi_file(idFile * mfp,  int32_t *count,  int32_t *sp)
 			}
 			break;
 	}
-	return groom_list(divisions, count, sp);
+	return groom_list(divisions, smpteTiming, smpteFrameRate,
+		smpteTicksPerFrame, count, sp);
 }
 
 MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *count,  int32_t *sp)
 {
-	 int32_t len, divisions;
-	int16_t format, tracks, divisions_tmp;
+	int32_t len, divisions;
+	int16_t format, tracks_tmp, divisions_tmp;
+	int tracks;
+	bool smpteTiming = false;
+	int smpteFrameRate = 0;
+	int smpteTicksPerFrame = 0;
 	int i;
 	char tmp[4];
 
@@ -690,30 +935,64 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 		return 0;
 	}
 
-	read_local(&format, 2, 1);
-	read_local(&tracks, 2, 1);
-	read_local(&divisions_tmp, 2, 1);
+	if (read_local(&format, 2, 1) != 1 ||
+		read_local(&tracks_tmp, 2, 1) != 1 ||
+		read_local(&divisions_tmp, 2, 1) != 1) {
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: Truncated MIDI header.", current_filename);
+		return 0;
+	}
 	format=BE_SHORT(format);
-	tracks=BE_SHORT(tracks);
+	tracks_tmp = BE_SHORT(tracks_tmp);
+	tracks = (int)(uint16_t)tracks_tmp;
 	divisions_tmp=BE_SHORT(divisions_tmp);
 
 	if (divisions_tmp<0) {
-		/* SMPTE time -- totally untested. Got a MIDI file that uses this? */
-		divisions= (int32_t)(-(divisions_tmp/256)) * (int32_t)(divisions_tmp & 0xFF);
+		const uint16_t divisionBits = (uint16_t)divisions_tmp;
+		const int frameRateCode = (int)(int8_t)(divisionBits >> 8);
+		const int ticksPerFrame = (int)(divisionBits & 0xFF);
+		
+		if ((frameRateCode != -24 && frameRateCode != -25 &&
+			frameRateCode != -29 && frameRateCode != -30) ||
+			ticksPerFrame <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid SMPTE MIDI timing division 0x%04X",
+				current_filename, (unsigned int)divisionBits);
+			return 0;
+		}
+		
+		smpteTiming = true;
+		smpteFrameRate = frameRateCode;
+		smpteTicksPerFrame = ticksPerFrame;
+		divisions = 0;
+	} else {
+		divisions = (int32_t)(divisions_tmp);
+		if (divisions <= 0) {
+			ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+				"%s: Invalid MIDI timing division %d", current_filename, divisions);
+			return 0;
+		}
 	}
-	else divisions=(int32_t)(divisions_tmp);
 
 	if (len > 6)
 	{
 		ctl->cmsg(CMSG_WARNING, VERB_NORMAL, 
 			"%s: MIDI file header size %ld bytes", 
 			current_filename, len);
-		skip_local(len-6); /* skip_local the excess */
+		if (!skip_local((size_t)(len - 6))) {
+			return 0;
+		}
 	}
 	if (format<0 || format >2)
 	{
 		ctl->cmsg(CMSG_ERROR, VERB_NORMAL, 
 			"%s: Unknown MIDI file format %d", current_filename, format);
+		return 0;
+	}
+	if (tracks <= 0 || (format == 0 && tracks != 1))
+	{
+		ctl->cmsg(CMSG_ERROR, VERB_NORMAL,
+			"%s: Invalid MIDI track count %d for format %d",
+			current_filename, tracks, format);
 		return 0;
 	}
 	//ctl->cmsg(CMSG_INFO, VERB_VERBOSE, 
@@ -754,5 +1033,6 @@ MidiEvent *read_midi_buffer(unsigned char* buffer, size_t length,  int32_t *coun
 			}
 			break;
 	}
-	return groom_list(divisions, count, sp);
+	return groom_list(divisions, smpteTiming, smpteFrameRate,
+		smpteTicksPerFrame, count, sp);
 }

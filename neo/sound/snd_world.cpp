@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../framework/precompiled.h"
+#pragma hdrstop
+
 #include "snd_local.h"
 
 idCVar s_lockListener( "s_lockListener", "0", CVAR_BOOL, "lock listener updates" );
@@ -393,21 +394,23 @@ void idSoundWorldLocal::Update() {
 
 	idStr showVoiceTable;
 	bool showVoices = s_showVoices.GetBool();
-	if ( showVoices ) {
-		showVoiceTable.Format( "currentCushionDB: %5.1f  freeVoices: %i zombieVoices: %i buffers:%i/%i\n", currentCushionDB, 
-			soundSystemLocal.hardware.GetNumFreeVoices(), soundSystemLocal.hardware.GetNumZombieVoices(),
-			soundSystemLocal.activeStreamBufferContexts.Num(), soundSystemLocal.freeStreamBufferContexts.Num() );
+	if( showVoices ) 
+	{
+		showVoiceTable.Format("currentCushionDB: %5.1f  freeVoices: %i zombieVoices: %i\n", currentCushionDB,
+		soundSystemLocal.hardware.GetNumFreeVoices(), soundSystemLocal.hardware.GetNumZombieVoices());
 	}
-	for ( int i = 0; i < activeEmitterChannels.Num(); i++ ) {
+	for( int i = 0; i < activeEmitterChannels.Num(); i++ ) 
+	{
 		idSoundChannel * chan = activeEmitterChannels[i].channel;
 		chan->UpdateHardware( 0.0f, currentTime );
 
-		if ( showVoices ) {
+		if( showVoices ) 
+		{
 			idStr voiceLine;
 			voiceLine.Format( "%5.1f db [%3i:%2i] %s", chan->volumeDB, chan->emitter->index, chan->logicalChannel, chan->CanMute() ? "" : " <CANT MUTE>\n" );
 			idSoundSample * leadinSample = chan->leadinSample;
 			idSoundSample * loopingSample = chan->loopingSample;
-			if ( loopingSample == NULL ) {
+			if( loopingSample == NULL ) {
 				voiceLine.Append( va( "%ikhz*%i %s\n", leadinSample->SampleRate()/1000, leadinSample->NumChannels(), leadinSample->GetName() ) );
 			} else if ( loopingSample == leadinSample ) {
 				voiceLine.Append( va( "%ikhz*%i <LOOPING> %s\n", leadinSample->SampleRate()/1000, leadinSample->NumChannels(), leadinSample->GetName() ) );
