@@ -106,6 +106,21 @@
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" />
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <PreBuildEvent>
       <Command>
@@ -115,6 +130,7 @@
     <ClCompile>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ShowIncludes>false</ShowIncludes>
+	  <AdditionalIncludeDirectories>$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -126,6 +142,7 @@
     <ClCompile>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ShowIncludes>false</ShowIncludes>
+	  <AdditionalIncludeDirectories>$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -135,6 +152,7 @@
     </PreBuildEvent>
     <ClCompile>
       <TreatWarningAsError>true</TreatWarningAsError>
+	  <AdditionalIncludeDirectories>$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -144,6 +162,7 @@
     </PreBuildEvent>
     <ClCompile>
       <TreatWarningAsError>true</TreatWarningAsError>
+	  <AdditionalIncludeDirectories>$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>

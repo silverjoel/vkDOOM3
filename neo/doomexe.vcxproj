@@ -100,14 +100,14 @@
     <CodeAnalysisRules Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" />
     <CodeAnalysisRuleAssemblies Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
-    <IncludePath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
-    <IncludePath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
-    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
-    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
-    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
-    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
-    <IncludePath Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
-    <IncludePath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
+    <IncludePath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+	<IncludePath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(SolutionDir)libs\openal-soft\lib\Win32;$(LibraryPath)</LibraryPath>
+	<LibraryPath Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(SolutionDir)libs\openal-soft\lib\Win64;$(LibraryPath)</LibraryPath>
+    <LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(SolutionDir)libs\openal-soft\lib\Win32;$(LibraryPath)</LibraryPath>
+	<LibraryPath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(SolutionDir)libs\openal-soft\lib\Win64;$(LibraryPath)</LibraryPath>
+    <IncludePath Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+	<IncludePath Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ProjectReference>
@@ -116,10 +116,10 @@
     <Link>
       <GenerateDebugInformation Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</GenerateDebugInformation>
       <GenerateDebugInformation Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateDebugInformation>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;glu32.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;opengl32.lib;winmm.lib;wsock32.lib;x3daudio.lib;libcmt.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;glu32.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;opengl32.lib;winmm.lib;wsock32.lib;x3daudio.lib;libcmt.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(DXSDK_DIR)\Lib\x86\;$(ProjectDir)\libs\vulkan\Lib32;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(DXSDK_DIR)\Lib\x64\;$(VULKAN_SDK)\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;glu32.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;opengl32.lib;winmm.lib;wsock32.lib;libcmt.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;glu32.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;opengl32.lib;winmm.lib;wsock32.lib;libcmt.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(DXSDK_DIR)\Lib\x86\;$(SolutionDir)libs\vulkan\Lib32;$(SolutionDir)libs\openal-soft\lib\Win32;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(DXSDK_DIR)\Lib\x64\;$(VULKAN_SDK)\Lib;$(SolutionDir)libs\openal-soft\lib\Win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Deploy />
     <Deploy />
@@ -129,8 +129,8 @@
     <ClCompile>
       <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</TreatWarningAsError>
       <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</TreatWarningAsError>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">_INLINEDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -139,8 +139,8 @@
     <ClCompile>
       <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</TreatWarningAsError>
       <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</TreatWarningAsError>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -165,10 +165,10 @@
     <Link>
       <GenerateMapFile Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</GenerateMapFile>
       <GenerateMapFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</GenerateMapFile>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;x3daudio.lib;libcmtd.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;x3daudio.lib;libcmtd.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(DXSDK_DIR)\Lib\x86\;$(ProjectDir)\libs\vulkan\Lib32;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(DXSDK_DIR)\Lib\x64\;$(VULKAN_SDK)\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;libcmtd.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;libcmtd.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(DXSDK_DIR)\Lib\x86\;$(SolutionDir)libs\vulkan\Lib32;$(SolutionDir)libs\openal-soft\lib\Win32;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(DXSDK_DIR)\Lib\x64\;$(VULKAN_SDK)\Lib;$(SolutionDir)libs\openal-soft\lib\Win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

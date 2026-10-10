@@ -170,15 +170,15 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
+	<ClCompile Include="sound\OpenAL\AL_SoundHardware.cpp" />
+	<ClCompile Include="sound\OpenAL\AL_SoundSample.cpp" />
+	<ClCompile Include="sound\OpenAL\AL_SoundVoice.cpp" />
     <ClCompile Include="sound\snd_emitter.cpp" />
     <ClCompile Include="sound\snd_shader.cpp" />
     <ClCompile Include="sound\snd_system.cpp" />
     <ClCompile Include="sound\snd_world.cpp" />
     <ClCompile Include="sound\SoundVoice.cpp" />
     <ClCompile Include="sound\WaveFile.cpp" />
-    <ClCompile Include="sound\XAudio2\XA2_SoundHardware.cpp" />
-    <ClCompile Include="sound\XAudio2\XA2_SoundSample.cpp" />
-    <ClCompile Include="sound\XAudio2\XA2_SoundVoice.cpp" />
     <ClCompile Include="swf\SWF_Bitstream.cpp" />
     <ClCompile Include="swf\SWF_Dictionary.cpp" />
     <ClCompile Include="swf\SWF_Events.cpp" />
@@ -336,13 +336,13 @@
     <ClInclude Include="renderer\Vulkan\qvk.h" />
     <ClInclude Include="renderer\Vulkan\Staging_VK.h" />
     <ClInclude Include="renderer\Vulkan\vma.h" />
+	<ClInclude Include="sound\OpenAL\AL_SoundHardware.h" />
+	<ClInclude Include="sound\OpenAL\AL_SoundSample.h" />
+	<ClInclude Include="sound\OpenAL\AL_SoundVoice.h" />
     <ClInclude Include="sound\snd_local.h" />
     <ClInclude Include="sound\sound.h" />
     <ClInclude Include="sound\SoundVoice.h" />
     <ClInclude Include="sound\WaveFile.h" />
-    <ClInclude Include="sound\XAudio2\XA2_SoundHardware.h" />
-    <ClInclude Include="sound\XAudio2\XA2_SoundSample.h" />
-    <ClInclude Include="sound\XAudio2\XA2_SoundVoice.h" />
     <ClInclude Include="swf\SWF.h" />
     <ClInclude Include="swf\SWF_Bitstream.h" />
     <ClInclude Include="swf\SWF_Enums.h" />
@@ -459,25 +459,33 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>..\build\$(PlatformName)\$(Configuration)\</OutDir>
-    <IntDir>..\build\$(PlatformName)\$(Configuration)\intermediate\$(ProjectName)\</IntDir>
-    <IncludePath>$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
-  </PropertyGroup>
+	<IntDir>..\build\$(PlatformName)\$(Configuration)\intermediate\$(ProjectName)\</IntDir>
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
+	<LibraryPath>$(SolutionDir)libs\openal-soft\lib\Win32;$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x86;$(LibraryPath)</LibraryPath>
+	<ExternalIncludePath>$(ProjectDir)libs\openal-soft\include;$(ExternalIncludePath)</ExternalIncludePath>
+</PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
-  </PropertyGroup>
+    <IncludePath>$(SolutionDir)libs\openal-soft\include;$(VCInstallDir)PlatformSDK\include;$(ProjectDir)dxsdk_June2010\include;$(IncludePath)</IncludePath>
+	<LibraryPath>$(SolutionDir)libs\openal-soft\lib\Win64;$(VCInstallDir)PlatformSDK\lib;$(ProjectDir)dxsdk_June2010\lib\x64;$(LibraryPath)</LibraryPath>
+	<ExternalIncludePath>$(ProjectDir)libs\openal-soft\include;$(ExternalIncludePath)</ExternalIncludePath>
+</PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>..\build\$(PlatformName)\$(Configuration)\</OutDir>
-    <IntDir>..\build\$(PlatformName)\$(Configuration)\intermediate\$(ProjectName)\</IntDir>
-  </PropertyGroup>
+	<IntDir>..\build\$(PlatformName)\$(Configuration)\intermediate\$(ProjectName)\</IntDir>
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+	<LibraryPath>$(SolutionDir)libs\openal-soft\lib\Win32;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
+</PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+	<IncludePath>$(SolutionDir)libs\openal-soft\include;$(IncludePath)</IncludePath>
+	<LibraryPath>$(SolutionDir)libs\openal-soft\lib\Win64;$(LibraryPath)</LibraryPath>
+</PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>ID_VULKAN;_INLINEDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <TreatWarningAsError>false</TreatWarningAsError>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -500,7 +508,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>ID_VULKAN;_INLINEDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <TreatWarningAsError>false</TreatWarningAsError>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -525,7 +533,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>ID_VULKAN;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <TreatWarningAsError>false</TreatWarningAsError>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
@@ -550,7 +558,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>ID_VULKAN;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(VULKAN_SDK)\Include\;$(DXSDK_DIR)\Include\;$(SolutionDir)libs\openal-soft\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <TreatWarningAsError>false</TreatWarningAsError>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
