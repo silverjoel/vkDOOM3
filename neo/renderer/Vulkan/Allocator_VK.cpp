@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
 #include "../RenderBackend.h"
 #include "Allocator_VK.h"
 
@@ -71,7 +72,7 @@ uint32 FindMemoryTypeIndex( const uint32 memoryTypeBits, const vulkanMemoryUsage
 		break;
 	case VULKAN_MEMORY_USAGE_CPU_TO_GPU:
 		required |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-		preferred |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+		preferred |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 		break;
 	case VULKAN_MEMORY_USAGE_GPU_TO_CPU:
 		required |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
@@ -152,7 +153,7 @@ idVulkanBlock::Init
 =============
 */
 bool idVulkanBlock::Init() {
-	if ( m_memoryTypeIndex == UINT64_MAX ) {
+	if (m_memoryTypeIndex == UINT32_MAX) {
 		return false;
 	}
 
@@ -160,6 +161,13 @@ bool idVulkanBlock::Init() {
 	memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 	memoryAllocateInfo.allocationSize = m_size;
 	memoryAllocateInfo.memoryTypeIndex = m_memoryTypeIndex;
+
+	idLib::Printf(
+		"VK: allocating %llu MB, memoryType=%lu, usage=%s\n",
+		static_cast<unsigned long long>(m_size / (1024ull * 1024ull)),
+		m_memoryTypeIndex,
+		memoryUsageStrings[m_usage]
+	);
 
 	ID_VK_CHECK( vkAllocateMemory( vkcontext.device, &memoryAllocateInfo, NULL, &m_deviceMemory ) )
 

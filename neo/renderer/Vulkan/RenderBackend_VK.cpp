@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
 #include "../../framework/Common_local.h"
 #include "../GLState.h"
 #include "../GLMatrix.h"
@@ -568,6 +569,30 @@ void idRenderBackend::SelectSuitablePhysicalDevice() {
 			vkcontext.presentFamilyIdx = presentIdx;
 			m_physicalDevice = gpu.device;
 			vkcontext.gpu = gpu;
+
+			idLib::Printf("VK: selected GPU: %s\n", gpu.props.deviceName);
+
+			for (uint32 h = 0; h < gpu.memProps.memoryHeapCount; h++) {
+				const VkMemoryHeap& heap = gpu.memProps.memoryHeaps[h];
+
+				idLib::Printf(
+					"VK: heap %lu: %llu MB flags=0x%08x\n",
+					h,
+					static_cast<unsigned long long>(heap.size / (1024ull * 1024ull)),
+					static_cast<unsigned int>(heap.flags)
+				);
+			}
+
+			for (uint32 t = 0; t < gpu.memProps.memoryTypeCount; t++) {
+				const VkMemoryType& type = gpu.memProps.memoryTypes[t];
+
+				idLib::Printf(
+					"VK: memory type %lu: heap=%lu flags=0x%08x\n",
+					t,
+					type.heapIndex,
+					static_cast<unsigned int>(type.propertyFlags)
+				);
+			}
 
 			return;
 		}
@@ -1160,9 +1185,18 @@ idRenderBackend::DestroyFrameBuffers
 =============
 */
 void idRenderBackend::DestroyFrameBuffers() {
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		vkDestroyFramebuffer( vkcontext.device, m_frameBuffers[ i ], NULL );
+	if (vkcontext.device == VK_NULL_HANDLE) {
+		m_frameBuffers.Zero();
+		return;
 	}
+
+	for (int i = 0; i < NUM_FRAME_DATA; ++i) {
+		if (m_frameBuffers[i] != VK_NULL_HANDLE) {
+			vkDestroyFramebuffer(vkcontext.device, m_frameBuffers[i], NULL);
+			m_frameBuffers[i] = VK_NULL_HANDLE;
+		}
+	}
+
 	m_frameBuffers.Zero();
 }
 
@@ -1362,6 +1396,18 @@ idRenderBackend::Shutdown
 void idRenderBackend::Shutdown() {
 	// Shutdown input
 	Sys_ShutdownInput();
+
+	// Vulkan initialization may not have progressed far enough to
+	// create a logical device.  Do not attempt device-level cleanup
+	// when there is no valid device.
+	if (vkcontext.device == VK_NULL_HANDLE) {
+		idLib::Printf("VK: Shutdown called without an initialized Vulkan device\n");
+
+		ClearContext();
+		Clear();
+		VK_Shutdown();
+		return;
+	}
 
 	renderProgManager.Shutdown();
 
