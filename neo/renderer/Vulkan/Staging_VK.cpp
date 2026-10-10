@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../../framework/precompiled.h"
+#pragma hdrstop
+
 #include "../RenderBackend.h"
 #include "Staging_VK.h"
 

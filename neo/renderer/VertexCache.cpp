@@ -27,8 +27,8 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../framework/precompiled.h"
+#pragma hdrstop
 
 idVertexCache vertexCache;
 
@@ -133,11 +133,24 @@ idVertexCache::Shutdown
 ==============
 */
 void idVertexCache::Shutdown() {
-	for ( int i = 0; i < NUM_FRAME_DATA; i++ ) {
+	for (int i = 0; i < NUM_FRAME_DATA; i++) {
+		UnmapGeoBufferSet(m_frameData[i]);
+
 		m_frameData[i].vertexBuffer.FreeBufferObject();
 		m_frameData[i].indexBuffer.FreeBufferObject();
 		m_frameData[i].jointBuffer.FreeBufferObject();
+
+		ClearGeoBufferSet(m_frameData[i]);
 	}
+
+	// Free the persistent static vertex/index buffers as well.
+	UnmapGeoBufferSet(m_staticData);
+
+	m_staticData.vertexBuffer.FreeBufferObject();
+	m_staticData.indexBuffer.FreeBufferObject();
+	m_staticData.jointBuffer.FreeBufferObject();
+
+	ClearGeoBufferSet(m_staticData);
 }
 
 /*
