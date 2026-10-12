@@ -27,8 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
-#pragma hdrstop
 #include "../framework/precompiled.h"
+#pragma hdrstop
+
 #include "snd_local.h"
 
 idCVar s_noSound( "s_noSound", "0", CVAR_BOOL, "returns NULL for all sounds loaded and does not update the sound rendering" );
@@ -105,6 +106,11 @@ idSoundSystemLocal::Restart
 ========================
 */
 void idSoundSystemLocal::Restart() {
+	// A full restart satisfies any request that was already pending when the
+	// restart began, including a manual s_restart. Clear it at entry rather
+	// than at exit so a new recovery request raised during hardware shutdown
+	// or reinitialization remains set and can be serviced on the next render.
+	needsRestart = false;
 
 	// Mute all channels in all worlds
 	for ( int i = 0; i < soundWorlds.Num(); i++ ) {
@@ -118,12 +124,36 @@ void idSoundSystemLocal::Restart() {
 	}
 	// Shutdown sound hardware
 	hardware.Shutdown();
-	// Reinitialize sound hardware
-	if ( !s_noSound.GetBool() ) {
-		hardware.Init();
+
+	// OpenAL buffer names are local to the context that was just destroyed.
+	// Keep the CPU sample data, but discard every stale hardware object name.
+	for (int i = 0; i < samples.Num(); i++) 
+	{
+		samples[i]->InvalidateOpenALBuffer();
 	}
 
-	InitStreamBuffers();
+	// Reinitialize sound hardware
+	if ( !s_noSound.GetBool() ) 
+	{
+		hardware.Init();
+		// Re-upload all resident samples into the new OpenAL context. ADPCM
+		// samples retain their already-decoded PCM data, so this does not
+		// perform a second decode.
+		for (int i = 0; i < samples.Num(); i++)
+		{
+			if (samples[i]->WasDefaultedForNoSound())
+			{
+				// This sample was first referenced while s_noSound was active
+				// and therefore contains only the temporary default beep.
+				// Reload the actual resource now that sound is available.
+				samples[i]->LoadResource();
+			}
+			else if (samples[i]->IsLoaded())
+			{
+				samples[i]->RecreateOpenALBuffer();
+			}
+		}
+	}
 }
 
 /*
@@ -142,8 +172,12 @@ void idSoundSystemLocal::Init() {
 
 	if ( !s_noSound.GetBool() ) {
 		hardware.Init();
-		InitStreamBuffers();
 	}
+
+	// Establish the startup value as the baseline. Runtime changes are handled
+	// in Render() so both disabling and re-enabling sound use the full restart
+	// lifecycle.
+	s_noSound.ClearModified();
 
 	cmdSystem->AddCommand( "testSound", TestSound_f, 0, "tests a sound", idCmdSystem::ArgCompletion_SoundName );
 	cmdSystem->AddCommand( "s_restart", RestartSound_f, 0, "restart sound system" );
@@ -155,86 +189,21 @@ void idSoundSystemLocal::Init() {
 
 /*
 ========================
-idSoundSystemLocal::InitStreamBuffers
-========================
-*/
-void idSoundSystemLocal::InitStreamBuffers() {
-	streamBufferMutex.Lock();
-	const bool empty = ( bufferContexts.Num() == 0 );
-	if ( empty ) {
-		bufferContexts.SetNum( MAX_SOUND_BUFFERS );
-		for ( int i = 0; i < MAX_SOUND_BUFFERS; i++ ) {
-			freeStreamBufferContexts.Append( &( bufferContexts[ i ] ) );
-		}
-	} else {
-		for ( int i = 0; i < activeStreamBufferContexts.Num(); i++ ) {
-			freeStreamBufferContexts.Append( activeStreamBufferContexts[ i ] );
-		}
-		activeStreamBufferContexts.Clear();
-	}
-	assert( bufferContexts.Num() == MAX_SOUND_BUFFERS );
-	assert( freeStreamBufferContexts.Num() == MAX_SOUND_BUFFERS );
-	assert( activeStreamBufferContexts.Num() == 0 );
-	streamBufferMutex.Unlock();
-}
-
-/*
-========================
-idSoundSystemLocal::FreeStreamBuffers
-========================
-*/
-void idSoundSystemLocal::FreeStreamBuffers() {
-	streamBufferMutex.Lock();
-	bufferContexts.Clear();
-	freeStreamBufferContexts.Clear();
-	activeStreamBufferContexts.Clear();
-	streamBufferMutex.Unlock();
-}
-
-/*
-========================
 idSoundSystemLocal::Shutdown
 ========================
 */
 void idSoundSystemLocal::Shutdown() {
 	hardware.Shutdown();
-	FreeStreamBuffers();
+
+	// The OpenAL context is gone, so these numeric names are no longer valid.
+	// Clear them before sample destructors call FreeData().
+	for (int i = 0; i < samples.Num(); i++) 
+	{
+		samples[i]->InvalidateOpenALBuffer();
+	}
+
 	samples.DeleteContents( true );
 	sampleHash.Free();
-}
-
-/*
-========================
-idSoundSystemLocal::ObtainStreamBuffer
-
-Get a stream buffer from the free pool, returns NULL if none are available
-========================
-*/
-idSoundSystemLocal::bufferContext_t * idSoundSystemLocal::ObtainStreamBufferContext() {
-	bufferContext_t * bufferContext = NULL;
-	streamBufferMutex.Lock();
-	if ( freeStreamBufferContexts.Num() != 0 ) {
-		bufferContext = freeStreamBufferContexts[ freeStreamBufferContexts.Num() - 1 ];
-		freeStreamBufferContexts.SetNum( freeStreamBufferContexts.Num() - 1 );
-		activeStreamBufferContexts.Append( bufferContext );
-	}
-	streamBufferMutex.Unlock();
-	return bufferContext;
-}
-
-/*
-========================
-idSoundSystemLocal::ReleaseStreamBuffer
-
-Releases a stream buffer back to the free pool
-========================
-*/
-void idSoundSystemLocal::ReleaseStreamBufferContext( bufferContext_t * bufferContext ) {
-	streamBufferMutex.Lock();
-	if ( activeStreamBufferContexts.Remove( bufferContext ) ) {
-		freeStreamBufferContexts.Append( bufferContext );
-	}
-	streamBufferMutex.Unlock();
 }
 
 /*
@@ -275,7 +244,25 @@ void idSoundSystemLocal::SetPlayingSoundWorld( idSoundWorld *soundWorld ) {
 
 	currentSoundWorld = static_cast<idSoundWorldLocal *>( soundWorld );
 
-	if ( oldSoundWorld != NULL ) {
+	if (oldSoundWorld != NULL) {
+		// This update occurs outside Render(), so it does not pass through
+		// hardware.Update()'s context/device validation. Preserve the old
+		// world's logical housekeeping even when the OpenAL context is
+		// unusable, but first release every hardware voice through the guarded
+		// FreeVoice() path. With hardwareVoice pointers cleared, Update() can
+		// remove completed emitters/update logical state safely, while any
+		// attempted voice reacquisition is rejected by AllocateVoice().
+		if (!hardware.IsContextCurrent()) {
+			for (int e = 0; e < oldSoundWorld->emitters.Num(); ++e) {
+				idSoundEmitterLocal * emitter = oldSoundWorld->emitters[e];
+				if (emitter == NULL) {
+					continue;
+				}
+				for (int c = 0; c < emitter->channels.Num(); ++c) {
+					emitter->channels[c]->Mute();
+				}
+			}
+		}
 		oldSoundWorld->Update();
 	}
 }
@@ -296,6 +283,16 @@ idSoundSystemLocal::Render
 */
 void idSoundSystemLocal::Render() {
 
+	// Handle runtime s_noSound transitions before the disabled early-out.
+	// Restart() tears down the current context when disabling and rebuilds it
+	// (including context-local sample buffers) when enabling.
+	if (s_noSound.IsModified()) 
+	{
+		s_noSound.ClearModified();
+
+		Restart();
+	}
+
 	if ( s_noSound.GetBool() ) {
 		return;
 	}
@@ -307,11 +304,39 @@ void idSoundSystemLocal::Render() {
 
 	SCOPED_PROFILE_EVENT( "SoundSystem::Render" );
 
+	// Validate the owned OpenAL device/context before any sound-world voice
+	// update can issue source calls. In particular, never let stale numeric
+	// source names be used while another/no OpenAL context is current. Keep
+	// logical sound time advancing while hardware is unavailable so expired
+	// one-shots do not resume later.
+	if (!hardware.Update()) {
+		// A missing/wrong/disconnected context can persist for many frames.
+		// Do not freeze the sound world's CPU-side bookkeeping for the whole
+		// outage: completed emitters/channels should still age out while the
+		// game continues creating sounds. First release every hardware voice
+		// through the context-safe FreeVoice() path. AllocateVoice() uses the
+		// same IsContextCurrent() gate, so this Update() remains logical-only
+		// until a valid owned context exists again.
+		if (currentSoundWorld != NULL && !hardware.IsContextCurrent()) {
+			for (int e = 0; e < currentSoundWorld->emitters.Num(); ++e) {
+				idSoundEmitterLocal * emitter = currentSoundWorld->emitters[e];
+				if (emitter == NULL) {
+					continue;
+				}
+				for (int c = 0; c < emitter->channels.Num(); ++c) {
+					emitter->channels[c]->Mute();
+				}
+			}
+			
+			currentSoundWorld->Update();
+		}
+		soundTime = Sys_Milliseconds();
+		return;
+	}
+
 	if ( currentSoundWorld != NULL ) {
 		currentSoundWorld->Update();
 	}
-
-	hardware.Update();
 
 	// The sound system doesn't use game time or anything like that because the sounds are decoded in real time. 
 	soundTime = Sys_Milliseconds();
@@ -345,11 +370,12 @@ void idSoundSystemLocal::StopAllSounds() {
 
 /*
 ========================
-idSoundSystemLocal::GetIXAudio2
+idSoundSystemLocal::GetOpenALDevice
 ========================
 */
-void * idSoundSystemLocal::GetIXAudio2() const {
-	return (void *)hardware.GetIXAudio2();
+void* idSoundSystemLocal::GetOpenALDevice() const
+{
+	return (void*)hardware.GetOpenALDevice();
 }
 
 /*

@@ -124,13 +124,18 @@ unsigned char* Midi_WriteTempo(unsigned char* buffer, int tempo)
 
 int Midi_UpdateBytesWritten(int* bytes_written, int to_add, int max)
 {
-	*bytes_written += to_add;
-	if (max && *bytes_written > max)
+	if (bytes_written == NULL || to_add < 0 || max < 0 || *bytes_written < 0 || *bytes_written > max - to_add)
 	{
-		assert(0);
 		return 0;
 	}
+
+	*bytes_written += to_add;
 	return 1;
+}
+
+static bool MusCanRead(const unsigned char* cur, const unsigned char* end, int count)
+{
+	return cur != NULL && end != NULL && count >= 0 && cur <= end && static_cast<size_t>(end - cur) >= static_cast<size_t>(count);
 }
 
 unsigned char MidiMap[] = 
@@ -159,13 +164,23 @@ namespace {
 	}
 }
 
-int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
+int Mus2Midi(const unsigned char* bytes, int inputLength, unsigned char* out, int outputCapacity, int* len)
 {
+
+	if (bytes == NULL || out == NULL || len == NULL || inputLength < static_cast<int>(sizeof(MUSheader_t)) || outputCapacity <= 0)
+	{
+		return 0;
+	}
+	
+	*len = 0;
+
 	// mus header and instruments
 	MUSheader_t header;
 	
 	// current position in read buffer
-	unsigned char* cur = bytes,* end;
+	const unsigned char* cur = bytes;
+	const unsigned char* inputEnd = bytes + inputLength;
+	const unsigned char* end = NULL;
 
 	// Midi header(format 0)
 	MidiHeaderChunk_t midiHeader;
@@ -192,6 +207,11 @@ int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
 	header.sec_channels = LittleToNative( header.sec_channels );
 	header.instrCnt = LittleToNative( header.instrCnt );
 	header.dummy = LittleToNative( header.dummy );
+
+	if (header.scoreStart > inputLength || header.scoreLen > inputLength - header.scoreStart)
+	{
+		return 0;
+	}
 	
 	// only 15 supported
 	if (header.channels > MIDI_MAXCHANNELS - 1)
@@ -208,24 +228,36 @@ int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
 	cur = bytes + header.scoreStart;
 	end = cur + header.scoreLen;
 
+	if (cur < bytes || cur > inputEnd || end < cur || end > inputEnd)
+		return 0;
+
 	// Write out midi header
 	Midi_CreateHeader(&midiHeader, 0, 1, 0x0059);
-	Midi_UpdateBytesWritten(&bytes_written, MIDIHEADERSIZE, *len);
+
+	if (!Midi_UpdateBytesWritten(&bytes_written, MIDIHEADERSIZE, outputCapacity))
+		return 0;
+
 	memcpy(out, &midiHeader, MIDIHEADERSIZE);	// cannot use sizeof(packs it to 16 bytes)
 	out += MIDIHEADERSIZE;
 	 
 	// Store this position, for later filling in the midiTrackHeader
-	Midi_UpdateBytesWritten(&bytes_written, sizeof(midiTrackHeader), *len);
+	if (!Midi_UpdateBytesWritten(&bytes_written, sizeof(midiTrackHeader), outputCapacity))
+		return 0;
+
 	midiTrackHeaderOut = out;
 	out += sizeof(midiTrackHeader);
 	
 
 	// microseconds per quarter note(yikes)
-	Midi_UpdateBytesWritten(&bytes_written, 7, *len);
+	if (!Midi_UpdateBytesWritten(&bytes_written, 7, outputCapacity))
+		return 0;
+
 	out = Midi_WriteTempo(out, 0x001aa309);
 	
 	// Percussions channel starts out at full volume
-	Midi_UpdateBytesWritten(&bytes_written, 4, *len);
+	if (!Midi_UpdateBytesWritten(&bytes_written, 4, outputCapacity))
+		return 0;
+
 	out = WriteByte(out, 0x00);
 	out = WriteByte(out, 0xB9);
 	out = WriteByte(out, 0x07);
@@ -240,6 +272,9 @@ int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
 		byte status, bit1, bit2, bitc = 2;
 		
 		// Read in current bit
+		if (!MusCanRead(cur, end, 1))
+			return 0;
+
 		event		= *cur++;
 		channel		= (event & 15);		// current channel
 		
@@ -264,32 +299,51 @@ int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
 		switch ((event & 122) >> 4)
 		{
 		default:
-			assert(0);
-			break;
+			return 0;
 		case MUSEVENT_KEYOFF:
+			if (!MusCanRead(cur, end, 1))
+				return 0;
+
 			status |=  0x80;
 			bit1 = *cur++;
 			bit2 = 0x40;
 			break;
 		case MUSEVENT_KEYON:
+			if (!MusCanRead(cur, end, 1))
+				return 0;
+
 			status |= 0x90;
 			bit1 = *cur & 127;
-			if (*cur++ & 128)	// volume bit?
+			if (*cur++ & 128) {	// volume bit?
+				if (!MusCanRead(cur, end, 1))
+					return 0;
+
 				channel_volume[channelMap[channel]] = *cur++;
+			}
 			bit2 = channel_volume[channelMap[channel]];
 			break;
 		case MUSEVENT_PITCHWHEEL:
+			if (!MusCanRead(cur, end, 1))
+				return 0;
+
 			status |= 0xE0;
 			bit1 = (*cur & 1) >> 6;
 			bit2 = (*cur++ >> 1) & 127;
 			break;
 		case MUSEVENT_CHANNELMODE:
+			if (!MusCanRead(cur, end, 2))
+				return 0;
 			status |= 0xB0;
-			assert(*cur < sizeof(MidiMap) / sizeof(MidiMap[0]));
+			if (*cur >= sizeof(MidiMap) / sizeof(MidiMap[0]))
+				return 0;
+
 			bit1 = MidiMap[*cur++];
 			bit2 = (*cur++ == 12) ? header.channels + 1 : 0x00;
 			break;
 		case MUSEVENT_CONTROLLERCHANGE:
+			if (!MusCanRead(cur, end, 2))
+				return 0;
+
 			if (*cur == 0) {
 				cur++;
 				status |= 0xC0;
@@ -297,23 +351,25 @@ int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
 				bitc = 1;
 			} else {
 				status |= 0xB0;
-				assert(*cur < sizeof(MidiMap) / sizeof(MidiMap[0]));
+				if (*cur >= sizeof(MidiMap) / sizeof(MidiMap[0]))
+					return 0;
+
 				bit1 = MidiMap[*cur++];
 				bit2 = *cur++;
 			}
 			break;
 		case 5:	// Unknown
-			assert(0);
-			break;
+			return 0;
 		case MUSEVENT_END:	// End
 			status = 0xff;
 			bit1 = 0x2f;
 			bit2 = 0x00;
-			assert(cur == end);
+			if (cur != end)
+				return 0;
+
 			break;
 		case 7:	// Unknown
-			assert(0);
-			break;
+			return 0;
 		}
 
 		// Write it out
@@ -326,16 +382,28 @@ int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len)
 		// Write out temp stuff
 		if (out_local != temp_buffer)
 		{
-			Midi_UpdateBytesWritten(&bytes_written, out_local - temp_buffer, *len);
-			memcpy(out, temp_buffer, out_local - temp_buffer);
-			out += out_local - temp_buffer;
+			const int eventBytes = static_cast<int>(out_local - temp_buffer);
+			if (!Midi_UpdateBytesWritten(&bytes_written, eventBytes, outputCapacity))
+				return 0;
+			memcpy(out, temp_buffer, eventBytes);
+			out += eventBytes;
 		}
 
 		if (event & 128) {
 			delta_time = 0;
-			do {
-				delta_time = delta_time * 128 + (*cur & 127);
-			} while ((*cur++ & 128));
+			for (;;) {
+				if (!MusCanRead(cur, end, 1))
+					return 0;
+				
+				const int deltaByte = *cur++;
+				const int deltaPart = deltaByte & 127;
+				if (delta_time > (0x7FFFFFFF - deltaPart) / 128)
+					return 0;
+				
+				delta_time = delta_time * 128 + deltaPart;
+				if ((deltaByte & 128) == 0)
+					break;	
+			}
 		} else {
 			delta_time = 0;
 		}

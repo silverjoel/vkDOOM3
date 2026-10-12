@@ -384,6 +384,7 @@ fixed_t GetViewY()
 void DoomLib::Shutdown() {
 	//D_QuitNetGame ();
 	I_ShutdownSound();
+	I_ShutdownMusic();
 	I_ShutdownGraphics();
 
 	W_Shutdown();

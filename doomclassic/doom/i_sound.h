@@ -46,6 +46,7 @@ extern char* sndserver_filename;
 // Init at program start...
 void I_InitSound();
 void I_InitSoundHardware( int numOutputChannels_, int channelMask );
+void I_InvalidateSoundHardware();
 
 // ... update sound buffer and audio device at runtime...
 void I_UpdateSound(void);
@@ -101,13 +102,16 @@ int I_RegisterSong(void *data, int length);
 // Horrible thing to do, considering.
 void I_PlaySong( const char *songname, int looping );
 // Stops a song over 3 seconds.
-void I_StopSong(int handle);
+bool I_StopSong(int handle);
+// Returns true when the current logical track exhausted automatic hardware
+// recovery and an explicit same-track request should be allowed through.
+bool I_MusicNeedsExplicitRetry(void);
 // See above (register), then think backwards
 void I_UnRegisterSong(int handle);
 // Update Music (XMP), check for notifications
 void I_UpdateMusic(void);
 
-int Mus2Midi(unsigned char* bytes, unsigned char* out, int* len);
+int Mus2Midi(const unsigned char* bytes, int inputLength, unsigned char* out, int outputCapacity, int* len);
 
 #endif
 

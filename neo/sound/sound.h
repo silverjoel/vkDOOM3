@@ -27,8 +27,16 @@ If you have questions concerning this license or the applicable additional terms
 ===========================================================================
 */
 
+#if defined(_MSC_VER)
+#pragma comment(lib, "OpenAL32.lib")
+#endif
+
 #ifndef __SOUND__
 #define __SOUND__
+
+//#include "snd_local.h"
+#include "../framework/DeclManager.h"
+#include "../renderer/Cinematic.h"
 
 /*
 ===============================================================================
@@ -290,12 +298,7 @@ public:
 	// Called before freeing any sound sample resources
 	virtual void			StopAllSounds() = 0;
 
-	// May be called to free memory for level loads
-	virtual void			InitStreamBuffers() = 0;
-	virtual void			FreeStreamBuffers() = 0;
-
-	// video playback needs to get this
-	virtual void *			GetIXAudio2() const = 0;
+	virtual void*			GetOpenALDevice() const = 0;
 
 	// for the sound level meter window
 	virtual cinData_t		ImageForTime( const int milliseconds, const bool waveform ) = 0;
