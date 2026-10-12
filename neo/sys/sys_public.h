@@ -597,7 +597,7 @@ idUDP
 */
 class idUDP {
 public:
-	// this just zeros netSocket and port
+	// initializes an invalid socket and clears the port
 				idUDP();
 	virtual		~idUDP();
 
@@ -625,11 +625,11 @@ public:
 	int			packetsWritten;
 	int			bytesWritten;
 
-	bool		IsOpen() const { return netSocket > 0; }
+	bool		IsOpen() const;
 
 private:
 	netadr_t	bound_to;		// interface and port
-	int			netSocket;		// OS specific socket
+	uintptr_t	netSocket;		// OS specific socket, pointer-sized on Windows
 	bool		silent;			// don't emit anything ( black hole )
 };
 

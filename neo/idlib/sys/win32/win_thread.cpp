@@ -54,7 +54,7 @@ void Sys_SetThreadName( DWORD threadID, const char * name ) {
 	info.dwFlags = 0;
 
 	__try {
-		RaiseException( MS_VC_EXCEPTION, 0, sizeof(info)/sizeof(DWORD), (const ULONG_PTR *)&info );
+		RaiseException( MS_VC_EXCEPTION, 0, sizeof(info)/sizeof(ULONG_PTR), (const ULONG_PTR *)&info );
 	}
 	// this much is just to keep /analyze quiet
 	__except( GetExceptionCode() == MS_VC_EXCEPTION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH ) {

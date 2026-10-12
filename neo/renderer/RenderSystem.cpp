@@ -890,7 +890,8 @@ void idRenderSystemLocal::ToggleSmpFrame() {
 	m_frameData = &m_smpFrameData[ m_smpFrame % NUM_FRAME_DATA ];
 
 	// reset the memory allocation
-	const uint32 bytesNeededForAlignment = FRAME_ALLOC_ALIGNMENT - ( (uint32)m_frameData->frameMemory & ( FRAME_ALLOC_ALIGNMENT - 1 ) );
+	// Only the masked byte offset (0..127) is narrowed, never the address.
+	const uint32 bytesNeededForAlignment = FRAME_ALLOC_ALIGNMENT - static_cast<uint32>( reinterpret_cast<uintptr_t>( m_frameData->frameMemory ) & ( FRAME_ALLOC_ALIGNMENT - 1 ) );
 	m_frameData->frameMemoryAllocated.SetValue( bytesNeededForAlignment );
 	m_frameData->frameMemoryUsed.SetValue( 0 );
 
