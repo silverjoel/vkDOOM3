@@ -27,6 +27,7 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "Precompiled.h"
+#include <cstddef>
 #include "globaldata.h"
 
 
@@ -67,7 +68,8 @@ extern bool globalNetworking;
 //
 int NetbufferSize (void)
 {
-	int size = (int)&(((doomdata_t *)0)->cmds[::g->netbuffer->numtics]);
+	// numtics is a byte, so the complete packet length fits in int.
+	int size = static_cast<int>( offsetof(doomdata_t, cmds) + sizeof(ticcmd_t) * ::g->netbuffer->numtics );
 
 	return size;
 }
@@ -83,7 +85,7 @@ unsigned NetbufferChecksum (void)
 	c = 0x1234567;
 
 	if ( globalNetworking ) {
-		l = (NetbufferSize () - (int)&(((doomdata_t *)0)->retransmitfrom))/4;
+		l = (NetbufferSize () - static_cast<int>( offsetof(doomdata_t, retransmitfrom) ))/4;
 		for (i=0 ; i<l ; i++)
 			c += ((unsigned *)&::g->netbuffer->retransmitfrom)[i] * (i+1);
 	}
