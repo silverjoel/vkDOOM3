@@ -2628,7 +2628,7 @@ idWindow::EmitOp
 ================
 */
 
-int idWindow::EmitOp( int a, int b, wexpOpType_t opType, wexpOp_t **opp ) {
+int idWindow::EmitOp( intptr_t a, int b, wexpOpType_t opType, wexpOp_t **opp ) {
 	wexpOp_t *op;
 /*
 	// optimize away identity operations
@@ -2737,7 +2737,7 @@ int idWindow::ParseTerm( idTokenParser *src,	idWinVar *var, int component ) {
 		var = GetWinVarByName(token, true);
 	}
 	if (var) {
-		a = (int)var;
+		const intptr_t varOperand = reinterpret_cast<intptr_t>( var );
 		//assert(dynamic_cast<idWinVec4*>(var));
 		var->Init(token, this);
 		b = component;
@@ -2750,15 +2750,15 @@ int idWindow::ParseTerm( idTokenParser *src,	idWinVar *var, int component ) {
 					src->UnreadToken(&token);
 				}
 			}
-			return EmitOp(a, b, WOP_TYPE_VAR);
+			return EmitOp(varOperand, b, WOP_TYPE_VAR);
 		} else if (dynamic_cast<idWinFloat*>(var)) {
-			return EmitOp(a, b, WOP_TYPE_VARF);
+			return EmitOp(varOperand, b, WOP_TYPE_VARF);
 		} else if (dynamic_cast<idWinInt*>(var)) {
-			return EmitOp(a, b, WOP_TYPE_VARI);
+			return EmitOp(varOperand, b, WOP_TYPE_VARI);
 		} else if (dynamic_cast<idWinBool*>(var)) {
-			return EmitOp(a, b, WOP_TYPE_VARB);
+			return EmitOp(varOperand, b, WOP_TYPE_VARB);
 		} else if (dynamic_cast<idWinStr*>(var)) {
-			return EmitOp(a, b, WOP_TYPE_VARS);
+			return EmitOp(varOperand, b, WOP_TYPE_VARS);
 		} else {
 			src->Warning("Var expression not vec4, float or int '%s'", token.c_str());
 		}
@@ -2767,9 +2767,8 @@ int idWindow::ParseTerm( idTokenParser *src,	idWinVar *var, int component ) {
 		// ugly but used for post parsing to fixup named vars
 		char *p = new (TAG_OLD_UI) char[token.Length()+1];
 		strcpy(p, token);
-		a = (int)p;
 		b = -2;
-		return EmitOp(a, b, WOP_TYPE_VAR);
+		return EmitOp(reinterpret_cast<intptr_t>( p ), b, WOP_TYPE_VAR);
 	}
 
 }
@@ -2934,7 +2933,9 @@ void idWindow::EvaluateRegisters(float *registers) {
 			break;
 		case WOP_TYPE_TABLE:
 			{
-				const idDeclTable *table = static_cast<const idDeclTable *>( declManager->DeclByIndex( DECL_TABLE, op->a ) );
+				// TABLE operands originate from the int returned by table->Index().
+				assert( op->a >= INT_MIN && op->a <= INT_MAX );
+				const idDeclTable *table = static_cast<const idDeclTable *>( declManager->DeclByIndex( DECL_TABLE, static_cast<int>( op->a ) ) );
 				registers[op->c] = table->TableLookup( registers[op->b] );
 			}
 			break;
@@ -2972,15 +2973,15 @@ void idWindow::EvaluateRegisters(float *registers) {
 			}
 			if ( op->b >= 0 && registers[op->b] >= 0 && registers[op->b] < 4 ) {
 				// grabs vector components
-				idWinVec4 *var = (idWinVec4 *)( op->a );
+				idWinVec4 *var = reinterpret_cast<idWinVec4 *>( op->a );
 				registers[op->c] = ((idVec4&)var)[registers[op->b]];
 			} else {
-				registers[op->c] = ((idWinVar*)(op->a))->x();
+				registers[op->c] = reinterpret_cast<idWinVar *>( op->a )->x();
 			}
 			break;
 		case WOP_TYPE_VARS:
 			if (op->a) {
-				idWinStr *var = (idWinStr*)(op->a);
+				idWinStr *var = reinterpret_cast<idWinStr *>( op->a );
 				registers[op->c] = atof(var->c_str());
 			} else {
 				registers[op->c] = 0;
@@ -2988,7 +2989,7 @@ void idWindow::EvaluateRegisters(float *registers) {
 			break;
 		case WOP_TYPE_VARF:
 			if (op->a) {
-				idWinFloat *var = (idWinFloat*)(op->a);
+				idWinFloat *var = reinterpret_cast<idWinFloat *>( op->a );
 				registers[op->c] = *var;
 			} else {
 				registers[op->c] = 0;
@@ -2996,7 +2997,7 @@ void idWindow::EvaluateRegisters(float *registers) {
 			break;
 		case WOP_TYPE_VARI:
 			if (op->a) {
-				idWinInt *var = (idWinInt*)(op->a);
+				idWinInt *var = reinterpret_cast<idWinInt *>( op->a );
 				registers[op->c] = *var;
 			} else {
 				registers[op->c] = 0;
@@ -3004,7 +3005,7 @@ void idWindow::EvaluateRegisters(float *registers) {
 			break;
 		case WOP_TYPE_VARB:
 			if (op->a) {
-				idWinBool *var = (idWinBool*)(op->a);
+				idWinBool *var = reinterpret_cast<idWinBool *>( op->a );
 				registers[op->c] = *var;
 			} else {
 				registers[op->c] = 0;
@@ -3499,10 +3500,10 @@ void idWindow::FixupParms() {
 	for (i = 0; i < c; i++) {
 		if (ops[i].b == -2) {
 			// need to fix this up
-			const char *p = (const char*)(ops[i].a);
+			const char *p = reinterpret_cast<const char *>( ops[i].a );
 			idWinVar *var = GetWinVarByName(p, true);
 			delete []p;
-			ops[i].a = (int)var;
+			ops[i].a = reinterpret_cast<intptr_t>( var );
 			ops[i].b = -1;
 		}
 	}
