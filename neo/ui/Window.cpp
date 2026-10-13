@@ -2628,7 +2628,7 @@ idWindow::EmitOp
 ================
 */
 
-int idWindow::EmitOp( intptr_t a, int b, wexpOpType_t opType, wexpOp_t **opp ) {
+int idWindow::EmitOp( intptr_t a, int b, wexpOpType_t opType, int *opIndex ) {
 	wexpOp_t *op;
 /*
 	// optimize away identity operations
@@ -2668,8 +2668,9 @@ int idWindow::EmitOp( intptr_t a, int b, wexpOpType_t opType, wexpOp_t **opp ) {
 	op->b = b;
 	op->c = ExpressionTemporary();
 
-	if (opp) {
-		*opp = op;
+	if (opIndex) {
+		// The index is bounded by MAX_EXPRESSION_OPS and survives list growth.
+		*opIndex = static_cast<int>( op - ops.Ptr() );
 	}
 	return op->c;
 }
@@ -2679,9 +2680,9 @@ int idWindow::EmitOp( intptr_t a, int b, wexpOpType_t opType, wexpOp_t **opp ) {
 idWindow::ParseEmitOp
 ================
 */
-int idWindow::ParseEmitOp( idTokenParser *src, int a, wexpOpType_t opType, int priority, wexpOp_t **opp ) {
+int idWindow::ParseEmitOp( idTokenParser *src, int a, wexpOpType_t opType, int priority, int *opIndex ) {
 	int b = ParseExpressionPriority( src, priority );
-	return EmitOp( a, b, opType, opp );  
+	return EmitOp( a, b, opType, opIndex );
 }
 
 
@@ -2837,14 +2838,14 @@ int idWindow::ParseExpressionPriority( idTokenParser *src, int priority, idWinVa
 		return ParseEmitOp( src, a, WOP_TYPE_OR, priority );
 	}
 	if ( priority == 4 && token == "?" ) {
-		wexpOp_t *oop = NULL;
-		int o = ParseEmitOp( src, a, WOP_TYPE_COND, priority, &oop );
+		int opIndex;
+		int o = ParseEmitOp( src, a, WOP_TYPE_COND, priority, &opIndex );
 		if ( !src->ReadToken( &token ) ) {
 			return o;
 		}
 		if (token == ":") {
 			a = ParseExpressionPriority( src, priority - 1, var );
-			oop->d = a;
+			ops[opIndex].d = a;
 		}
 		return o;
 	}
@@ -2974,7 +2975,8 @@ void idWindow::EvaluateRegisters(float *registers) {
 			if ( op->b >= 0 && registers[op->b] >= 0 && registers[op->b] < 4 ) {
 				// grabs vector components
 				idWinVec4 *var = reinterpret_cast<idWinVec4 *>( op->a );
-				registers[op->c] = ((idVec4&)var)[registers[op->b]];
+				const idVec4 &value = *var;
+				registers[op->c] = value[static_cast<int>( registers[op->b] )];
 			} else {
 				registers[op->c] = reinterpret_cast<idWinVar *>( op->a )->x();
 			}
