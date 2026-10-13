@@ -32,6 +32,13 @@ If you have questions concerning this license or the applicable additional terms
 
 static autoComplete_t	globalAutoComplete;
 
+// Edit/completion buffers are terminated by bounded copies, formatting and edits.
+static int EditBufferLength( const char ( &buffer )[MAX_EDIT_LINE] ) {
+	const size_t length = strlen( buffer );
+	assert( length < MAX_EDIT_LINE );
+	return static_cast<int>( length );
+}
+
 /*
 ===============
 FindMatches
@@ -40,7 +47,7 @@ FindMatches
 static void FindMatches( const char *s ) {
 	int		i;
 
-	if ( idStr::Icmpn( s, globalAutoComplete.completionString, strlen( globalAutoComplete.completionString ) ) != 0 ) {
+	if ( idStr::Icmpn( s, globalAutoComplete.completionString, EditBufferLength( globalAutoComplete.completionString ) ) != 0 ) {
 		return;
 	}
 	globalAutoComplete.matchCount++;
@@ -66,7 +73,7 @@ FindIndexMatch
 */
 static void FindIndexMatch( const char *s ) {
 
-	if ( idStr::Icmpn( s, globalAutoComplete.completionString, strlen( globalAutoComplete.completionString ) ) != 0 ) {
+	if ( idStr::Icmpn( s, globalAutoComplete.completionString, EditBufferLength( globalAutoComplete.completionString ) ) != 0 ) {
 		return;
 	}
 
@@ -83,7 +90,7 @@ PrintMatches
 ===============
 */
 static void PrintMatches( const char *s ) {
-	if ( idStr::Icmpn( s, globalAutoComplete.currentMatch, strlen( globalAutoComplete.currentMatch ) ) == 0 ) {
+	if ( idStr::Icmpn( s, globalAutoComplete.currentMatch, EditBufferLength( globalAutoComplete.currentMatch ) ) == 0 ) {
 		idLib::Printf( "    %s\n", s );
 	}
 }
@@ -94,7 +101,7 @@ PrintCvarMatches
 ===============
 */
 static void PrintCvarMatches( const char *s ) {
-	if ( idStr::Icmpn( s, globalAutoComplete.currentMatch, strlen( globalAutoComplete.currentMatch ) ) == 0 ) {
+	if ( idStr::Icmpn( s, globalAutoComplete.currentMatch, EditBufferLength( globalAutoComplete.currentMatch ) ) == 0 ) {
 		idLib::Printf( "    %s" S_COLOR_WHITE " = \"%s\"\n", s, cvarSystem->GetCVarString( s ) );
 	}
 }
@@ -237,7 +244,7 @@ void idEditField::AutoComplete() {
 				// no argument matches
 				idStr::Append( buffer, sizeof( buffer ), " " );
 				idStr::Append( buffer, sizeof( buffer ), completionArgString );
-				SetCursor( strlen( buffer ) );
+				SetCursor( EditBufferLength( buffer ) );
 				return;
 			}
 		} else {
@@ -250,7 +257,7 @@ void idEditField::AutoComplete() {
 			}
 		}
 
-		autoComplete.length = strlen( buffer );
+		autoComplete.length = EditBufferLength( buffer );
 		autoComplete.valid = ( autoComplete.matchCount != 1 );
 		SetCursor( autoComplete.length );
 
@@ -285,7 +292,7 @@ void idEditField::AutoComplete() {
 		// and print it
 		idStr::snPrintf( buffer, sizeof( buffer ), autoComplete.currentMatch );
 		if ( autoComplete.length > (int)strlen( buffer ) ) {
-			autoComplete.length = strlen( buffer );
+			autoComplete.length = EditBufferLength( buffer );
 		}
 		SetCursor( autoComplete.length );
 	}
@@ -309,7 +316,7 @@ void idEditField::CharEvent( int ch ) {
 		return;
 	}
 
-	len = strlen( buffer );
+	len = EditBufferLength( buffer );
 
 	if ( ch == 'h' - 'a' + 1 || ch == K_BACKSPACE ) {	// ctrl-h is backspace
 		if ( cursor > 0 ) {
@@ -381,7 +388,7 @@ void idEditField::KeyDownEvent( int key ) {
 		return;
 	}
 
-	len = strlen( buffer );
+	len = EditBufferLength( buffer );
 
 	if ( key == K_DEL ) {
 		if ( autoComplete.length ) {
@@ -521,7 +528,7 @@ idEditField::SetBuffer
 void idEditField::SetBuffer( const char *buf ) {
 	Clear();
 	idStr::Copynz( buffer, buf, sizeof( buffer ) );
-	SetCursor( strlen( buffer ) );
+	SetCursor( EditBufferLength( buffer ) );
 }
 
 /*
@@ -540,7 +547,7 @@ void idEditField::Draw( int x, int y, int width, bool showCursor ) {
 	size = SMALLCHAR_WIDTH;
 
 	drawLen = widthInChars;
-	len = strlen( buffer ) + 1;
+	len = EditBufferLength( buffer ) + 1;
 
 	// guarantee that cursor will be visible
 	if ( len <= drawLen ) {

@@ -131,7 +131,8 @@ int idBase64::Decode( byte *to ) const {
 			w = 0;
 		}
 	}
-	return n;
+	assert( n <= static_cast<size_t>( len ) ); // decoding cannot produce more bytes than input characters
+	return static_cast<int>( n );
 }
 
 /*

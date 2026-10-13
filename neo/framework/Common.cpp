@@ -703,7 +703,7 @@ void idCommonLocal::FilterLangList( idStrList* list, idStr lang ) {
 	idStr temp;
 	for( int i = 0; i < list->Num(); i++ ) {
 		temp = (*list)[i];
-		temp = temp.Right(temp.Length()-strlen("strings/"));
+		temp = temp.Right( temp.Length() - static_cast<int>( sizeof( "strings/" ) - 1 ) );
 		temp = temp.Left(lang.Length());
 		if(idStr::Icmp(temp, lang) != 0) {
 			list->RemoveIndex(i);

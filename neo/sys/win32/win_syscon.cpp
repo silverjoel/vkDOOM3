@@ -145,7 +145,7 @@ static LRESULT CALLBACK ConWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 					PostQuitMessage( 0 );
 				} else {
 					cmdString = Mem_CopyString( "quit" );
-					Sys_QueEvent( SE_CONSOLE, 0, 0, strlen( cmdString ) + 1, cmdString, 0 );
+					Sys_QueEvent( SE_CONSOLE, 0, 0, static_cast<int>( sizeof( "quit" ) ), cmdString, 0 );
 				}
 			} else if ( wParam == CLEAR_ID ) {
 				SendMessage( s_wcd.hwndBuffer, EM_SETSEL, 0, -1 );

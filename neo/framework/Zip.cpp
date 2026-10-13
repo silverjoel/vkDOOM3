@@ -1555,7 +1555,7 @@ bool idZipBuilder::CreateZipFileFromFiles( const idList< idFile_Memory * > & src
 			// copy the file data into the zip file
 			idTempArray<byte> buffer( DEFAULT_WRITEBUFFERSIZE );
 			size_t total = 0;
-			while ( size_t bytesRead = src->Read( buffer.Ptr(), buffer.Size() ) ) {
+			while ( size_t bytesRead = src->Read( buffer.Ptr(), DEFAULT_WRITEBUFFERSIZE ) ) {
 				if ( bytesRead > 0 ) {
 					errcode = zipWriteInFileInZip( zf, buffer.Ptr(), (unsigned int)bytesRead );
 					if ( errcode != ZIP_OK ) {
@@ -1649,7 +1649,7 @@ bool idZipBuilder::AddFile( zipFile zf, idFile_Memory *src, bool deleteFile ) {
 		// copy the file data into the zip file
 		idTempArray<byte> buffer( DEFAULT_WRITEBUFFERSIZE );
 		size_t total = 0;
-		while ( size_t bytesRead = src->Read( buffer.Ptr(), buffer.Size() ) ) {
+		while ( size_t bytesRead = src->Read( buffer.Ptr(), DEFAULT_WRITEBUFFERSIZE ) ) {
 			if ( bytesRead > 0 ) {
 				errcode = zipWriteInFileInZip( zf, buffer.Ptr(), (unsigned int)bytesRead );
 				if ( errcode != ZIP_OK ) {
