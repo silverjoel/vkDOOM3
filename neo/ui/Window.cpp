@@ -1715,35 +1715,35 @@ int idWindow::GetWinVarOffset( idWinVar *wv, drawWin_t* owner) {
 	int ret = -1;
 
 	if ( wv == &rect ) {
-		ret = (int)&( ( idWindow * ) 0 )->rect;
+		ret = WindowMemberOffset( this, &rect );
 	}
 
 	if ( wv == &backColor ) {
-		ret = (int)&( ( idWindow * ) 0 )->backColor;
+		ret = WindowMemberOffset( this, &backColor );
 	}
 
 	if ( wv == &matColor ) {
-		ret = (int)&( ( idWindow * ) 0 )->matColor;
+		ret = WindowMemberOffset( this, &matColor );
 	}
 
 	if ( wv == &foreColor ) {
-		ret = (int)&( ( idWindow * ) 0 )->foreColor;
+		ret = WindowMemberOffset( this, &foreColor );
 	}
 
 	if ( wv == &hoverColor ) {
-		ret = (int)&( ( idWindow * ) 0 )->hoverColor;
+		ret = WindowMemberOffset( this, &hoverColor );
 	}
 
 	if ( wv == &borderColor ) {
-		ret = (int)&( ( idWindow * ) 0 )->borderColor;
+		ret = WindowMemberOffset( this, &borderColor );
 	}
 
 	if ( wv == &textScale ) {
-		ret = (int)&( ( idWindow * ) 0 )->textScale;
+		ret = WindowMemberOffset( this, &textScale );
 	}
 
 	if ( wv == &rotate ) {
-		ret = (int)&( ( idWindow * ) 0 )->rotate;
+		ret = WindowMemberOffset( this, &rotate );
 	}
 
 	if ( ret != -1 ) {
@@ -3417,35 +3417,35 @@ void idWindow::FixupTransitions() {
 		transitions[i].data = NULL;
 		if ( dw != NULL && ( dw->win != NULL || dw->simp != NULL ) ){
 			if ( dw->win != NULL ) {
-				if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->rect ) {
+				if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->rect ) ) {
 					transitions[i].data = &dw->win->rect;
-				} else if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->backColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->backColor ) ) {
 					transitions[i].data = &dw->win->backColor;
-				} else if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->matColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->matColor ) ) {
 					transitions[i].data = &dw->win->matColor;
-				} else if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->foreColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->foreColor ) ) {
 					transitions[i].data = &dw->win->foreColor;
-				} else if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->borderColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->borderColor ) ) {
 					transitions[i].data = &dw->win->borderColor;
-				} else if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->textScale ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->textScale ) ) {
 					transitions[i].data = &dw->win->textScale;
-				} else if ( transitions[i].offset == (int)&( ( idWindow * ) 0 )->rotate ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->win, &dw->win->rotate ) ) {
 					transitions[i].data = &dw->win->rotate;
 				}
 			} else {
-				if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->rect ) {
+				if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->rect ) ) {
 					transitions[i].data = &dw->simp->rect;
-				} else if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->backColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->backColor ) ) {
 					transitions[i].data = &dw->simp->backColor;
-				} else if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->matColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->matColor ) ) {
 					transitions[i].data = &dw->simp->matColor;
-				} else if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->foreColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->foreColor ) ) {
 					transitions[i].data = &dw->simp->foreColor;
-				} else if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->borderColor ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->borderColor ) ) {
 					transitions[i].data = &dw->simp->borderColor;
-				} else if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->textScale ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->textScale ) ) {
 					transitions[i].data = &dw->simp->textScale;
-				} else if ( transitions[i].offset == (int)&( ( idSimpleWindow * ) 0 )->rotate ) {
+				} else if ( transitions[i].offset == WindowMemberOffset( dw->simp, &dw->simp->rotate ) ) {
 					transitions[i].data = &dw->simp->rotate;
 				}
 			}

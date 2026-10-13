@@ -252,31 +252,31 @@ int idSimpleWindow::GetWinVarOffset( idWinVar *wv, drawWin_t* owner) {
 	int ret = -1;
 
 	if ( wv == &rect ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->rect;
+		ret = WindowMemberOffset( this, &rect );
 	}
 
 	if ( wv == &backColor ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->backColor;
+		ret = WindowMemberOffset( this, &backColor );
 	}
 
 	if ( wv == &matColor ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->matColor;
+		ret = WindowMemberOffset( this, &matColor );
 	}
 
 	if ( wv == &foreColor ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->foreColor;
+		ret = WindowMemberOffset( this, &foreColor );
 	}
 
 	if ( wv == &borderColor ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->borderColor;
+		ret = WindowMemberOffset( this, &borderColor );
 	}
 
 	if ( wv == &textScale ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->textScale;
+		ret = WindowMemberOffset( this, &textScale );
 	}
 
 	if ( wv == &rotate ) {
-		ret = (int)&( ( idSimpleWindow * ) 0 )->rotate;
+		ret = WindowMemberOffset( this, &rotate );
 	}
 
 	if ( ret != -1 ) {

@@ -164,6 +164,18 @@ struct idTransitionData {
 	idInterpolateAccelDecelLinear<idVec4> interp;
 };
 
+// GUI saves store int byte offsets, even though the live addresses are pointer-sized.
+template< typename WindowType, typename MemberType >
+ID_INLINE int WindowMemberOffset( const WindowType *window, const MemberType *member ) {
+	static_assert( sizeof( WindowType ) <= INT_MAX, "GUI member offsets must fit in int" );
+	const uintptr_t windowAddress = reinterpret_cast<uintptr_t>( window );
+	const uintptr_t memberAddress = reinterpret_cast<uintptr_t>( member );
+	assert( memberAddress >= windowAddress );
+	const uintptr_t offset = memberAddress - windowAddress;
+	assert( offset < sizeof( WindowType ) );
+	return static_cast<int>( offset );
+}
+
 
 class idUserInterfaceLocal;
 class idWindow {
