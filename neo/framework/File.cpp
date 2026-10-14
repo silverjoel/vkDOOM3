@@ -650,14 +650,13 @@ idFile_Memory::idFile_Memory( const char *name ) {
 idFile_Memory::idFile_Memory
 =================
 */
-idFile_Memory::idFile_Memory( const char *name, char *data, int length ) {
-	this->name = name;
+idFile_Memory::idFile_Memory( const char *name, char *data, int length ) : idFile_Memory( name ) {
+	if ( length < 0 || ( length > 0 && data == NULL ) ) {
+		idLib::Error( "idFile_Memory: invalid external buffer length %d", length );
+		return;
+	}
 	maxSize = length;
-	fileSize = 0;
 	allocated = length;
-	granularity = 16384;
-
-	mode = ( 1 << FS_WRITE );
 	filePtr = data;
 	curPtr = data;
 }
@@ -667,16 +666,8 @@ idFile_Memory::idFile_Memory( const char *name, char *data, int length ) {
 idFile_Memory::idFile_Memory
 =================
 */
-idFile_Memory::idFile_Memory( const char *name, const char *data, int length ) {
-	this->name = name;
-	maxSize = 0;
-	fileSize = length;
-	allocated = 0;
-	granularity = 16384;
-
-	mode = ( 1 << FS_READ );
-	filePtr = const_cast<char *>(data);
-	curPtr = const_cast<char *>(data);
+idFile_Memory::idFile_Memory( const char *name, const char *data, int length ) : idFile_Memory( name ) {
+	SetData( data, length );
 }
 
 /*
@@ -687,6 +678,11 @@ this also makes the file read only
 =================
 */
 void idFile_Memory::TakeDataOwnership() {
+	size_t offset;
+	if ( !GetCursorOffset( offset ) ) {
+		idLib::Error( "idFile_Memory::TakeDataOwnership: invalid file state" );
+		return;
+	}
 	if ( filePtr != NULL && fileSize > 0 ) {
 		maxSize = 0;
 		mode = ( 1 << FS_READ );
@@ -705,6 +701,61 @@ idFile_Memory::~idFile_Memory() {
 	}
 }
 
+// Validate integer sizes before deriving an offset, including the empty null state.
+bool idFile_Memory::GetCursorOffset( size_t &offset ) const {
+	if ( fileSize > INT_MAX || allocated > INT_MAX || maxSize > INT_MAX ) {
+		return false;
+	}
+	if ( filePtr == NULL ) {
+		offset = 0;
+		return curPtr == NULL && fileSize == 0 && allocated == 0;
+	}
+	// Borrowed read-only buffers have allocated == 0, but still have fileSize bytes.
+	if ( allocated != 0 && fileSize > allocated ) {
+		return false;
+	}
+	const uintptr_t start = reinterpret_cast<uintptr_t>( filePtr );
+	const uintptr_t cursor = reinterpret_cast<uintptr_t>( curPtr );
+	if ( cursor < start || cursor - start > fileSize ) {
+		return false;
+	}
+	offset = cursor - start;
+	return true;
+}
+
+// Commit a reserve only after every check and the allocation have succeeded.
+bool idFile_Memory::EnsureCapacity( size_t len ) {
+	size_t offset;
+	if ( len > INT_MAX || !GetCursorOffset( offset ) ) {
+		idLib::Error( "idFile_Memory::PreAllocate: invalid size or file state" );
+		return false;
+	}
+	if ( len <= allocated ) {
+		return true;
+	}
+	if ( maxSize != 0 ) {
+		idLib::Error( "idFile_Memory::SetLength: exceeded maximum size %llu", static_cast<unsigned long long>( maxSize ) );
+		return false;
+	}
+	if ( filePtr != NULL && allocated == 0 ) {
+		idLib::Error( "idFile_Memory::PreAllocate: cannot grow borrowed data" );
+		return false;
+	}
+	char *newPtr = (char *)Mem_Alloc( len, TAG_IDFILE );
+	if ( newPtr == NULL ) {
+		idLib::Error( "idFile_Memory::PreAllocate: allocation failed" );
+		return false;
+	}
+	if ( allocated > 0 ) {
+		memcpy( newPtr, filePtr, allocated );
+	}
+	Mem_Free( filePtr );
+	filePtr = newPtr;
+	curPtr = newPtr + offset;
+	allocated = len;
+	return true;
+}
+
 /*
 =================
 idFile_Memory::Read
@@ -720,18 +771,12 @@ int idFile_Memory::Read( void *buffer, int len ) {
 	if ( len <= 0 ) {
 		return 0;
 	}
-	if ( filePtr == NULL ) {
-		assert( fileSize == 0 && curPtr == NULL );
-		return 0;
-	}
-
-	const uintptr_t start = reinterpret_cast<uintptr_t>( filePtr );
-	const uintptr_t cursor = reinterpret_cast<uintptr_t>( curPtr );
-	if ( cursor < start || cursor - start > fileSize ) {
+	size_t offset;
+	if ( !GetCursorOffset( offset ) ) {
 		assert( false ); // invalid memory-file cursor; do not copy or move it
 		return 0;
 	}
-	const size_t remaining = fileSize - ( cursor - start );
+	const size_t remaining = fileSize - offset;
 	if ( remaining == 0 ) {
 		return 0;
 	}
@@ -784,23 +829,34 @@ int idFile_Memory::Write( const void *buffer, int len ) {
 		return 0;
 	}
 
-	int alloc = curPtr + len + 1 - filePtr - allocated; // need room for len+1
-	if ( alloc > 0 ) {
+	size_t offset;
+	if ( len < 0 || buffer == NULL || granularity <= 0 || !GetCursorOffset( offset ) ) {
+		idLib::Error( "idFile_Memory::Write: invalid request or file state" );
+		return 0;
+	}
+	const size_t writeLength = static_cast<size_t>( len );
+	const size_t limit = INT_MAX;
+	// Preserve additive fileSize semantics, including after a seek. The NUL is overhead.
+	if ( writeLength > limit - offset || writeLength >= limit - fileSize ) {
+		idLib::Error( "idFile_Memory::Write: exceeded supported file size" );
+		return 0;
+	}
+	const size_t writeEnd = offset + writeLength;
+	const size_t newSize = fileSize + writeLength;
+	const size_t required = newSize + 1; // also covers writeEnd because offset <= fileSize
+	if ( required > allocated ) {
 		if ( maxSize != 0 ) {
-			idLib::Error( "idFile_Memory::Write: exceeded maximum size %d", maxSize );
+			idLib::Error( "idFile_Memory::Write: exceeded maximum size %llu", static_cast<unsigned long long>( maxSize ) );
 			return 0;
 		}
-		int extra = granularity * ( 1 + alloc / granularity );
-		char *newPtr = (char *) Mem_Alloc( allocated + extra, TAG_IDFILE );
-		if ( allocated ) {
-			memcpy( newPtr, filePtr, allocated );
+		const size_t deficit = required - allocated;
+		const size_t step = static_cast<size_t>( granularity );
+		const size_t steps = 1 + deficit / step;
+		// Keep the historical extra granule, but cap rounding slack at the supported capacity.
+		const size_t capacity = steps > ( limit - allocated ) / step ? limit : allocated + steps * step;
+		if ( !EnsureCapacity( capacity ) ) {
+			return 0;
 		}
-		allocated += extra;
-		curPtr = newPtr + ( curPtr - filePtr );		
-		if ( filePtr ) {
-			Mem_Free( filePtr );
-		}
-		filePtr = newPtr;
 	}
 
 	//memcpy( curPtr, buffer, len );
@@ -825,8 +881,8 @@ int idFile_Memory::Write( const void *buffer, int len ) {
 	}
 #endif
 
-	curPtr += len;
-	fileSize += len;
+	curPtr = filePtr + writeEnd;
+	fileSize = newSize;
 	filePtr[ fileSize ] = 0; // len + 1
 	return len;
 }
@@ -837,7 +893,11 @@ idFile_Memory::Length
 =================
 */
 int idFile_Memory::Length() const {
-	return fileSize;
+	if ( fileSize > INT_MAX ) {
+		idLib::Error( "idFile_Memory::Length: invalid file size" );
+		return 0;
+	}
+	return static_cast<int>( fileSize );
 }
 
 /*
@@ -846,7 +906,17 @@ idFile_Memory::SetLength
 ========================
 */
 void idFile_Memory::SetLength( size_t len ) {
-	PreAllocate( len );
+	size_t offset;
+	if ( !GetCursorOffset( offset ) ) {
+		idLib::Error( "idFile_Memory::SetLength: invalid file state" );
+		return;
+	}
+	if ( !EnsureCapacity( len ) ) {
+		return;
+	}
+	if ( offset > len ) {
+		curPtr = filePtr + len;
+	}
 	fileSize = len;
 }
 
@@ -856,21 +926,15 @@ idFile_Memory::PreAllocate
 ========================
 */
 void idFile_Memory::PreAllocate( size_t len ) {
-	if ( len > allocated ) {
-		if ( maxSize != 0 ) {
-			idLib::Error( "idFile_Memory::SetLength: exceeded maximum size %d", maxSize );
-		}
-		char * newPtr = (char *)Mem_Alloc( len, TAG_IDFILE );
-		if ( allocated > 0 ) {
-			memcpy( newPtr, filePtr, allocated );
-		}
-		allocated = len;
-		curPtr = newPtr + ( curPtr - filePtr );		
-		if ( filePtr != NULL ) {
-			Mem_Free( filePtr );
-		}
-		filePtr = newPtr;
+	EnsureCapacity( len );
+}
+
+void idFile_Memory::SetGranularity( int g ) {
+	if ( g <= 0 ) {
+		idLib::Error( "idFile_Memory::SetGranularity: invalid granularity %d", g );
+		return;
 	}
+	granularity = g;
 }
 
 /*
@@ -888,7 +952,12 @@ idFile_Memory::Tell
 =================
 */
 int idFile_Memory::Tell() const {
-	return ( curPtr - filePtr );
+	size_t offset;
+	if ( !GetCursorOffset( offset ) ) {
+		idLib::Error( "idFile_Memory::Tell: invalid file state" );
+		return 0;
+	}
+	return static_cast<int>( offset ); // offset <= fileSize <= INT_MAX
 }
 
 /*
@@ -915,18 +984,25 @@ idFile_Memory::Seek
 =================
 */
 int idFile_Memory::Seek( long offset, fsOrigin_t origin ) {
+	size_t current;
+	if ( !GetCursorOffset( current ) ) {
+		idLib::Error( "idFile_Memory::Seek: invalid file state" );
+		return -1;
+	}
+	// Windows long offsets and validated file sizes fit in this signed intermediate.
+	int64 target;
 
 	switch( origin ) {
 		case FS_SEEK_CUR: {
-			curPtr += offset;
+			target = static_cast<int64>( current ) + offset;
 			break;
 		}
 		case FS_SEEK_END: {
-			curPtr = filePtr + fileSize - offset;
+			target = static_cast<int64>( fileSize ) - offset;
 			break;
 		}
 		case FS_SEEK_SET: {
-			curPtr = filePtr + offset;
+			target = offset;
 			break;
 		}
 		default: {
@@ -934,14 +1010,15 @@ int idFile_Memory::Seek( long offset, fsOrigin_t origin ) {
 			return -1;
 		}
 	}
-	if ( curPtr < filePtr ) {
+	if ( target < 0 ) {
 		curPtr = filePtr;
 		return -1;
 	}
-	if ( curPtr > filePtr + fileSize ) {
-		curPtr = filePtr + fileSize;
+	if ( static_cast<size_t>( target ) > fileSize ) {
+		curPtr = filePtr == NULL ? NULL : filePtr + fileSize;
 		return -1;
 	}
+	curPtr = filePtr == NULL ? NULL : filePtr + static_cast<size_t>( target );
 	return 0;
 }
 
@@ -951,12 +1028,9 @@ idFile_Memory::SetMaxLength
 ========================
 */
 void idFile_Memory::SetMaxLength( size_t len ) {
-	size_t oldLength = fileSize;
-
-	SetLength( len );
-
-	maxSize = len;
-	fileSize = oldLength;
+	if ( EnsureCapacity( len ) ) {
+		maxSize = len; // Preserve the existing freeze-growth policy and logical length/cursor.
+	}
 }
 
 /*
@@ -1003,6 +1077,10 @@ idFile_Memory::SetData
 =================
 */
 void idFile_Memory::SetData( const char *data, int length ) {
+	if ( length < 0 || ( length > 0 && data == NULL ) ) {
+		idLib::Error( "idFile_Memory::SetData: invalid external buffer length %d", length );
+		return;
+	}
 	maxSize = 0;
 	fileSize = length;
 	allocated = 0;
@@ -1019,11 +1097,15 @@ idFile_Memory::TruncateData
 ========================
 */
 void idFile_Memory::TruncateData( size_t len ) {
-	if ( len > allocated ) {
-		idLib::Error( "idFile_Memory::TruncateData: len (%d) exceeded allocated size (%d)", len, allocated );
-	} else {
-		fileSize = len;
+	size_t offset;
+	if ( len > INT_MAX || len > allocated || !GetCursorOffset( offset ) ) {
+		idLib::Error( "idFile_Memory::TruncateData: invalid length %llu or file state", static_cast<unsigned long long>( len ) );
+		return;
 	}
+	if ( offset > len ) {
+		curPtr = filePtr + len;
+	}
+	fileSize = len;
 }
 
 /*

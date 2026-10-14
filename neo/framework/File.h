@@ -159,6 +159,7 @@ public:
 	virtual int				Read( void *buffer, int len );
 	virtual int				Write( const void *buffer, int len );
 	virtual int				Length() const;
+	// Raw logical length (<= INT_MAX); does not add a terminator. Shrinks clamp the cursor.
 	virtual void			SetLength( size_t len );
 	virtual ID_TIME_T		Timestamp() const;
 	virtual int				Tell() const;
@@ -181,7 +182,8 @@ public:
 							// returns pointer to the memory buffer
 	char *					GetDataPtr() { return filePtr; }
 							// set the file granularity
-	void					SetGranularity( int g ) { assert( g > 0 ); granularity = g; }
+	void					SetGranularity( int g );
+	// Advertised capacity is <= INT_MAX. Write reserves one byte of it for a NUL.
 	void					PreAllocate( size_t len );
 
 	// Doesn't change how much is allocated, but allows you to set the size of the file to smaller than it should be.
@@ -196,6 +198,9 @@ public:
 protected:
 	idStr					name;			// name of the file
 private:
+	bool					GetCursorOffset( size_t &offset ) const;
+	bool					EnsureCapacity( size_t len );
+
 	int						mode;			// open mode
 	size_t					maxSize;		// maximum size of file
 	size_t					fileSize;		// size of the file
