@@ -1624,11 +1624,12 @@ idDeclManagerLocal::ListDecls_f
 void idDeclManagerLocal::ListDecls_f( const idCmdArgs &args ) {
 	int		i, j;
 	int		totalDecls = 0;
-	int		totalText = 0;
-	int		totalStructs = 0;
+	size_t	totalText = 0;
+	size_t	totalStructs = 0;
 
 	for ( i = 0; i < declManagerLocal.declTypes.Num(); i++ ) {
-		int size, num;
+		size_t size;
+		int num;
 
 		if ( declManagerLocal.declTypes[i] == NULL ) {
 			continue;
@@ -1646,7 +1647,7 @@ void idDeclManagerLocal::ListDecls_f( const idCmdArgs &args ) {
 		}
 		totalStructs += size;
 
-		idLib::Printf( "%4ik %4i %s\n", size >> 10, num, declManagerLocal.declTypes[i]->typeName.c_str() );
+		idLib::Printf( "%4lluk %4i %s\n", static_cast<unsigned long long>( size >> 10 ), num, declManagerLocal.declTypes[i]->typeName.c_str() );
 	}
 
 	for ( i = 0 ; i < declManagerLocal.loadedFiles.Num() ; i++ ) {
@@ -1655,7 +1656,7 @@ void idDeclManagerLocal::ListDecls_f( const idCmdArgs &args ) {
 	}
 
 	idLib::Printf( "%i total decls is %i decl files\n", totalDecls, declManagerLocal.loadedFiles.Num() );
-	idLib::Printf( "%iKB in text, %iKB in structures\n", totalText >> 10, totalStructs >> 10 );
+	idLib::Printf( "%lluKB in text, %lluKB in structures\n", static_cast<unsigned long long>( totalText >> 10 ), static_cast<unsigned long long>( totalStructs >> 10 ) );
 }
 
 /*
