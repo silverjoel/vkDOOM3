@@ -1203,8 +1203,8 @@ bool idAASFileLocal::Load( const idStr &fileName, unsigned int mapFileCRC ) {
 idAASFileLocal::MemorySize
 ================
 */
-int idAASFileLocal::MemorySize() const {
-	int size;
+size_t idAASFileLocal::MemorySize() const {
+	size_t size;
 
 	size = planeList.Size();
 	size += vertices.Size();
@@ -1217,7 +1217,9 @@ int idAASFileLocal::MemorySize() const {
 	size += portals.Size();
 	size += portalIndex.Size();
 	size += clusters.Size();
-	size += sizeof( idReachability_Walk ) * NumReachabilities();
+	const size_t numReachabilities = NumReachabilities();
+	assert( numReachabilities <= ( SIZE_MAX - size ) / sizeof( idReachability_Walk ) );
+	size += sizeof( idReachability_Walk ) * numReachabilities;
 
 	return size;
 }
@@ -1228,7 +1230,7 @@ idAASFileLocal::PrintInfo
 ================
 */
 void idAASFileLocal::PrintInfo() const {
-	idLib::Printf( "%6d KB file size\n", MemorySize() >> 10 );
+	idLib::Printf( "%6llu KB file size\n", static_cast<unsigned long long>( MemorySize() >> 10 ) );
 	idLib::Printf( "%6d areas\n", areas.Num() );
 	idLib::Printf( "%6d max tree depth\n", MaxTreeDepth() );
 	ReportRoutingEfficiency();
@@ -1239,8 +1241,9 @@ void idAASFileLocal::PrintInfo() const {
 idAASFileLocal::NumReachabilities
 ================
 */
-int idAASFileLocal::NumReachabilities() const {
-	int i, num;
+size_t idAASFileLocal::NumReachabilities() const {
+	int i;
+	size_t num;
 	idReachability *reach;
 
 	num = 0;
@@ -1270,7 +1273,7 @@ void idAASFileLocal::ReportRoutingEfficiency() const {
 	total += numReachableAreas * portals.Num();
 
 	idLib::Printf( "%6d reachable areas\n", numReachableAreas );
-	idLib::Printf( "%6d reachabilities\n", NumReachabilities() );
+	idLib::Printf( "%6llu reachabilities\n", static_cast<unsigned long long>( NumReachabilities() ) );
 	idLib::Printf( "%6d KB max routing cache\n", ( total * 3 ) >> 10 );
 }
 

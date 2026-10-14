@@ -65,7 +65,7 @@ public:
 	bool						Load( const idStr &fileName, unsigned int mapFileCRC );
 	bool						Write( const idStr &fileName, unsigned int mapFileCRC );
 
-	int							MemorySize() const;
+	size_t						MemorySize() const;
 	void						ReportRoutingEfficiency() const;
 	void						Optimize();
 	void						LinkReversedReachability();
@@ -93,7 +93,7 @@ private:
 	int							MaxTreeDepth() const;
 	int							AreaContentsTravelFlags( int areaNum ) const;
 	idVec3						AreaReachableGoal( int areaNum ) const;
-	int							NumReachabilities() const;
+	size_t						NumReachabilities() const;
 };
 
 #endif /* !__AASFILELOCAL_H__ */
