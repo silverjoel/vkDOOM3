@@ -1036,7 +1036,13 @@ void idCommonLocal::Init( int argc, const char * const * argv, const char *cmdli
 		stringsFile.SetNameAndType( SAVEGAME_STRINGS_FILENAME, SAVEGAMEFILE_BINARY );
 		stringsFile.PreAllocate( MAX_SAVEGAME_STRING_TABLE_SIZE );
 
-		fileSystem->BeginLevelLoad( "_startup", saveFile.GetDataPtr(), saveFile.GetAllocated() );
+		// Fresh startup reserves 4 MiB, but PreAllocate is not a lifetime size cap.
+		const size_t startupBufferSize = saveFile.GetAllocated();
+		if ( startupBufferSize > INT_MAX ) {
+			FatalError( "Startup level buffer exceeds the supported int capacity" );
+			return;
+		}
+		fileSystem->BeginLevelLoad( "_startup", saveFile.GetDataPtr(), static_cast<int>( startupBufferSize ) );
 
 		// initialize the declaration manager
 		declManager->Init();

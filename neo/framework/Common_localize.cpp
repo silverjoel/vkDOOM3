@@ -45,8 +45,11 @@ void LoadMapLocalizeData(ListHash& listHash) {
 	const char *buffer = NULL;
 	idLexer src( LEXFL_NOFATALERRORS | LEXFL_NOSTRINGCONCAT | LEXFL_ALLOWMULTICHARLITERALS | LEXFL_ALLOWBACKSLASHSTRINGCONCAT );
 
-	if ( fileSystem->ReadFile( fileName, (void**)&buffer ) > 0 ) {
-		src.LoadMemory( buffer, strlen(buffer), fileName );
+	const int fileLength = fileSystem->ReadFile( fileName, (void**)&buffer );
+	if ( fileLength > 0 && buffer != NULL ) {
+		// ReadFile appends a NUL; retain first-NUL parsing within its int extent.
+		const size_t textLength = strnlen( buffer, static_cast<size_t>( fileLength ) );
+		src.LoadMemory( buffer, static_cast<int>( textLength ), fileName );
 		if ( src.IsLoaded() ) {
 			idStr classname;
 			idToken token;
@@ -79,8 +82,11 @@ void LoadGuiParmExcludeList(idStrList& list) {
 	const char *buffer = NULL;
 	idLexer src( LEXFL_NOFATALERRORS | LEXFL_NOSTRINGCONCAT | LEXFL_ALLOWMULTICHARLITERALS | LEXFL_ALLOWBACKSLASHSTRINGCONCAT );
 
-	if ( fileSystem->ReadFile( fileName, (void**)&buffer ) > 0 ) {
-		src.LoadMemory( buffer, strlen(buffer), fileName );
+	const int fileLength = fileSystem->ReadFile( fileName, (void**)&buffer );
+	if ( fileLength > 0 && buffer != NULL ) {
+		// ReadFile appends a NUL; retain first-NUL parsing within its int extent.
+		const size_t textLength = strnlen( buffer, static_cast<size_t>( fileLength ) );
+		src.LoadMemory( buffer, static_cast<int>( textLength ), fileName );
 		if ( src.IsLoaded() ) {
 			idStr classname;
 			idToken token;
@@ -551,8 +557,11 @@ void idCommonLocal::LocalizeMapData( const char *fileName, idLangDict &langDict 
 
 	common->SetRefreshOnPrint( true );
 
-	if ( fileSystem->ReadFile( fileName, (void**)&buffer ) > 0 ) {
-		src.LoadMemory( buffer, strlen(buffer), fileName );
+	const int fileLength = fileSystem->ReadFile( fileName, (void**)&buffer );
+	if ( fileLength > 0 && buffer != NULL ) {
+		// ReadFile appends a NUL; retain first-NUL parsing within its int extent.
+		const size_t textLength = strnlen( buffer, static_cast<size_t>( fileLength ) );
+		src.LoadMemory( buffer, static_cast<int>( textLength ), fileName );
 		if ( src.IsLoaded() ) {
 			idLib::Printf( "Processing %s\n", fileName );
 			idStr mapFileName;
@@ -598,8 +607,11 @@ void idCommonLocal::LocalizeGui( const char *fileName, idLangDict &langDict ) {
 	char tab = 't';
 	char nl = 'n';
 	idLexer src( LEXFL_NOFATALERRORS | LEXFL_NOSTRINGCONCAT | LEXFL_ALLOWMULTICHARLITERALS | LEXFL_ALLOWBACKSLASHSTRINGCONCAT );
-	if ( fileSystem->ReadFile( fileName, (void**)&buffer ) > 0 ) {
-		src.LoadMemory( buffer, strlen(buffer), fileName );
+	const int fileLength = fileSystem->ReadFile( fileName, (void**)&buffer );
+	if ( fileLength > 0 && buffer != NULL ) {
+		// ReadFile appends a NUL; retain first-NUL parsing within its int extent.
+		const size_t textLength = strnlen( buffer, static_cast<size_t>( fileLength ) );
+		src.LoadMemory( buffer, static_cast<int>( textLength ), fileName );
 		if ( src.IsLoaded() ) {
 			idFile *outFile = fileSystem->OpenFileWrite( fileName ); 
 			idLib::Printf( "Processing %s\n", fileName );

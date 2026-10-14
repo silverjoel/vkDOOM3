@@ -2238,8 +2238,11 @@ void idFileSystemLocal::TouchFileList_f( const idCmdArgs &args ) {
 
 	const char *buffer = NULL;
 	idParser src( LEXFL_NOFATALERRORS | LEXFL_NOSTRINGCONCAT | LEXFL_ALLOWMULTICHARLITERALS | LEXFL_ALLOWBACKSLASHSTRINGCONCAT );
-	if ( fileSystem->ReadFile( args.Argv( 1 ), ( void** )&buffer, NULL ) && buffer ) {
-		src.LoadMemory( buffer, strlen( buffer ), args.Argv( 1 ) );
+	const int fileLength = fileSystem->ReadFile( args.Argv( 1 ), ( void** )&buffer, NULL );
+	if ( fileLength > 0 && buffer != NULL ) {
+		// ReadFile appends a NUL; do not parse past an embedded NUL.
+		const size_t textLength = strnlen( buffer, static_cast<size_t>( fileLength ) );
+		src.LoadMemory( buffer, static_cast<int>( textLength ), args.Argv( 1 ) );
 		if ( src.IsLoaded() ) {
 			idToken token;
 			while( src.ReadToken( &token ) ) {

@@ -186,8 +186,24 @@ void idCmdArgs::AppendArg( const char *text ) {
 		argv[ 0 ] = tokenized;
 		idStr::Copynz( tokenized, text, sizeof( tokenized ) );
 	} else {
-		argv[ argc ] = argv[ argc-1 ] + strlen( argv[ argc-1 ] ) + 1;
-		idStr::Copynz( argv[ argc ], text, sizeof( tokenized ) - ( argv[ argc ] - tokenized ) );
+		const uintptr_t start = reinterpret_cast<uintptr_t>( tokenized );
+		const uintptr_t previous = reinterpret_cast<uintptr_t>( argv[ argc-1 ] );
+		if ( previous < start || previous - start >= sizeof( tokenized ) ) {
+			assert( false ); // no previous string can begin at or beyond one-past
+			return;
+		}
+		const size_t previousCapacity = sizeof( tokenized ) - ( previous - start );
+		const size_t previousLength = strnlen( argv[ argc-1 ], previousCapacity );
+		if ( previousLength == previousCapacity ) {
+			assert( false ); // previous argument must have a terminator in the buffer
+			return;
+		}
+		// The bounded scan proves this cursor is inside tokenized or one-past.
+		argv[ argc ] = argv[ argc-1 ] + previousLength + 1;
+		const ptrdiff_t used = argv[ argc ] - tokenized;
+		assert( used >= 0 && static_cast<size_t>( used ) <= sizeof( tokenized ) );
+		const size_t remaining = sizeof( tokenized ) - static_cast<size_t>( used );
+		idStr::Copynz( argv[ argc ], text, static_cast<int>( remaining ) );
 		argc++;
 	}
 }

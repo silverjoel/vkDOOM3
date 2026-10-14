@@ -717,8 +717,26 @@ int idFile_Memory::Read( void *buffer, int len ) {
 		return 0;
 	}
 
-	if ( curPtr + len > filePtr + fileSize ) {
-		len = filePtr + fileSize - curPtr;
+	if ( len <= 0 ) {
+		return 0;
+	}
+	if ( filePtr == NULL ) {
+		assert( fileSize == 0 && curPtr == NULL );
+		return 0;
+	}
+
+	const uintptr_t start = reinterpret_cast<uintptr_t>( filePtr );
+	const uintptr_t cursor = reinterpret_cast<uintptr_t>( curPtr );
+	if ( cursor < start || cursor - start > fileSize ) {
+		assert( false ); // invalid memory-file cursor; do not copy or move it
+		return 0;
+	}
+	const size_t remaining = fileSize - ( cursor - start );
+	if ( remaining == 0 ) {
+		return 0;
+	}
+	if ( remaining < static_cast<size_t>( len ) ) {
+		len = static_cast<int>( remaining ); // 0 < remaining < positive int request
 	}
 	memcpy( buffer, curPtr, len );
 	curPtr += len;
