@@ -118,7 +118,7 @@ idRenderModelManagerLocal::ListModels_f
 ==============
 */
 void idRenderModelManagerLocal::ListModels_f( const idCmdArgs &args ) {
-	int		totalMem = 0;
+	size_t	totalMem = 0;
 	int		inUse = 0;
 
 	idLib::Printf( " mem   srf verts tris\n" );
@@ -684,11 +684,28 @@ void idRenderModelManagerLocal::EndLevelLoad() {
 
 /*
 =================
+R_FormatMemorySize
+=================
+*/
+idStr R_FormatMemorySize( size_t bytes ) {
+	idStr text = va( "%llu", static_cast<unsigned long long>( bytes ) );
+	for ( int i = text.Length() - 3; i > 0; i -= 3 ) {
+		text.Insert( ",", i );
+	}
+	while ( text.Length() < 11 ) {
+		text.Insert( " ", 0 );
+	}
+	return text;
+}
+
+/*
+=================
 idRenderModelManagerLocal::PrintMemInfo
 =================
 */
 void idRenderModelManagerLocal::PrintMemInfo( MemInfo_t *mi ) {
-	int i, j, totalMem = 0;
+	int i, j;
+	size_t totalMem = 0;
 	int *sortIndex;
 	idFile *f;
 
@@ -717,7 +734,7 @@ void idRenderModelManagerLocal::PrintMemInfo( MemInfo_t *mi ) {
 	// print next
 	for ( i = 0; i < m_models.Num(); i++ ) {
 		idRenderModel * model = m_models[sortIndex[i]];
-		int mem;
+		size_t mem;
 
 		if ( !model->IsLoaded() ) {
 			continue;
@@ -725,12 +742,12 @@ void idRenderModelManagerLocal::PrintMemInfo( MemInfo_t *mi ) {
 
 		mem = model->Memory();
 		totalMem += mem;
-		f->Printf( "%s %s\n", idStr::FormatNumber( mem ).c_str(), model->Name() );
+		f->Printf( "%s %s\n", R_FormatMemorySize( mem ).c_str(), model->Name() );
 	}
 
 	delete [] sortIndex;
 	mi->modelAssetsTotal = totalMem;
 
-	f->Printf( "\nTotal model bytes allocated: %s\n", idStr::FormatNumber( totalMem ).c_str() );
+	f->Printf( "\nTotal model bytes allocated: %s\n", R_FormatMemorySize( totalMem ).c_str() );
 	fileSystem->CloseFile( f );
 }

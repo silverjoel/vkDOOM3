@@ -48,7 +48,7 @@ void				R_AllocStaticTriSurfDupVerts( srfTriangles_t *tri, int numDupVerts );
 srfTriangles_t *	R_CopyStaticTriSurf( const srfTriangles_t *tri );
 void				R_FreeStaticTriSurf( srfTriangles_t *tri );
 void				R_FreeStaticTriSurfVertexCaches( srfTriangles_t *tri );
-int					R_TriSurfMemory( const srfTriangles_t *tri );
+size_t				R_TriSurfMemory( const srfTriangles_t *tri );
 void				R_BoundTriSurf( srfTriangles_t *tri );
 void				R_CleanupTriangles( srfTriangles_t *tri, bool createNormals, bool identifySilEdges, bool useUnsmoothedTangents );
 void				R_ReverseTriangles( srfTriangles_t *tri );
@@ -135,8 +135,8 @@ void idRenderModelStatic::Print() const {
 idRenderModelStatic::Memory
 ==============
 */
-int idRenderModelStatic::Memory() const {
-	int	totalBytes = 0;
+size_t idRenderModelStatic::Memory() const {
+	size_t totalBytes = 0;
 
 	totalBytes += sizeof( *this );
 	totalBytes += name.DynamicMemoryUsed();
@@ -161,7 +161,7 @@ idRenderModelStatic::List
 void idRenderModelStatic::List() const {
 	int	totalTris = 0;
 	int	totalVerts = 0;
-	int	totalBytes = 0;
+	size_t totalBytes = 0;
 
 	totalBytes = Memory();
 
@@ -177,7 +177,7 @@ void idRenderModelStatic::List() const {
 		totalTris += surf->geometry->numIndexes / 3;
 		totalVerts += surf->geometry->numVerts;
 	}
-	idLib::Printf( "%c%4ik %3i %4i %4i %s", closed, totalBytes/1024, NumSurfaces(), totalVerts, totalTris, Name() );
+	idLib::Printf( "%c%4lluk %3i %4i %4i %s", closed, static_cast<unsigned long long>( totalBytes/1024 ), NumSurfaces(), totalVerts, totalTris, Name() );
 
 	if ( IsDynamicModel() == DM_CACHED ) {
 		idLib::Printf( " (DM_CACHED)" );

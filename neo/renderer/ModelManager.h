@@ -99,4 +99,7 @@ public:
 // this will be statically pointed at a private implementation
 extern	idRenderModelManager	*renderModelManager;
 
+// Group byte totals for diagnostic reports, preserving the minimum column width.
+idStr R_FormatMemorySize( size_t bytes );
+
 #endif /* !__MODELMANAGER_H__ */

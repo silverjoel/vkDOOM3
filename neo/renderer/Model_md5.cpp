@@ -1030,7 +1030,7 @@ void idRenderModelMD5::List() const {
 		totalTris += mesh->numTris;
 		totalVerts += mesh->NumVerts();
 	}
-	idLib::Printf( " %4ik %3i %4i %4i %s(MD5)", Memory()/1024, meshes.Num(), totalVerts, totalTris, Name() );
+	idLib::Printf( " %4lluk %3i %4i %4i %s(MD5)", static_cast<unsigned long long>( Memory()/1024 ), meshes.Num(), totalVerts, totalTris, Name() );
 
 	if ( defaulted ) {
 		idLib::Printf( " (DEFAULTED)" );
@@ -1428,9 +1428,9 @@ void idRenderModelMD5::PurgeModel() {
 idRenderModelMD5::Memory
 ===================
 */
-int	R_DeformInfoMemoryUsed( deformInfo_t *deformInfo );
-int	idRenderModelMD5::Memory() const {
-	int total = sizeof( *this );
+size_t R_DeformInfoMemoryUsed( deformInfo_t *deformInfo );
+size_t idRenderModelMD5::Memory() const {
+	size_t total = sizeof( *this );
 	total += joints.MemoryUsed() + defaultPose.MemoryUsed() + meshes.MemoryUsed();
 
 	// count up strings

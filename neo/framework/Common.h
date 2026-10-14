@@ -127,7 +127,7 @@ struct MemInfo_t {
 	idStr			filebase;
 
 	int				total;
-	int				assetTotals;
+	size_t			assetTotals;
 
 	// memory manager totals
 	int				memoryManagerTotal;
@@ -138,7 +138,7 @@ struct MemInfo_t {
 
 	// asset totals
 	int				imageAssetsTotal;
-	int				modelAssetsTotal;
+	size_t			modelAssetsTotal;
 	int				soundAssetsTotal;
 };
 

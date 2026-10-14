@@ -423,13 +423,13 @@ CONSOLE_COMMAND( printMemInfo, "prints memory debugging data", NULL ) {
 	idLib::Printf( " Used image memory: %s bytes\n", idStr::FormatNumber( mi.imageAssetsTotal ).c_str() );
 	mi.assetTotals += mi.imageAssetsTotal;
 
-	idLib::Printf( " Used model memory: %s bytes\n", idStr::FormatNumber( mi.modelAssetsTotal ).c_str() );
+	idLib::Printf( " Used model memory: %s bytes\n", R_FormatMemorySize( mi.modelAssetsTotal ).c_str() );
 	mi.assetTotals += mi.modelAssetsTotal;
 
 	idLib::Printf( " Used sound memory: %s bytes\n", idStr::FormatNumber( mi.soundAssetsTotal ).c_str() );
 	mi.assetTotals += mi.soundAssetsTotal;
 
-	idLib::Printf( " Used asset memory: %s bytes\n", idStr::FormatNumber( mi.assetTotals ).c_str() );
+	idLib::Printf( " Used asset memory: %s bytes\n", R_FormatMemorySize( mi.assetTotals ).c_str() );
 
 	// write overview file
 	idFile *f;
@@ -439,8 +439,8 @@ CONSOLE_COMMAND( printMemInfo, "prints memory debugging data", NULL ) {
 		return;
 	}
 
-	f->Printf( "total(%s ) image(%s ) model(%s ) sound(%s ): %s\n", idStr::FormatNumber( mi.assetTotals ).c_str(), idStr::FormatNumber( mi.imageAssetsTotal ).c_str(), 
-		idStr::FormatNumber( mi.modelAssetsTotal ).c_str(), idStr::FormatNumber( mi.soundAssetsTotal ).c_str(), mi.filebase.c_str() );
+	f->Printf( "total(%s ) image(%s ) model(%s ) sound(%s ): %s\n", R_FormatMemorySize( mi.assetTotals ).c_str(), idStr::FormatNumber( mi.imageAssetsTotal ).c_str(),
+		R_FormatMemorySize( mi.modelAssetsTotal ).c_str(), idStr::FormatNumber( mi.soundAssetsTotal ).c_str(), mi.filebase.c_str() );
 
 	fileSystem->CloseFile( f );
 }

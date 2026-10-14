@@ -124,18 +124,20 @@ R_TriSurfMemory
 For memory profiling
 =================
 */
-int R_TriSurfMemory( const srfTriangles_t *tri ) {
-	int total = 0;
+size_t R_TriSurfMemory( const srfTriangles_t *tri ) {
+	size_t total = 0;
 
 	if ( tri == NULL ) {
 		return total;
 	}
 
 	if ( tri->preLightShadowVertexes != NULL ) {
-		total += tri->numVerts * 2 * sizeof( tri->preLightShadowVertexes[0] );
+		assert( tri->numVerts >= 0 );
+		total += static_cast<size_t>( tri->numVerts ) * 2 * sizeof( tri->preLightShadowVertexes[0] );
 	}
 	if ( tri->staticShadowVertexes != NULL ) {
-		total += tri->numVerts * 2 * sizeof( tri->staticShadowVertexes[0] );
+		assert( tri->numVerts >= 0 );
+		total += static_cast<size_t>( tri->numVerts ) * 2 * sizeof( tri->staticShadowVertexes[0] );
 	}
 	if ( tri->verts != NULL ) {
 		if ( tri->ambientSurface == NULL || tri->verts != tri->ambientSurface->verts ) {
@@ -1871,8 +1873,8 @@ void R_FreeDeformInfo( deformInfo_t *deformInfo ) {
 R_DeformInfoMemoryUsed
 ===================
 */
-int R_DeformInfoMemoryUsed( deformInfo_t *deformInfo ) {
-	int total = 0;
+size_t R_DeformInfoMemoryUsed( deformInfo_t *deformInfo ) {
+	size_t total = 0;
 
 	if ( deformInfo->verts != NULL ) {
 		total += deformInfo->numOutputVerts * sizeof( deformInfo->verts[0] );
