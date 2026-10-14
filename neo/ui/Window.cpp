@@ -161,7 +161,7 @@ idWindow::Size
 */
 size_t idWindow::Size() {
 	int c = children.Num();
-	int sz = 0;
+	size_t sz = 0;
 	for (int i = 0; i < c; i++) {
 		sz += children[i]->Size();
 	}
@@ -176,7 +176,7 @@ idWindow::Allocated
 */
 size_t idWindow::Allocated() {
 	int i, c;
-	int sz = name.Allocated();
+	size_t sz = name.Allocated();
 	sz += text.Size();
 	sz += backGroundName.Size();
 

@@ -494,7 +494,7 @@ idEditField::Paste
 */
 void idEditField::Paste() {
 	char	*cbd;
-	int		pasteLen, i;
+	size_t	pasteLen, i;
 
 	cbd = Sys_GetClipboardData();
 
