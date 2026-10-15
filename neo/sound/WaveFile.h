@@ -47,7 +47,17 @@ public:
 	bool		Open( const char * filename );
 	void		Close();
 	uint32		SeekToChunk( uint32 id );
-	size_t		Read( void * buffer, size_t len ) { return file->Read( buffer, len ); }
+	size_t		Read( void * buffer, size_t len ) {
+		// The backing file accepts int-sized requests; zero also represents failure.
+		if ( len > static_cast<size_t>( INT_MAX ) ) {
+			return 0;
+		}
+		const int bytesRead = file->Read( buffer, static_cast<int>( len ) );
+		if ( bytesRead < 0 ) {
+			return 0;
+		}
+		return static_cast<size_t>( bytesRead );
+	}
 	uint32		GetChunkOffset( uint32 id );
 
 	ID_TIME_T	Timestamp() { return file->Timestamp(); }
