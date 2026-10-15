@@ -461,7 +461,16 @@ idFileSystemLocal::DirectFileLength
 ================
 */
 int idFileSystemLocal::DirectFileLength( idFileHandle o ) {
-	return GetFileSize( o, NULL );
+	LARGE_INTEGER size;
+	if ( !GetFileSizeEx( o, &size ) ) {
+		idLib::Warning( "idFileSystemLocal::DirectFileLength: size query failed (error %lu)", GetLastError() );
+		return -1;
+	}
+	if ( size.QuadPart < 0 || size.QuadPart > INT_MAX ) {
+		idLib::Warning( "idFileSystemLocal::DirectFileLength: unsupported file size %lld (maximum %d)", static_cast<long long>( size.QuadPart ), INT_MAX );
+		return -1;
+	}
+	return static_cast<int>( size.QuadPart );
 }
 
 /*
@@ -2842,6 +2851,10 @@ idFile *idFileSystemLocal::OpenFileReadFlags( const char *relativePath, int sear
 			file->fullPath = netpath;
 			file->mode = ( 1 << FS_READ );
 			file->fileSize = DirectFileLength( file->o );
+			if ( file->fileSize < 0 ) {
+				delete file;
+				return NULL;
+			}
 			if ( fs_debug.GetInteger() ) {
 				idLib::Printf( "idFileSystem::OpenFileRead: %s (found in '%s/%s')\n", relativePath, searchPaths[sp].path.c_str(), searchPaths[sp].gamedir.c_str() );
 			}
@@ -3030,6 +3043,10 @@ idFile *idFileSystemLocal::OpenExplicitFileRead( const char *OSPath ) {
 	f->mode = ( 1 << FS_READ );
 	f->handleSync = false;
 	f->fileSize = DirectFileLength( f->o );
+	if ( f->fileSize < 0 ) {
+		delete f;
+		return NULL;
+	}
 
 	return f;
 }
@@ -3063,6 +3080,10 @@ idFile_Cached *idFileSystemLocal::OpenExplicitPakFile( const char *OSPath ) {
 	f->mode = ( 1 << FS_READ );
 	f->handleSync = false;
 	f->fileSize = DirectFileLength( f->o );
+	if ( f->fileSize < 0 ) {
+		delete f;
+		return NULL;
+	}
 
 	return f;
 }
@@ -3139,6 +3160,10 @@ idFile *idFileSystemLocal::OpenFileAppend( const char *relativePath, bool sync, 
 	f->mode = ( 1 << FS_WRITE ) + ( 1 << FS_APPEND );
 	f->handleSync = sync;
 	f->fileSize = DirectFileLength( f->o );
+	if ( f->fileSize < 0 ) {
+		delete f;
+		return NULL;
+	}
 
 	return f;
 }
