@@ -743,40 +743,79 @@ idStr::Replace
 ============
 */
 bool idStr::Replace( const char *old, const char *nw ) {
-	int oldLen = strlen( old );
-	int newLen = strlen( nw );
-
-	// Work out how big the new string will be
+	const size_t oldLength = strlen( old );
+	if ( oldLength == 0 ) {
+		return false;
+	}
+	// Count and copy the same C-string extent, even if stored len includes an embedded NUL.
+	const int sourceLength = CheckedLength( strlen( data ) );
+	if ( oldLength > static_cast<size_t>( sourceLength ) ) {
+		len = sourceLength;
+		return false;
+	}
+	const int oldLen = static_cast<int>( oldLength );
 	int count = 0;
-	for ( int i = 0; i < Length(); i++ ) {
-		if ( idStr::Cmpn( &data[i], old, oldLen ) == 0 ) {
+	for ( int i = 0; i <= sourceLength - oldLen; ) {
+		if ( idStr::Cmpn( data + i, old, oldLen ) == 0 ) {
 			count++;
-			i += oldLen - 1;
+			i += oldLen;
+		} else {
+			i++;
 		}
 	}
-
-	if ( count ) {
-		idStr oldString( data );
-
-		EnsureAlloced( len + ( ( newLen - oldLen ) * count ) + 2, false );
-
-		// Replace the old data with the new data
-		int j = 0;
-		for ( int i = 0; i < oldString.Length(); i++ ) {
-			if ( idStr::Cmpn( &oldString[i], old, oldLen ) == 0 ) {
-				memcpy( data + j, nw, newLen );
-				i += oldLen - 1;
-				j += newLen;
-			} else {
-				data[j] = oldString[i];
-				j++;
-			}
-		}
-		data[j] = 0;
-		len = strlen( data );
-		return true;
+	if ( count == 0 ) {
+		len = sourceLength;
+		return false;
 	}
-	return false;
+
+	const size_t newLength = strlen( nw );
+	const size_t capacityLimit = IsStatic() ? GetAlloced() : MAX_DYNAMIC_CAPACITY;
+	size_t result = sourceLength;
+	if ( newLength < oldLength ) {
+		// Non-overlap proves count * oldLength <= sourceLength, hence reduction <= result.
+		const size_t reduction = ( oldLength - newLength ) * static_cast<size_t>( count );
+		assert( reduction <= result );
+		result -= reduction;
+	} else if ( newLength > oldLength ) {
+		const size_t growthPerMatch = newLength - oldLength;
+		const size_t remaining = capacityLimit - 1 - result;
+		if ( growthPerMatch > remaining / static_cast<size_t>( count ) ) {
+			idLib::Error( "idStr::Replace: result exceeds capacity" );
+		}
+		result += growthPerMatch * static_cast<size_t>( count );
+	}
+	const int resultLength = CheckedLength( result );
+	const int newLen = static_cast<int>( newLength ); // a match exists and its full output fits
+	const size_t required = static_cast<size_t>( resultLength ) + 1;
+	const int capacity = static_cast<int>( required + ( required < capacityLimit ? 1 : 0 ) );
+
+	idStr oldString( data );
+	idStr oldPattern;
+	idStr newPattern;
+	if ( Aliases( old ) ) {
+		oldPattern = old;
+		old = oldPattern.c_str();
+	}
+	if ( Aliases( nw ) ) {
+		newPattern = nw;
+		nw = newPattern.c_str();
+	}
+	EnsureAlloced( capacity, false );
+
+	int j = 0;
+	for ( int i = 0; i < sourceLength; ) {
+		if ( i <= sourceLength - oldLen && idStr::Cmpn( oldString.data + i, old, oldLen ) == 0 ) {
+			memcpy( data + j, nw, newLen );
+			i += oldLen;
+			j += newLen;
+		} else {
+			data[j++] = oldString.data[i++];
+		}
+	}
+	assert( j == resultLength );
+	data[j] = '\0';
+	len = j;
+	return true;
 }
 
 /*
@@ -1028,32 +1067,43 @@ idStr::AppendPath
 ====================
 */
 void idStr::AppendPath( const char *text ) {
-	int pos;
-	int i = 0;
-
-	if ( text && text[i] ) {
-		pos = len;
-		EnsureAlloced( len + strlen( text ) + 2 );
-
-		if ( pos ) {
-			if ( data[ pos-1 ] != '/' ) {
-				data[ pos++ ] = '/';
-			}
-		}
-		if ( text[i] == '/' ) {
-			i++;
-		}
-
-		for ( ; text[ i ]; i++ ) {
-			if ( text[ i ] == '\\' ) {
-				data[ pos++ ] = '/';
-			} else {
-				data[ pos++ ] = text[ i ];
-			}
-		}
-		len = pos;
-		data[ pos ] = '\0';
+	if ( text == NULL || text[0] == '\0' ) {
+		return;
 	}
+	const size_t textLength = strlen( text );
+	const size_t skip = text[0] == '/' ? 1 : 0;
+	const size_t separator = len > 0 && data[len-1] != '/' ? 1 : 0;
+	const int appendedEnd = CheckedGrowth( textLength - skip );
+	const int resultLength = CheckedLength( static_cast<size_t>( appendedEnd ) + separator );
+
+	// Preserve the old conservative reservation, except for optional slack at the limit.
+	const size_t required = static_cast<size_t>( resultLength ) + 1;
+	const size_t capacityLimit = IsStatic() ? GetAlloced() : MAX_DYNAMIC_CAPACITY;
+	const size_t slack = 1 + skip - separator;
+	const size_t spare = capacityLimit - required;
+	const int capacity = static_cast<int>( required + ( slack < spare ? slack : spare ) );
+
+	// A separator can overwrite an aliased source's terminator even without reallocation.
+	idStr source;
+	if ( Aliases( text ) ) {
+		source = text;
+		text = source.c_str();
+	}
+	EnsureAlloced( capacity );
+	int pos = len;
+	if ( separator ) {
+		data[pos++] = '/';
+	}
+	for ( size_t i = skip; i < textLength; i++ ) {
+		if ( text[i] == '\\' ) {
+			data[pos++] = '/';
+		} else {
+			data[pos++] = text[i];
+		}
+	}
+	assert( pos == resultLength );
+	len = pos;
+	data[pos] = '\0';
 }
 
 /*
