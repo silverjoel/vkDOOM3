@@ -261,7 +261,7 @@ int idSaveGameThread::Load() {
 		idStr filename = saveFolder;
 		filename.AppendPath( file->GetName() );
 
-		idFile * inputFile = fileSystem->OpenFileRead( filename.c_str() );
+		idFileLocal inputFile( fileSystem->OpenFileRead( filename.c_str() ) );
 		if ( inputFile == NULL ) {
 			file->error = true;
 			if ( !( file->type & SAVEGAMEFILE_OPTIONAL ) ) {
@@ -291,40 +291,56 @@ int idSaveGameThread::Load() {
 
 		} else {
 
-			size_t size = inputFile->Length();
-
-			unsigned int originalChecksum = 0;
-			if ( ( file->type & SAVEGAMEFILE_BINARY ) != 0 || ( file->type & SAVEGAMEFILE_COMPRESSED ) != 0 ) {
-				if ( saveGame_checksum.GetBool() ) {
-					if ( size >= sizeof( originalChecksum ) ) {
-						inputFile->ReadBig( originalChecksum );
-						size -= sizeof( originalChecksum );
+			bool loaded = false;
+			try {
+				do {
+					int size = inputFile->Length();
+					if ( size < 0 ) {
+						break;
 					}
-				}
+
+					const bool checkChecksum = ( ( file->type & SAVEGAMEFILE_BINARY ) != 0 || ( file->type & SAVEGAMEFILE_COMPRESSED ) != 0 ) && saveGame_checksum.GetBool();
+					unsigned int originalChecksum = 0;
+					if ( checkChecksum ) {
+						const int checksumBytes = sizeof( originalChecksum );
+						if ( size < checksumBytes || inputFile->Read( &originalChecksum, checksumBytes ) != checksumBytes ) {
+							break;
+						}
+						idSwap::Big( originalChecksum );
+						size -= checksumBytes;
+					}
+
+					// The validated payload fits Read's int contract; SetLength uses size_t.
+					file->SetLength( static_cast<size_t>( size ) );
+					if ( file->Length() != size ) {
+						break;
+					}
+
+					const int sizeRead = inputFile->Read( (void *)file->GetDataPtr(), size );
+					if ( sizeRead != size ) {
+						break;
+					}
+
+					if ( checkChecksum && MD5_BlockChecksum( file->GetDataPtr(), static_cast<size_t>( size ) ) != originalChecksum ) {
+						break;
+					}
+					loaded = true;
+				} while ( false );
+			} catch ( ... ) {
+				file->Clear( false );
+				file->error = true;
+				throw; // Run() reports exceptions through its existing error path.
 			}
 
-			file->SetLength( size );
-
-			size_t sizeRead = inputFile->Read( (void *)file->GetDataPtr(), size );
-			if ( sizeRead != size ) {
+			if ( !loaded ) {
+				// Retain owned capacity for reuse, but never publish a partial save.
+				file->Clear( false );
 				file->error = true;
 				callback->errorCode = SAVEGAME_E_CORRUPTED;
 				ret = -1;
 			}
-
-			if ( ( file->type & SAVEGAMEFILE_BINARY ) != 0 || ( file->type & SAVEGAMEFILE_COMPRESSED ) != 0 ) {
-				if ( saveGame_checksum.GetBool() ) {
-					unsigned int checksum = MD5_BlockChecksum( file->GetDataPtr(), file->Length() );
-					if ( checksum != originalChecksum ) {
-						file->error = true;
-						callback->errorCode = SAVEGAME_E_CORRUPTED;
-						ret = -1;
-					}
-				}
-			}
 		}
 
-		delete inputFile;
 	}
 
 	if ( data.saveLoadParms->cancelled ) {
