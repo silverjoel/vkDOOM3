@@ -357,6 +357,14 @@ protected:
 	ID_INLINE void		SetStaticBuffer( char * buffer, const int bufferLength );
 
 private:
+	// Dynamic capacity must include the NUL and remain representable after rounding.
+	static const int	MAX_DYNAMIC_CAPACITY = ( 0x7fffffff / STR_ALLOC_GRAN ) * STR_ALLOC_GRAN;
+	static const int	MAX_DYNAMIC_LENGTH = MAX_DYNAMIC_CAPACITY - 1;
+	int					CheckedLength( size_t length ) const;
+	int					CheckedGrowth( size_t extra ) const;
+	void				CheckCapacity( int amount ) const;
+	bool				Aliases( const char *text ) const;
+
 	// initialize string using base buffer... call ONLY FROM CONSTRUCTOR
 	ID_INLINE void		Construct();										
 
@@ -401,8 +409,7 @@ idStr::Construct
 ========================
 */
 ID_INLINE void idStr::Construct() {
-	SetStatic( false );
-	SetAlloced( STR_ALLOC_BASE );
+	allocedAndFlag = STR_ALLOC_BASE;
 	data = baseBuffer;
 	len = 0;
 	data[ 0 ] = '\0';
@@ -413,9 +420,9 @@ ID_INLINE void idStr::Construct() {
 
 
 ID_INLINE void idStr::EnsureAlloced( int amount, bool keepold ) {
+	CheckCapacity( amount );
 	// static string's can't reallocate
 	if ( IsStatic() ) {
-		release_assert( amount <= GetAlloced() );
 		return;
 	}
 	if ( amount > GetAlloced() ) {
@@ -431,6 +438,9 @@ idStr::SetStaticBuffer
 ID_INLINE void idStr::SetStaticBuffer( char * buffer, const int bufferLength ) { 
 	// this should only be called on a freshly constructed idStr
 	assert( data == baseBuffer );
+	if ( buffer == NULL || bufferLength <= 0 || data != baseBuffer ) {
+		idLib::Error( "idStr::SetStaticBuffer: invalid buffer" );
+	}
 	data = buffer;
 	len = 0;
 	SetAlloced( bufferLength );
@@ -445,7 +455,7 @@ ID_INLINE idStr::idStr( const idStr &text ) {
 	Construct();
 	int l;
 
-	l = text.Length();
+	l = CheckedLength( text.Length() );
 	EnsureAlloced( l + 1 );
 	strcpy( data, text.data );
 	len = l;
@@ -465,10 +475,7 @@ ID_INLINE idStr::idStr( const idStr &text, int start, int end ) {
 		start = 0;
 	}
 
-	l = end - start;
-	if ( l < 0 ) {
-		l = 0;
-	}
+	l = CheckedLength( end > start ? static_cast<size_t>( end - start ) : 0 );
 
 	EnsureAlloced( l + 1 );
 
@@ -485,7 +492,7 @@ ID_INLINE idStr::idStr( const char *text ) {
 	int l;
 
 	if ( text ) {
-		l = static_cast<int>(strlen(text));
+		l = CheckedLength( strlen( text ) );
 		EnsureAlloced( l + 1 );
 		strcpy( data, text );
 		len = l;
@@ -495,21 +502,18 @@ ID_INLINE idStr::idStr( const char *text ) {
 ID_INLINE idStr::idStr( const char *text, int start, int end ) {
 	Construct();
 	int i;
-	int l = static_cast<int>(strlen(text));
+	const size_t sourceLength = strlen( text );
 
-	if ( end > l ) {
-		end = l;
+	if ( end > 0 && static_cast<size_t>( end ) > sourceLength ) {
+		end = static_cast<int>( sourceLength ); // bounded by the original int endpoint
 	}
-	if ( start > l ) {
-		start = l;
-	} else if ( start < 0 ) {
+	if ( start < 0 ) {
 		start = 0;
+	} else if ( static_cast<size_t>( start ) > sourceLength ) {
+		start = static_cast<int>( sourceLength );
 	}
 
-	l = end - start;
-	if ( l < 0 ) {
-		l = 0;
-	}
+	const int l = CheckedLength( end > start ? static_cast<size_t>( end - start ) : 0 );
 
 	EnsureAlloced( l + 1 );
 
@@ -603,9 +607,12 @@ ID_INLINE char &idStr::operator[]( int index ) {
 }
 
 ID_INLINE void idStr::operator=( const idStr &text ) {
+	if ( this == &text ) {
+		return;
+	}
 	int l;
 
-	l = text.Length();
+	l = CheckedLength( text.Length() );
 	EnsureAlloced( l + 1, false );
 	memcpy( data, text.data, l );
 	data[l] = '\0';
@@ -828,7 +835,8 @@ ID_INLINE void idStr::Clear() {
 }
 
 ID_INLINE void idStr::Append( const char a ) {
-	EnsureAlloced( len + 2 );
+	const int newLen = CheckedGrowth( 1 );
+	EnsureAlloced( newLen + 1 );
 	data[ len ] = a;
 	len++;
 	data[ len ] = '\0';
@@ -838,7 +846,7 @@ ID_INLINE void idStr::Append( const idStr &text ) {
 	int newLen;
 	int i;
 
-	newLen = len + text.Length();
+	newLen = CheckedGrowth( text.Length() );
 	EnsureAlloced( newLen + 1 );
 	for ( i = 0; i < text.len; i++ ) {
 		data[ len + i ] = text[ i ];
@@ -852,9 +860,15 @@ ID_INLINE void idStr::Append( const char *text ) {
 	int i;
 
 	if ( text ) {
-		newLen = len + static_cast<int>(strlen(text));
+		const size_t length = strlen( text );
+		newLen = CheckedGrowth( length );
+		const bool alias = Aliases( text );
+		const size_t offset = alias ? static_cast<size_t>( text - data ) : 0;
 		EnsureAlloced( newLen + 1 );
-		for ( i = 0; text[ i ]; i++ ) {
+		if ( alias ) {
+			text = data + offset;
+		}
+		for ( i = 0; i < newLen - len; i++ ) {
 			data[ len + i ] = text[ i ];
 		}
 		len = newLen;
@@ -866,10 +880,23 @@ ID_INLINE void idStr::Append( const char *text, int l ) {
 	int newLen;
 	int i;
 
+	if ( l < 0 ) {
+		idLib::Error( "idStr::Append: negative length" );
+	}
 	if ( text && l ) {
-		newLen = len + l;
+		newLen = CheckedGrowth( l );
+		const bool alias = Aliases( text );
+		const size_t offset = alias ? static_cast<size_t>( text - data ) : 0;
+		// Measure the copied span before mutation, including when text aliases data.
+		int copied = 0;
+		while ( copied < l && text[ copied ] ) {
+			copied++;
+		}
 		EnsureAlloced( newLen + 1 );
-		for ( i = 0; text[ i ] && i < l; i++ ) {
+		if ( alias ) {
+			text = data + offset;
+		}
+		for ( i = 0; i < copied; i++ ) {
 			data[ len + i ] = text[ i ];
 		}
 		len = newLen;
@@ -887,7 +914,8 @@ ID_INLINE void idStr::Insert( const char a, int index ) {
 	}
 
 	l = 1;
-	EnsureAlloced( len + l + 1 );
+	const int newLen = CheckedGrowth( l );
+	EnsureAlloced( newLen + 1 );
 	for ( i = len; i >= index; i-- ) {
 		data[i+l] = data[i];
 	}
@@ -904,8 +932,14 @@ ID_INLINE void idStr::Insert( const char *text, int index ) {
 		index = len;
 	}
 
-	l = static_cast<int>(strlen(text));
-	EnsureAlloced( len + l + 1 );
+	const int newLen = CheckedGrowth( strlen( text ) );
+	l = newLen - len;
+	idStr snapshot;
+	if ( Aliases( text ) ) {
+		snapshot = text;
+		text = snapshot.c_str();
+	}
+	EnsureAlloced( newLen + 1 );
 	for ( i = len; i >= index; i-- ) {
 		data[i+l] = data[i];
 	}
@@ -958,6 +992,9 @@ ID_INLINE int idStr::LengthWithoutColors() const {
 }
 
 ID_INLINE void idStr::CapLength( int newlen ) {
+	if ( newlen < 0 ) {
+		idLib::Error( "idStr::CapLength: negative length" );
+	}
 	if ( len <= newlen ) {
 		return;
 	}
@@ -966,6 +1003,7 @@ ID_INLINE void idStr::CapLength( int newlen ) {
 }
 
 ID_INLINE void idStr::Fill( const char ch, int newlen ) {
+	newlen = CheckedLength( static_cast<size_t>( newlen ) );
 	EnsureAlloced( newlen + 1 );
 	len = newlen;
 	memset( data, ch, len );
@@ -1198,12 +1236,24 @@ idStr::CopyRange
 ========================
 */
 ID_INLINE void idStr::CopyRange( const char * text, int start, int end ) {
-	int l = end - start;
-	if ( l < 0 ) {
-		l = 0;
+	if ( start < 0 || end < 0 ) {
+		idLib::Error( "idStr::CopyRange: negative endpoint" );
+	}
+	const int l = CheckedLength( end > start ? static_cast<size_t>( end - start ) : 0 );
+	// This API also accepts bounded, non-NUL-terminated input spans.
+	if ( l > 0 && text == NULL ) {
+		idLib::Error( "idStr::CopyRange: NULL source" );
+	}
+	const bool alias = Aliases( text );
+	const size_t offset = alias ? static_cast<size_t>( text - data ) : 0;
+	if ( alias && ( offset > static_cast<size_t>( len ) || static_cast<size_t>( end ) > static_cast<size_t>( len ) - offset ) ) {
+		idLib::Error( "idStr::CopyRange: source range exceeds string" );
 	}
 
 	EnsureAlloced( l + 1 );
+	if ( alias ) {
+		text = data + offset;
+	}
 
 	for ( int i = 0; i < l; i++ ) {
 		data[ i ] = text[ start + i ];

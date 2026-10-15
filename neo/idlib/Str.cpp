@@ -69,36 +69,69 @@ idVec4 & idStr::ColorForIndex( int i ) {
 	return g_color_table[ i & 15 ];
 }
 
+// idLib::Error throws or terminates; failed admission must not resume a caller's write.
+int idStr::CheckedLength( size_t length ) const {
+	const size_t limit = IsStatic() ? static_cast<size_t>( GetAlloced() - 1 ) : MAX_DYNAMIC_LENGTH;
+	if ( length > limit ) {
+		idLib::Error( "idStr: length %llu exceeds capacity", static_cast<unsigned long long>( length ) );
+	}
+	return static_cast<int>( length );
+}
+
+int idStr::CheckedGrowth( size_t extra ) const {
+	const int current = CheckedLength( static_cast<size_t>( len ) );
+	const size_t limit = IsStatic() ? static_cast<size_t>( GetAlloced() - 1 ) : MAX_DYNAMIC_LENGTH;
+	if ( extra > limit - static_cast<size_t>( current ) ) {
+		idLib::Error( "idStr: growth %llu exceeds capacity", static_cast<unsigned long long>( extra ) );
+	}
+	return static_cast<int>( static_cast<size_t>( current ) + extra );
+}
+
+void idStr::CheckCapacity( int amount ) const {
+	const int limit = IsStatic() ? GetAlloced() : MAX_DYNAMIC_CAPACITY;
+	if ( amount <= 0 || amount > limit ) {
+		idLib::Error( "idStr: invalid capacity %d", amount );
+	}
+}
+
+bool idStr::Aliases( const char *text ) const {
+	const uintptr_t address = reinterpret_cast<uintptr_t>( text );
+	const uintptr_t base = reinterpret_cast<uintptr_t>( data );
+	return address >= base && address - base <= static_cast<size_t>( len );
+}
+
 /*
 ============
 idStr::ReAllocate
 ============
 */
 void idStr::ReAllocate( int amount, bool keepold ) {
-	char	*newbuffer;
-	int		newsize;
-	int		mod;
-
-	//assert( data );
-	assert( amount > 0 );
-
-	mod = amount % STR_ALLOC_GRAN;
-	if ( !mod ) {
-		newsize = amount;
+	CheckCapacity( amount );
+	if ( IsStatic() ) {
+		idLib::Error( "idStr::ReAllocate: cannot reallocate static storage" );
 	}
-	else {
-		newsize = amount + STR_ALLOC_GRAN - mod;
+	const size_t requested = static_cast<size_t>( amount );
+	const size_t rounded = requested + ( STR_ALLOC_GRAN - requested % STR_ALLOC_GRAN ) % STR_ALLOC_GRAN;
+	// CheckCapacity proves rounded <= MAX_DYNAMIC_CAPACITY before this narrowing.
+	const int newsize = static_cast<int>( rounded );
+	if ( len < 0 || len >= newsize ) {
+		idLib::Error( "idStr::ReAllocate: capacity cannot hold current length" );
 	}
-	SetAlloced( newsize );
+	char *newbuffer;
 
 #ifdef USE_STRING_DATA_ALLOCATOR
-	newbuffer = stringDataAllocator.Alloc( GetAlloced() );
+	newbuffer = stringDataAllocator.Alloc( newsize );
 #else
-	newbuffer = new (TAG_STRING) char[ GetAlloced() ];
+	newbuffer = new (TAG_STRING) char[ newsize ];
 #endif
+	if ( newbuffer == NULL ) {
+		idLib::Error( "idStr::ReAllocate: allocation failed for %d bytes", newsize );
+	}
 	if ( keepold && data ) {
-		data[ len ] = '\0';
-		strcpy( newbuffer, data );
+		// idToken may not have terminated the old buffer yet. Do not modify it
+		// until allocation succeeds, and preserve the complete logical extent.
+		memcpy( newbuffer, data, len );
+		newbuffer[ len ] = '\0';
 	}
 
 	if ( data && data != baseBuffer ) {
@@ -110,6 +143,7 @@ void idStr::ReAllocate( int amount, bool keepold ) {
 	}
 
 	data = newbuffer;
+	SetAlloced( newsize );
 }
 
 /*
@@ -155,7 +189,7 @@ void idStr::operator=( const char *text ) {
 	}
 
 	// check if we're aliasing
-	if ( text >= data && text <= data + len ) {
+	if ( Aliases( text ) ) {
 		diff = text - data;
 
 		assert( strlen( text ) < (unsigned)len );
@@ -171,7 +205,7 @@ void idStr::operator=( const char *text ) {
 		return;
 	}
 
-	l = strlen( text );
+	l = CheckedLength( strlen( text ) );
 	EnsureAlloced( l + 1, false );
 	strcpy( data, text );
 	len = l;
