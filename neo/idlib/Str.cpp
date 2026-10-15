@@ -219,14 +219,33 @@ returns -1 if not found otherwise the index of the char
 ============
 */
 int idStr::FindChar( const char *str, const char c, int start, int end ) {
-	int i;
-
-	if ( end == -1 ) {
-		end = strlen( str ) - 1;
+	if ( start < 0 || end < -1 ) {
+		return INVALID_POSITION;
 	}
-	for ( i = start; i <= end; i++ ) {
+	if ( end == -1 ) {
+		const size_t length = strlen( str );
+		if ( length > INT_MAX ) {
+			return INVALID_POSITION;
+		}
+		end = static_cast<int>( length ) - 1; // empty input produces signed -1
+	} else {
+		// An inclusive endpoint may name the NUL, but must not extend past it.
+		// Do not measure the unrelated suffix of an explicitly bounded input.
+		for ( int i = 0; i < end; i++ ) {
+			if ( str[i] == '\0' ) {
+				return INVALID_POSITION;
+			}
+		}
+	}
+	if ( start > end ) {
+		return INVALID_POSITION;
+	}
+	for ( int i = start; ; i++ ) {
 		if ( str[i] == c ) {
 			return i;
+		}
+		if ( i == end ) {
+			break; // do not increment an inclusive INT_MAX endpoint
 		}
 	}
 	return -1;
@@ -242,10 +261,34 @@ returns -1 if not found otherwise the index of the text
 int idStr::FindText( const char *str, const char *text, bool casesensitive, int start, int end ) {
 	int l, i, j;
 
-	if ( end == -1 ) {
-		end = strlen( str );
+	if ( start < 0 || end < -1 ) {
+		return INVALID_POSITION;
 	}
-	l = end - strlen( text );
+	if ( end == -1 ) {
+		const size_t length = strlen( str );
+		if ( length > INT_MAX ) {
+			return INVALID_POSITION;
+		}
+		end = static_cast<int>( length );
+	} else {
+		// end is exclusive; a NUL before it makes the caller's extent invalid.
+		for ( int k = 0; k < end; k++ ) {
+			if ( str[k] == '\0' ) {
+				return INVALID_POSITION;
+			}
+		}
+	}
+	if ( start > end ) {
+		return INVALID_POSITION;
+	}
+	const size_t needleLength = strlen( text );
+	if ( needleLength > static_cast<size_t>( end - start ) ) {
+		return INVALID_POSITION;
+	}
+	if ( needleLength == 0 ) {
+		return start;
+	}
+	l = end - static_cast<int>( needleLength );
 	for ( i = start; i <= l; i++ ) {
 		if ( casesensitive ) {
 			for ( j = 0; text[j]; j++ ) {
@@ -645,14 +688,14 @@ idStr::StripLeading
 ============
 */
 void idStr::StripLeading( const char *string ) {
-	int l;
-
-	l = strlen( string );
-	if ( l > 0 ) {
-		while ( !Cmpn( string, l ) ) {
-			memmove( data, data + l, len - l + 1 );
-			len -= l;
-		}
+	const size_t patternLength = strlen( string );
+	if ( patternLength == 0 || patternLength > static_cast<size_t>( len ) ) {
+		return;
+	}
+	const int l = static_cast<int>( patternLength );
+	while ( len >= l && !Cmpn( string, l ) ) {
+		memmove( data, data + l, len - l + 1 );
+		len -= l;
 	}
 }
 
@@ -662,10 +705,12 @@ idStr::StripLeadingOnce
 ============
 */
 bool idStr::StripLeadingOnce( const char *string ) {
-	int l;
-
-	l = strlen( string );
-	if ( ( l > 0 ) && !Cmpn( string, l ) ) {
+	const size_t patternLength = strlen( string );
+	if ( patternLength == 0 || patternLength > static_cast<size_t>( len ) ) {
+		return false;
+	}
+	const int l = static_cast<int>( patternLength );
+	if ( !Cmpn( string, l ) ) {
 		memmove( data, data + l, len - l + 1 );
 		len -= l;
 		return true;
@@ -693,14 +738,14 @@ idStr::StripLeading
 ============
 */
 void idStr::StripTrailing( const char *string ) {
-	int l;
-
-	l = strlen( string );
-	if ( l > 0 ) {
-		while ( ( len >= l ) && !Cmpn( string, data + len - l, l ) ) {
-			len -= l;
-			data[len] = '\0';
-		}
+	const size_t patternLength = strlen( string );
+	if ( patternLength == 0 || patternLength > static_cast<size_t>( len ) ) {
+		return;
+	}
+	const int l = static_cast<int>( patternLength );
+	while ( ( len >= l ) && !Cmpn( string, data + len - l, l ) ) {
+		len -= l;
+		data[len] = '\0';
 	}
 }
 
@@ -710,10 +755,12 @@ idStr::StripTrailingOnce
 ============
 */
 bool idStr::StripTrailingOnce( const char *string ) {
-	int l;
-
-	l = strlen( string );
-	if ( ( l > 0 ) && ( len >= l ) && !Cmpn( string, data + len - l, l ) ) {
+	const size_t patternLength = strlen( string );
+	if ( patternLength == 0 || patternLength > static_cast<size_t>( len ) ) {
+		return false;
+	}
+	const int l = static_cast<int>( patternLength );
+	if ( !Cmpn( string, data + len - l, l ) ) {
 		len -= l;
 		data[len] = '\0';
 		return true;
@@ -1645,12 +1692,14 @@ idStr::Append
 ================
 */
 void idStr::Append( char *dest, int size, const char *src ) {
-	int		l1;
-
-	l1 = strlen( dest );
-	if ( l1 >= size ) {
+	if ( size <= 0 || dest == NULL ) {
 		idLib::Error( "idStr::Append: already overflowed" );
 	}
+	const char *terminator = static_cast<const char *>( memchr( dest, '\0', static_cast<size_t>( size ) ) );
+	if ( terminator == NULL ) {
+		idLib::Error( "idStr::Append: already overflowed" );
+	}
+	const int l1 = static_cast<int>( terminator - dest ); // 0 <= offset < size <= INT_MAX
 	idStr::Copynz( dest + l1, src, size - l1 );
 }
 
