@@ -952,6 +952,11 @@ MA_Parse
 */
 maModel_t *MA_Parse( const char *buffer, const char* filename, bool verbose ) {
 	memset( &maGlobal, 0, sizeof( maGlobal ) );
+	const size_t sourceLength = strlen( buffer );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		idLib::Error( "MA_Parse: source length exceeds INT_MAX" );
+		return NULL;
+	}
 
 	maGlobal.verbose = verbose;
 
@@ -968,7 +973,7 @@ maModel_t *MA_Parse( const char *buffer, const char* filename, bool verbose ) {
 
 	idParser parser;
 	parser.SetFlags(LEXFL_NOSTRINGCONCAT);
-	parser.LoadMemory(buffer, strlen(buffer), filename);
+	parser.LoadMemory(buffer, static_cast<int>( sourceLength ), filename);
 
 	idToken token;
 	while(parser.ReadToken(&token)) {

@@ -297,7 +297,11 @@ define_t *idParser::DefineFromString( const char *string ) {
 	idParser src;
 	define_t *def;
 
-	if ( !src.LoadMemory(string, strlen(string), "*defineString") ) {
+	const size_t sourceLength = strlen( string );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		return NULL;
+	}
+	if ( !src.LoadMemory(string, static_cast<int>( sourceLength ), "*defineString") ) {
 		return NULL;
 	}
 	// create a define from the source

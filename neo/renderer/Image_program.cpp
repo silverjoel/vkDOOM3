@@ -630,7 +630,25 @@ R_LoadImageProgram
 void R_LoadImageProgram( const char *name, byte **pic, int *width, int *height, ID_TIME_T *timestamps, textureUsage_t * usage ) {
 	idLexer src;
 
-	src.LoadMemory( name, strlen(name), name );
+	const size_t sourceLength = strlen( name );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		parseBuffer[0] = 0;
+		if ( pic ) {
+			*pic = NULL;
+		}
+		if ( width ) {
+			*width = 0;
+		}
+		if ( height ) {
+			*height = 0;
+		}
+		if ( timestamps ) {
+			*timestamps = FILE_NOT_FOUND_TIMESTAMP;
+		}
+		common->Warning( "R_LoadImageProgram: source length exceeds INT_MAX" );
+		return;
+	}
+	src.LoadMemory( name, static_cast<int>( sourceLength ), name );
 	src.SetFlags( LEXFL_NOFATALERRORS | LEXFL_NOSTRINGCONCAT | LEXFL_NOSTRINGESCAPECHARS | LEXFL_ALLOWPATHNAMES );
 
 	parseBuffer[0] = 0;

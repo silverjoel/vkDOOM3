@@ -2261,6 +2261,11 @@ void idDeclLocal::MakeDefault() {
 	AllocateSelf();
 
 	defaultText = self->DefaultDefinition();
+	const size_t sourceLength = strlen( defaultText );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		common->FatalError( "idDecl::MakeDefault: DefaultDefinition length exceeds INT_MAX" );
+		return;
+	}
 
 	// a parse error inside a DefaultDefinition() string could
 	// cause an infinite loop, but normal default definitions could
@@ -2274,7 +2279,7 @@ void idDeclLocal::MakeDefault() {
 	self->FreeData();
 
 	// parse
-	self->Parse( defaultText, strlen( defaultText ), false );
+	self->Parse( defaultText, static_cast<int>( sourceLength ), false );
 
 	// we could still eventually hit the recursion if we have enough Error() calls inside Parse...
 	--recursionLevel;

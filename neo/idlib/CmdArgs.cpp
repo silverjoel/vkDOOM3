@@ -118,7 +118,11 @@ void idCmdArgs::TokenizeString( const char *text, bool keepAsStrings ) {
 		return;
 	}
 
-	lex.LoadMemory( text, strlen( text ), "idCmdSystemLocal::TokenizeString" );
+	const size_t sourceLength = strlen( text );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		return;
+	}
+	lex.LoadMemory( text, static_cast<int>( sourceLength ), "idCmdSystemLocal::TokenizeString" );
 	lex.SetFlags( LEXFL_NOERRORS
 				| LEXFL_NOWARNINGS
 				| LEXFL_NOSTRINGCONCAT
