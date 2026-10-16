@@ -542,7 +542,12 @@ int idFile::WriteBool( const bool value ) {
  =================
  */
 int idFile::WriteString( const char *value ) {
-	int len = strlen( value );
+	const size_t sourceLength = strlen( value );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		idLib::Error( "idFile::WriteString: string length exceeds INT_MAX" );
+		return 0;
+	}
+	const int len = static_cast<int>( sourceLength );
 	WriteInt( len );
     return Write( value, len );
 }

@@ -359,9 +359,15 @@ void idSimpleWindow::WriteToSaveGame( idFile *savefile ) {
 	int stringLen;
 
 	if ( background ) {
-		stringLen = strlen( background->GetName() );
+		const char *materialName = background->GetName();
+		const size_t sourceLength = strlen( materialName );
+		if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+			idLib::Error( "idSimpleWindow::WriteToSaveGame: material name length exceeds INT_MAX" );
+			return;
+		}
+		stringLen = static_cast<int>( sourceLength );
 		savefile->Write( &stringLen, sizeof( stringLen ) );
-		savefile->Write( background->GetName(), stringLen );
+		savefile->Write( materialName, stringLen );
 	} else {
 		stringLen = 0;
 		savefile->Write( &stringLen, sizeof( stringLen ) );

@@ -485,11 +485,12 @@ WriteString
 ================
 */
 static void WriteString( const char *s, idFile *f ) {
-	int	len = strlen( s );
-	if ( len >= MAX_STRING_CHARS-1 ) {
+	const size_t len = strlen( s );
+	if ( len >= static_cast<size_t>( MAX_STRING_CHARS - 1 ) ) {
 		idLib::Error( "idDict::WriteToFileHandle: bad string" );
+		return;
 	}
-	f->Write( s, strlen(s) + 1 );
+	f->Write( s, static_cast<int>( len + 1 ) ); // bounded above, including the NUL
 }
 
 /*

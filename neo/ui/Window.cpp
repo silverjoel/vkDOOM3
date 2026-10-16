@@ -3026,7 +3026,12 @@ idWindow::WriteString
 ===============
 */
 void idWindow::WriteSaveGameString( const char *string, idFile *savefile ) {
-	int len = strlen( string );
+	const size_t sourceLength = strlen( string );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		idLib::Error( "idWindow::WriteSaveGameString: string length exceeds INT_MAX" );
+		return;
+	}
+	const int len = static_cast<int>( sourceLength );
 
 	savefile->Write( &len, sizeof( len ) );
 	savefile->Write( string, len );
