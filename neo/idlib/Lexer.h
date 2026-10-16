@@ -268,6 +268,7 @@ private:
 	idToken			token;					// available token
 	idLexer *		next;					// next script in a chain
 	bool			hadError;				// set by idLexer::Error, even if the error is supressed
+	uint64			sourceId;				// unique identity for this load, independent of allocation address
 
 	static char		baseFolder[ 256 ];		// base folder to load files from
 

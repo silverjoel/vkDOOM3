@@ -30,6 +30,24 @@ If you have questions concerning this license or the applicable additional terms
 #include "precompiled.h"
 #pragma hdrstop
 
+#include <atomic>
+
+// Tokens can outlive a source or be unread into another parser. Never reuse an
+// identity, even if a lexer or its buffer is allocated at the same address.
+static uint64 NextLexerSourceId() {
+	static std::atomic<uint64> nextId( 0 );
+	uint64 previous = nextId.load( std::memory_order_relaxed );
+	for ( ;; ) {
+		if ( previous == UINT64_MAX ) {
+			idLib::Error( "idLexer: source identity exhausted" );
+			return 0;
+		}
+		if ( nextId.compare_exchange_weak( previous, previous + 1, std::memory_order_relaxed ) ) {
+			return previous + 1;
+		}
+	}
+}
+
 #define PUNCTABLE
 
 //longer punctuations first
@@ -921,6 +939,7 @@ int idLexer::ReadToken( idToken *token ) {
 		return 1;
 	}
 	// save script pointer
+	token->sourceId = 0;
 	lastScript_p = script_p;
 	// save line counter
 	lastline = line;
@@ -997,6 +1016,7 @@ int idLexer::ReadToken( idToken *token ) {
 		return 0;
 	}
 	// succesfully read a token
+	token->sourceId = sourceId;
 	return 1;
 }
 
@@ -1741,6 +1761,7 @@ int idLexer::LoadFile( const char *filename, bool OSPath ) {
 	idLib::fileSystem->CloseFile( fp );
 
 	idLexer::buffer = buf;
+	idLexer::sourceId = NextLexerSourceId();
 	idLexer::length = length;
 	// pointer in script buffer
 	idLexer::script_p = idLexer::buffer;
@@ -1769,6 +1790,7 @@ int idLexer::LoadMemory( const char *ptr, int length, const char *name, int star
 	}
 	idLexer::filename = name;
 	idLexer::buffer = ptr;
+	idLexer::sourceId = NextLexerSourceId();
 	idLexer::fileTime = 0;
 	idLexer::length = length;
 	// pointer in script buffer
@@ -1793,6 +1815,7 @@ idLexer::FreeSource
 ================
 */
 void idLexer::FreeSource() {
+	idLexer::sourceId = 0;
 #ifdef PUNCTABLE
 	if ( idLexer::punctuationtable && idLexer::punctuationtable != default_punctuationtable ) {
 		Mem_Free( (void *) idLexer::punctuationtable );
@@ -1819,6 +1842,7 @@ idLexer::idLexer
 ================
 */
 idLexer::idLexer() {
+	idLexer::sourceId = 0;
 	idLexer::loaded = false;
 	idLexer::filename = "";
 	idLexer::flags = 0;
@@ -1840,6 +1864,7 @@ idLexer::idLexer
 ================
 */
 idLexer::idLexer( int flags ) {
+	idLexer::sourceId = 0;
 	idLexer::loaded = false;
 	idLexer::filename = "";
 	idLexer::flags = flags;
@@ -1861,6 +1886,7 @@ idLexer::idLexer
 ================
 */
 idLexer::idLexer( const char *filename, int flags, bool OSPath ) {
+	idLexer::sourceId = 0;
 	idLexer::loaded = false;
 	idLexer::flags = flags;
 	idLexer::SetPunctuations( NULL );
@@ -1877,6 +1903,7 @@ idLexer::idLexer
 ================
 */
 idLexer::idLexer( const char *ptr, int length, const char *name, int flags ) {
+	idLexer::sourceId = 0;
 	idLexer::loaded = false;
 	idLexer::flags = flags;
 	idLexer::SetPunctuations( NULL );

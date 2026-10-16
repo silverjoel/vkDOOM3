@@ -433,8 +433,14 @@ int idParser::ReadSourceToken( idToken *token ) {
 			token->linesCrossed += changedScript;
 
 			// set the marker based on the start of the token read in
-			if ( !marker_p ) {
-				marker_p = token->whiteSpaceEnd_p;
+			if ( markerState == MARKER_UNSET ) {
+				if ( token->sourceId != 0 && token->sourceId == scriptstack->sourceId &&
+						GetSourceOffset( scriptstack, token->whiteSpaceEnd_p, markerOffset ) ) {
+					markerSourceId = scriptstack->sourceId;
+					markerState = MARKER_VALID;
+				} else {
+					markerState = MARKER_INVALID;
+				}
 			}
 			return true;
 		}
@@ -454,6 +460,7 @@ int idParser::ReadSourceToken( idToken *token ) {
 		// remove the script and return to the previous one
 		script = idParser::scriptstack;
 		idParser::scriptstack = idParser::scriptstack->next;
+		InvalidateMarker( script );
 		delete script;
 	}
 	// copy the already available token
@@ -2945,47 +2952,113 @@ idParser::SetMarker
 ================
 */
 void idParser::SetMarker() {
-	marker_p = NULL;
+	markerState = MARKER_UNSET;
+	markerSourceId = 0;
+	markerOffset = 0;
+}
+
+void idParser::InvalidateMarker( const idLexer *source ) {
+	if ( markerState == MARKER_VALID && markerSourceId == source->sourceId ) {
+		markerState = MARKER_INVALID;
+		markerSourceId = 0;
+		markerOffset = 0;
+	}
+}
+
+// The caller first establishes provenance (current lexer or matching token
+// source identity). Integer range checks then reject corrupt/out-of-range
+// cursors without comparing or subtracting unrelated C++ pointers.
+bool idParser::GetSourceOffset( const idLexer *source, const char *position, size_t &offset ) const {
+	if ( !source->loaded || source->length < 0 || !source->buffer || !position ) {
+		return false;
+	}
+	const uintptr_t base = reinterpret_cast<uintptr_t>( source->buffer );
+	const uintptr_t end = reinterpret_cast<uintptr_t>( source->end_p );
+	const uintptr_t address = reinterpret_cast<uintptr_t>( position );
+	const size_t length = static_cast<size_t>( source->length );
+	if ( end < base || end - base != length || address < base || address - base > length ) {
+		return false;
+	}
+	offset = address - base;
+	return true;
 }
 
 /*
 ================
 idParser::GetStringFromMarker
 
-  FIXME: this is very bad code, the script isn't even garrenteed to still be around
+The cursor byte is excluded. Raw extraction replaces out; clean extraction
+appends reparsed token text, preserving the original flags and NUL-prefix rule.
 ================
 */
 void idParser::GetStringFromMarker( idStr& out, bool clean ) {
-	char*	p;
-	char	save;
-
-	if ( marker_p == NULL ) {
-		marker_p = scriptstack->buffer;
+	if ( !scriptstack ) {
+		idLib::Error( "idParser::GetStringFromMarker: no source loaded" );
+		return;
 	}
-		
+	size_t cursorOffset;
+	if ( markerState == MARKER_INVALID || scriptstack->sourceId == 0 ||
+			( markerState == MARKER_VALID && markerSourceId != scriptstack->sourceId ) ||
+			!GetSourceOffset( scriptstack, scriptstack->script_p, cursorOffset ) ) {
+		Error( "idParser::GetStringFromMarker: invalid marker source" );
+		return;
+	}
 	if ( tokens ) {
-		p = (char*)tokens->whiteSpaceStart_p;
-	} else {
-		p = (char*)scriptstack->script_p;
+		size_t tokenOffset;
+		// Only real whitespace from this exact source load can delimit a span.
+		// Copies of old tokens cannot acquire provenance through address reuse.
+		if ( tokens->sourceId == 0 || tokens->sourceId != scriptstack->sourceId ||
+				!GetSourceOffset( scriptstack, tokens->whiteSpaceStart_p, tokenOffset ) || tokenOffset > cursorOffset ) {
+			Error( "idParser::GetStringFromMarker: invalid pending token source" );
+			return;
+		}
+		cursorOffset = tokenOffset;
 	}
-	
-	// Set the end character to NULL to give us a complete string
-	save = *p;
-	*p = 0;
-	
-	// If cleaning then reparse
-	if ( clean ) {	
-		idParser temp( marker_p, strlen( marker_p ), "temp", flags );
+	if ( markerState == MARKER_UNSET ) {
+		markerSourceId = scriptstack->sourceId;
+		markerOffset = 0;
+		markerState = MARKER_VALID;
+	}
+	if ( markerOffset > cursorOffset ) {
+		Error( "idParser::GetStringFromMarker: marker after cursor" );
+		return;
+	}
+	// Both offsets now belong to the same live, int-sized source. No source
+	// byte is read until provenance and the complete range have been checked.
+	const size_t span = cursorOffset - markerOffset;
+	if ( span > static_cast<size_t>( INT_MAX ) ) {
+		Error( "idParser::GetStringFromMarker: span exceeds INT_MAX" );
+		return;
+	}
+	if ( span == 0 ) {
+		if ( !clean ) {
+			out.Clear();
+		}
+		return;
+	}
+	const char *start = scriptstack->buffer + markerOffset;
+	const char *terminator = static_cast<const char *>( memchr( start, 0, span ) );
+	const size_t length = terminator ? static_cast<size_t>( terminator - start ) : span;
+	const int parserLength = static_cast<int>( length ); // length <= span <= INT_MAX
+	// LoadMemory requires a NUL at the supplied extent; a borrowed slice alone
+	// does not fence lexer reads. Own a terminated copy without altering source.
+	// length + 1 is evaluated at size_t width and fits unsigned int (INT_MAX + 1).
+	idTempArray<char> snapshot( static_cast<unsigned int>( length + 1 ) );
+	if ( snapshot.Ptr() == NULL ) {
+		idLib::Error( "idParser::GetStringFromMarker: snapshot allocation failed" );
+		return;
+	}
+	memcpy( snapshot.Ptr(), start, length );
+	snapshot.Ptr()[length] = '\0';
+	if ( clean ) {
+		idParser temp( snapshot.Ptr(), parserLength, "temp", flags );
 		idToken token;
 		while ( temp.ReadToken ( &token ) ) {
 			out += token;
 		}
 	} else {
-		out = marker_p;
+		out = snapshot.Ptr();
 	}
-	
-	// restore the character we set to NULL
-	*p = save;		
 }
 
 /*
@@ -3121,6 +3194,7 @@ void idParser::FreeSource( bool keepDefines ) {
 	while( scriptstack ) {
 		script = scriptstack;
 		scriptstack = scriptstack->next;
+		InvalidateMarker( script );
 		delete script;
 	}
 	// free all the tokens
@@ -3211,7 +3285,7 @@ idParser::idParser() {
 	this->definehash = NULL;
 	this->defines = NULL;
 	this->tokens = NULL;
-	this->marker_p = NULL;
+	SetMarker();
 }
 
 /*
@@ -3229,7 +3303,7 @@ idParser::idParser( int flags ) {
 	this->definehash = NULL;
 	this->defines = NULL;
 	this->tokens = NULL;
-	this->marker_p = NULL;
+	SetMarker();
 }
 
 /*
@@ -3247,7 +3321,7 @@ idParser::idParser( const char *filename, int flags, bool OSPath ) {
 	this->definehash = NULL;
 	this->defines = NULL;
 	this->tokens = NULL;
-	this->marker_p = NULL;
+	SetMarker();
 	LoadFile( filename, OSPath );
 }
 
@@ -3266,7 +3340,7 @@ idParser::idParser( const char *ptr, int length, const char *name, int flags ) {
 	this->definehash = NULL;
 	this->defines = NULL;
 	this->tokens = NULL;
-	this->marker_p = NULL;
+	SetMarker();
 	LoadMemory( ptr, length, name );
 }
 

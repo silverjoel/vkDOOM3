@@ -173,6 +173,7 @@ idToken::ClearTokenWhiteSpace
 ================
 */
 void idToken::ClearTokenWhiteSpace() {
+	sourceId = 0;
 	whiteSpaceStart_p = NULL;
 	whiteSpaceEnd_p = NULL;
 	linesCrossed = 0;

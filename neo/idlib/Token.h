@@ -103,11 +103,12 @@ private:
 	const char *	whiteSpaceStart_p;					// start of white space before token, only used by idLexer
 	const char *	whiteSpaceEnd_p;					// end of white space before token, only used by idLexer
 	idToken *		next;								// next token in chain, only used by idParser
+	uint64			sourceId;						// identity of the source owning the whitespace pointers, or zero
 
 	void			AppendDirty( const char a );		// append character without adding trailing zero
 };
 
-ID_INLINE idToken::idToken() : type(), subtype(), line(), linesCrossed(), flags() {
+ID_INLINE idToken::idToken() : type(), subtype(), line(), linesCrossed(), flags(), sourceId( 0 ) {
 }
 
 ID_INLINE idToken::idToken( const idToken *token ) {

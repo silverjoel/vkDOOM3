@@ -193,11 +193,16 @@ private:
 	define_t **		definehash;					// hash chain with defines
 	indent_t *		indentstack;				// stack with indents
 	int				skip;						// > 0 if skipping conditional code
-	const char*		marker_p;
+	enum markerState_t { MARKER_UNSET, MARKER_VALID, MARKER_INVALID };
+	markerState_t	markerState;
+	uint64			markerSourceId;				// source load identity, invalidated before its lexer is deleted
+	size_t			markerOffset;				// offset into that source, never a borrowed raw marker pointer
 
 	static define_t *globaldefines;				// list with global defines added to every source loaded
 
 private:
+	void			InvalidateMarker( const idLexer *source );
+	bool			GetSourceOffset( const idLexer *source, const char *position, size_t &offset ) const;
 	void			PushIndent( int type, int skip );
 	void			PopIndent( int *type, int *skip );
 	void			PushScript( idLexer *script );
