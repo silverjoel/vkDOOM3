@@ -442,7 +442,13 @@ void idCommonLocal::ExecuteMapChange() {
 	if ( mapSpawnData.savegameFile ) {
 		fileSystem->BeginLevelLoad( currentMapName, NULL, 0 );
 	} else {
-		fileSystem->BeginLevelLoad( currentMapName, saveFile.GetDataPtr(), saveFile.GetAllocated() );
+		// Scratch storage uses the full reserve, not the save's logical length.
+		const size_t levelBufferSize = saveFile.GetAllocated();
+		if ( levelBufferSize > INT_MAX ) {
+			FatalError( "Level buffer exceeds the supported int capacity" );
+			return;
+		}
+		fileSystem->BeginLevelLoad( currentMapName, saveFile.GetDataPtr(), static_cast<int>( levelBufferSize ) );
 	}
 
 	// capture the current screen and start a wipe

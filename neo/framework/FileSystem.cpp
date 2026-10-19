@@ -2326,8 +2326,12 @@ void idFileSystemLocal::CreateCRCsForResourceFileList( const idFileList & list )
 		// Read in the table
 		currentFile->Seek( tableOffset, FS_SEEK_SET );
 
-		int numFileResources;
-		currentFile->ReadBig( numFileResources );
+		int numFileResources = 0;
+		if ( currentFile->ReadBig( numFileResources ) != sizeof( numFileResources ) ||
+			numFileResources < 0 || static_cast<size_t>( numFileResources ) > SIZE_MAX / sizeof( unsigned long ) ) {
+			idLib::Printf( "Invalid resource count, skipping %s.\n", list.GetFile( fileIndex ) );
+			continue;
+		}
 
 		idList< idResourceCacheEntry > cacheEntries;
 		cacheEntries.SetNum( numFileResources );
@@ -2344,8 +2348,18 @@ void idFileSystemLocal::CreateCRCsForResourceFileList( const idFileList & list )
 			innerFileCRCs[innerFileIndex] = CRC32_BlockChecksum( innerFileDataBegin, cacheEntries[innerFileIndex].length );
 		}
 
-		// Get the CRC for all the CRCs.
-		const unsigned long totalCRC = CRC32_BlockChecksum( innerFileCRCs.Ptr(), innerFileCRCs.Size() );
+		// Hash the same native CRC bytes in order, with one initialization/finalization.
+		unsigned long totalCRC;
+		CRC32_InitChecksum( totalCRC );
+		const byte *crcBytes = reinterpret_cast<const byte *>( innerFileCRCs.Ptr() );
+		size_t remaining = innerFileCRCs.Size();
+		while ( remaining != 0 ) {
+			const int chunkSize = static_cast<int>( Min( remaining, static_cast<size_t>( INT_MAX ) ) );
+			CRC32_UpdateChecksum( totalCRC, crcBytes, chunkSize );
+			crcBytes += chunkSize;
+			remaining -= chunkSize;
+		}
+		CRC32_FinishChecksum( totalCRC );
 
 		// Write the .crc file corresponding to the .resources file.
 		idStr crcFilename = list.GetFile( fileIndex );
