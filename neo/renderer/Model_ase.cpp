@@ -795,11 +795,16 @@ ASE_Parse
 */
 aseModel_t *ASE_Parse( const char *buffer, bool verbose ) {
 	memset( &ase, 0, sizeof( ase ) );
+	const size_t sourceLength = strlen( buffer );
+	if ( sourceLength > static_cast<size_t>( INT_MAX ) ) {
+		idLib::Error( "ASE_Parse: source length exceeds INT_MAX" );
+		return NULL;
+	}
 
 	ase.verbose = verbose;
 
 	ase.buffer = buffer;
-	ase.len = strlen( buffer );
+	ase.len = static_cast<int>( sourceLength );
 	ase.curpos = ase.buffer;
 	ase.currentObject = NULL;
 
@@ -851,8 +856,15 @@ aseModel_t *ASE_Load( const char *fileName ) {
 		return NULL;
 	}
 
-	ase = ASE_Parse( buf, false );
-	ase->timeStamp = timeStamp;
+	try {
+		ase = ASE_Parse( buf, false );
+	} catch ( ... ) {
+		fileSystem->FreeFile( buf );
+		throw;
+	}
+	if ( ase != NULL ) {
+		ase->timeStamp = timeStamp;
+	}
 
 	fileSystem->FreeFile( buf );
 
