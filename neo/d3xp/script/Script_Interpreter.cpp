@@ -614,6 +614,7 @@ void idInterpreter::EnterFunction( const function_t *func, bool clearStack ) {
 
 	localstackUsed += c;
 	localstackBase = localstackUsed - func->locals;
+	assert( 0 <= localstackBase && localstackBase <= localstackUsed && localstackUsed <= LOCALSTACK_SIZE );
 
 	if ( localstackUsed > maxLocalstackUsed ) {
 		maxLocalstackUsed = localstackUsed ;
@@ -703,6 +704,8 @@ void idInterpreter::CallEvent( const function_t *func, int argsize ) {
 	assert( func->eventdef );
 	evdef = func->eventdef;
 
+	assert( 0 <= localstackBase && localstackBase <= localstackUsed && localstackUsed <= LOCALSTACK_SIZE );
+	assert( argsize == type_object.Size() + func->parmTotal && argsize <= localstackUsed );
 	start = localstackUsed - argsize;
 	var.intPtr = ( int * )&localstack[ start ];
 	eventEntity = GetEntity( *var.entityNumberPtr );
@@ -748,6 +751,8 @@ void idInterpreter::CallEvent( const function_t *func, int argsize ) {
 
 	format = evdef->GetArgFormat();
 	for( j = 0, i = 0, pos = type_object.Size(); ( pos < argsize ) || ( format[ i ] != 0 ); i++ ) {
+		assert( i < evdef->GetNumArgs() && j < func->parmSize.Num() );
+		assert( pos <= argsize && func->parmSize[j] > 0 && func->parmSize[j] <= argsize - pos );
 		switch( format[ i ] ) {
 		case D_EVENT_INTEGER :
 			var.intPtr = ( int * )&localstack[ start + pos ];
@@ -795,6 +800,7 @@ void idInterpreter::CallEvent( const function_t *func, int argsize ) {
 
 		pos += func->parmSize[ j++ ];
 	}
+	assert( pos == argsize && j == func->parmSize.Num() );
 
 	popParms = argsize;
 	eventEntity->ProcessEventArgPtr( evdef, data );
@@ -875,10 +881,14 @@ void idInterpreter::CallSysEvent( const function_t *func, int argsize ) {
 	assert( func->eventdef );
 	evdef = func->eventdef;
 
+	assert( 0 <= localstackBase && localstackBase <= localstackUsed && localstackUsed <= LOCALSTACK_SIZE );
+	assert( argsize >= 0 && argsize == func->parmTotal && argsize <= localstackUsed );
 	start = localstackUsed - argsize;
 
 	format = evdef->GetArgFormat();
 	for( j = 0, i = 0, pos = 0; ( pos < argsize ) || ( format[ i ] != 0 ); i++ ) {
+		assert( i < evdef->GetNumArgs() && j < func->parmSize.Num() );
+		assert( pos <= argsize && func->parmSize[j] > 0 && func->parmSize[j] <= argsize - pos );
 		switch( format[ i ] ) {
 		case D_EVENT_INTEGER :
 			source.intPtr = ( int * )&localstack[ start + pos ];
@@ -926,6 +936,7 @@ void idInterpreter::CallSysEvent( const function_t *func, int argsize ) {
 
 		pos += func->parmSize[ j++ ];
 	}
+	assert( pos == argsize && j == func->parmSize.Num() );
 
 	popParms = argsize;
 	thread->ProcessEventArgPtr( evdef, data );
@@ -1688,6 +1699,8 @@ bool idInterpreter::Execute() {
 			break;
 
 		case OP_ADDRESS:
+			assert( st->c->Type() == ev_pointer && st->c->TypeDef()->Size() == sizeof( byte * ) );
+			assert( st->c->initialized != idVarDef::stackVariable || ( st->c->value.stackOffset >= 0 && st->c->value.stackOffset <= currentFunction->locals - type_pointer.Size() ) );
 			var_a = GetVariable( st->a );
 			var_c = GetVariable( st->c );
 			obj = GetScriptObject( *var_a.entityNumberPtr );

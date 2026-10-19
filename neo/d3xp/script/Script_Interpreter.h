@@ -123,12 +123,15 @@ idInterpreter::PopParms
 ====================
 */
 ID_INLINE void idInterpreter::PopParms( int numParms ) {
+	assert( numParms >= 0 );
+	assert( 0 <= localstackBase && localstackBase <= localstackUsed && localstackUsed <= LOCALSTACK_SIZE );
 	// pop our parms off the stack
 	if ( localstackUsed < numParms ) {
 		Error( "locals stack underflow\n" );
 	}
 
 	localstackUsed -= numParms;
+	assert( localstackBase <= localstackUsed );
 }
 
 /*

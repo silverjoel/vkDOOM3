@@ -1521,7 +1521,11 @@ idVarDef *idCompiler::GetExpression( int priority ) {
 				if ( ( statement.op >= OP_INDIRECT_F ) && ( statement.op < OP_ADDRESS ) ) {
 					statement.op = OP_ADDRESS;
 					type_pointer.SetPointerType( e->TypeDef() );
-					e->SetTypeDef( &type_pointer );
+					// The indirect result may only have four bytes reserved. Allocate
+					// native address storage instead of retagging that smaller slot.
+					e = gameLocal.program.FindFreeResultDef( &type_pointer, RESULT_STRING, scope, statement.a, statement.b );
+					e->numUsers = 1;
+					statement.c = e;
 				}
 			}
 
@@ -2167,6 +2171,7 @@ void idCompiler::ParseFunctionDef( idTypeDef *returnType, const char *name ) {
 		}
 		parm = gameLocal.program.AllocDef( type->GetParmType( i ), type->GetParmName( i ), def, false );
 	}
+	assert( func->locals == func->parmTotal );
 
 	oldscope = scope;
 	scope = def;
@@ -2332,7 +2337,10 @@ void idCompiler::ParseVariableDef( idTypeDef *type, const char *name ) {
 		}
 	} else if ( type->Inherits( &type_object ) ) {
 		if ( scope->Type() != ev_function ) {
-			def->SetObject( NULL );
+			// Script object references contain an entity identifier, not a pointer.
+			eval_t nullObject;
+			nullObject.entity = 0;
+			def->SetValue( nullObject, false );
 		}
 	}
 }
