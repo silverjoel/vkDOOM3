@@ -572,11 +572,10 @@ idDict::MatchPrefix
 */
 const idKeyValue *idDict::MatchPrefix( const char *prefix, const idKeyValue *lastMatch ) const {
 	int	i;
-	int len;
 	int start;
 
 	assert( prefix );
-	len = strlen( prefix );
+	const size_t len = strlen( prefix );
 
 	start = -1;
 	if ( lastMatch ) {
@@ -588,7 +587,11 @@ const idKeyValue *idDict::MatchPrefix( const char *prefix, const idKeyValue *las
 	}
 
 	for( i = start + 1; i < args.Num(); i++ ) {
-		if ( !args[i].GetKey().Icmpn( prefix, len ) ) {
+		// A matching prefix cannot exceed the key's int-backed length.
+		if ( len > static_cast<size_t>( args[i].GetKey().Length() ) ) {
+			continue;
+		}
+		if ( !args[i].GetKey().Icmpn( prefix, static_cast<int>( len ) ) ) {
 			return &args[i];
 		}
 	}

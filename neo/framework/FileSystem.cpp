@@ -1837,10 +1837,12 @@ int idFileSystemLocal::GetFileList( const char *relativePath, const idStrList &e
 		return 0;
 	}
 
-	int pathLength = strlen( relativePath );
-	if ( pathLength ) {
-		pathLength++;	// for the trailing '/'
+	const size_t prefixLength = strlen( relativePath );
+	// Leave room for the optional separator in the int-backed path contract.
+	if ( prefixLength > static_cast<size_t>( INT_MAX ) - 1 ) {
+		return list.Num();
 	}
+	const size_t resourcePathLength = prefixLength + ( prefixLength != 0 ? 1 : 0 );
 
 	idStrStatic< MAX_OSPATH > strippedName;
 	if ( resourceFiles.Num() > 0 ) {
@@ -1850,9 +1852,10 @@ int idFileSystemLocal::GetFileList( const char *relativePath, const idStrList &e
 				idResourceCacheEntry & rt = resourceFiles[ idx ]->cacheTable[ i ];
 				// if the name is not long anough to at least contain the path
 
-				if ( rt.filename.Length() <= pathLength ) {
+				if ( static_cast<size_t>( rt.filename.Length() ) <= resourcePathLength ) {
 					continue;
 				}
+				const int pathLength = static_cast<int>( resourcePathLength );
 
 				// check for a path match without the trailing '/'
 				if ( pathLength && idStr::Icmpn( rt.filename, relativePath, pathLength - 1 ) != 0 ) {
@@ -1860,7 +1863,7 @@ int idFileSystemLocal::GetFileList( const char *relativePath, const idStrList &e
 				}
  
 				// ensure we have a path, and not just a filename containing the path
-				if ( rt.filename[ pathLength ] == '\0' || rt.filename[pathLength - 1] != '/' ) {
+				if ( rt.filename[ pathLength ] == '\0' || ( pathLength != 0 && rt.filename[pathLength - 1] != '/' ) ) {
 					continue;
 				}
  
