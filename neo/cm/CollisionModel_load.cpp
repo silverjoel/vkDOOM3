@@ -49,6 +49,7 @@ If you have questions concerning this license or the applicable additional terms
 #pragma hdrstop
 #include "../framework/precompiled.h"
 #include "CollisionModel_local.h"
+#include "CollisionModel_cache.h"
 
 #define CMODEL_BINARYFILE_EXT	"bcmodel"
 
@@ -299,7 +300,7 @@ idCollisionModelManagerLocal::FreePolygon
 */
 void idCollisionModelManagerLocal::FreePolygon( cm_model_t *model, cm_polygon_t *poly ) {
 	model->numPolygons--;
-	model->polygonMemory -= sizeof( cm_polygon_t ) + ( poly->numEdges - 1 ) * sizeof( poly->edges[0] );
+	model->polygonMemory -= cmCache::PolygonSize( poly->numEdges );
 	if ( model->polygonBlock == NULL ) {
 		Mem_Free( poly );
 	}
@@ -312,7 +313,7 @@ idCollisionModelManagerLocal::FreeBrush
 */
 void idCollisionModelManagerLocal::FreeBrush( cm_model_t *model, cm_brush_t *brush ) {
 	model->numBrushes--;
-	model->brushMemory -= sizeof( cm_brush_t ) + ( brush->numPlanes - 1 ) * sizeof( brush->planes[0] );
+	model->brushMemory -= cmCache::BrushSize( brush->numPlanes );
 	if ( model->brushBlock == NULL ) {
 		Mem_Free( brush );
 	}
@@ -445,9 +446,11 @@ void idCollisionModelManagerLocal::FreeTrmModelStructure() {
 	}
 
 	for ( i = 0; i < MAX_TRACEMODEL_POLYS; i++ ) {
-		FreePolygon( models[MAX_SUBMODELS], trmPolygons[i]->p );
+		// These reusable buffers were allocated at maximum capacity; their active
+		// extents (including zero) no longer describe the allocation being freed.
+		Mem_Free( trmPolygons[i]->p );
 	}
-	FreeBrush( models[MAX_SUBMODELS], trmBrushes[0]->b );
+	Mem_Free( trmBrushes[0]->b );
 
 	models[MAX_SUBMODELS]->node->polygons = NULL;
 	models[MAX_SUBMODELS]->node->brushes = NULL;
@@ -660,20 +663,23 @@ idCollisionModelManagerLocal::AllocPolygon
 ================
 */
 cm_polygon_t *idCollisionModelManagerLocal::AllocPolygon( cm_model_t *model, int numEdges ) {
-	cm_polygon_t *poly;
-	int size;
-
-	size = sizeof( cm_polygon_t ) + ( numEdges - 1 ) * sizeof( poly->edges[0] );
-	model->numPolygons++;
-	model->polygonMemory += size;
-	if ( model->polygonBlock && model->polygonBlock->bytesRemaining >= size ) {
-		poly = (cm_polygon_t *) model->polygonBlock->next;
-		model->polygonBlock->next += size;
-		model->polygonBlock->bytesRemaining -= size;
-	} else {
-		poly = (cm_polygon_t *) Mem_ClearedAlloc( size, TAG_COLLISION );
+	try {
+		const int size = cmCache::PolygonSize( numEdges );
+		cmCache::Require( model->numPolygons < INT_MAX && model->polygonMemory <= INT_MAX - size, "collision accounting overflow" );
+		cm_polygon_t *poly;
+		if ( model->polygonBlock != NULL ) {
+			poly = static_cast<cm_polygon_t *>( cmCache::Take( model->polygonBlock->next, model->polygonBlock->bytesRemaining, size, alignof( cm_polygon_t ) ) );
+		} else {
+			poly = static_cast<cm_polygon_t *>( cmCache::Allocate( size ) );
+		}
+		model->numPolygons++;
+		model->polygonMemory += size;
+		return poly;
+	} catch ( const cmCache::failure &error ) {
+		// Source/trace-model construction has no recoverable allocation result.
+		idLib::FatalError( "AllocPolygon: %s", error.message );
+		return NULL;
 	}
-	return poly;
 }
 
 /*
@@ -682,20 +688,23 @@ idCollisionModelManagerLocal::AllocBrush
 ================
 */
 cm_brush_t *idCollisionModelManagerLocal::AllocBrush( cm_model_t *model, int numPlanes ) {
-	cm_brush_t *brush;
-	int size;
-
-	size = sizeof( cm_brush_t ) + ( numPlanes - 1 ) * sizeof( brush->planes[0] );
-	model->numBrushes++;
-	model->brushMemory += size;
-	if ( model->brushBlock && model->brushBlock->bytesRemaining >= size ) {
-		brush = (cm_brush_t *) model->brushBlock->next;
-		model->brushBlock->next += size;
-		model->brushBlock->bytesRemaining -= size;
-	} else {
-		brush = (cm_brush_t *) Mem_ClearedAlloc( size, TAG_COLLISION );
+	try {
+		const int size = cmCache::BrushSize( numPlanes );
+		cmCache::Require( model->numBrushes < INT_MAX && model->brushMemory <= INT_MAX - size, "collision accounting overflow" );
+		cm_brush_t *brush;
+		if ( model->brushBlock != NULL ) {
+			brush = static_cast<cm_brush_t *>( cmCache::Take( model->brushBlock->next, model->brushBlock->bytesRemaining, size, alignof( cm_brush_t ) ) );
+		} else {
+			brush = static_cast<cm_brush_t *>( cmCache::Allocate( size ) );
+		}
+		model->numBrushes++;
+		model->brushMemory += size;
+		return brush;
+	} catch ( const cmCache::failure &error ) {
+		// Source/trace-model construction has no recoverable allocation result.
+		idLib::FatalError( "AllocBrush: %s", error.message );
+		return NULL;
 	}
-	return brush;
 }
 
 /*
@@ -2976,156 +2985,25 @@ idCollisionModelManagerLocal::LoadBinaryModel
 */
 cm_model_t * idCollisionModelManagerLocal::LoadBinaryModelFromFile( idFile *file, ID_TIME_T sourceTimeStamp ) {
 
-	unsigned int magic = 0;
-	file->ReadBig( magic );
-	if ( magic != BCM_MAGIC ) {
-		return NULL;
-	}
-	ID_TIME_T storedTimeStamp = FILE_NOT_FOUND_TIMESTAMP;
-	file->ReadBig( storedTimeStamp );
-	if ( !fileSystem->InProductionMode() && storedTimeStamp != sourceTimeStamp ) {
-		return NULL;
-	}
-	cm_model_t * model = AllocModel();
-	file->ReadString( model->name );
-	file->ReadBig( model->bounds );
-	file->ReadBig( model->contents );
-	file->ReadBig( model->isConvex );
-	file->ReadBig( model->numVertices );
-	file->ReadBig( model->numEdges );
-	file->ReadBig( model->numPolygons );
-	file->ReadBig( model->numBrushes );
-	file->ReadBig( model->numNodes );
-	file->ReadBig( model->numBrushRefs );
-	file->ReadBig( model->numPolygonRefs );
-	file->ReadBig( model->numInternalEdges );
-	file->ReadBig( model->numSharpEdges );
-	file->ReadBig( model->numRemovedPolys );
-	file->ReadBig( model->numMergedPolys );
-
-	model->maxVertices = model->numVertices;
-	model->vertices = (cm_vertex_t *) Mem_ClearedAlloc( model->maxVertices * sizeof(cm_vertex_t), TAG_COLLISION );
-	for ( int i = 0; i < model->numVertices; i++ ) {
-		file->ReadBig( model->vertices[i].p );
-		file->ReadBig( model->vertices[i].checkcount );
-		file->ReadBig( model->vertices[i].side );
-		file->ReadBig( model->vertices[i].sideSet );
-	}
-
-	model->maxEdges = model->numEdges;
-	model->edges = (cm_edge_t *) Mem_ClearedAlloc( model->maxEdges * sizeof(cm_edge_t), TAG_COLLISION );
-	for ( int i = 0; i < model->numEdges; i++ ) {
-		file->ReadBig( model->edges[i].checkcount );
-		file->ReadBig( model->edges[i].internal );
-		file->ReadBig( model->edges[i].numUsers );
-		file->ReadBig( model->edges[i].side );
-		file->ReadBig( model->edges[i].sideSet );
-		file->ReadBig( model->edges[i].vertexNum[0] );
-		file->ReadBig( model->edges[i].vertexNum[1] );
-		file->ReadBig( model->edges[i].normal );
-	}
-
-	file->ReadBig( model->polygonMemory );
-	model->polygonBlock = (cm_polygonBlock_t *) Mem_ClearedAlloc( sizeof( cm_polygonBlock_t ) + model->polygonMemory, TAG_COLLISION );
-	model->polygonBlock->bytesRemaining = model->polygonMemory;
-	model->polygonBlock->next = ( (byte *) model->polygonBlock ) + sizeof( cm_polygonBlock_t );
-
-	file->ReadBig( model->brushMemory );
-	model->brushBlock = (cm_brushBlock_t *) Mem_ClearedAlloc( sizeof( cm_brushBlock_t ) + model->brushMemory, TAG_COLLISION );
-	model->brushBlock->bytesRemaining = model->brushMemory;
-	model->brushBlock->next = ( (byte *) model->brushBlock ) + sizeof( cm_brushBlock_t );
-
-	int numMaterials = 0;
-	file->ReadBig( numMaterials );
-
-	idList< const idMaterial * > materials;
-	materials.SetNum( numMaterials );
-	idStr materialName;
-	for ( int i = 0; i < materials.Num(); i++ ) {
-		file->ReadString( materialName );
-		if ( materialName.IsEmpty() ) {
-			materials[i] = NULL;
-		} else {
-			materials[i] = declManager->FindMaterial( materialName );
+	try {
+		cmCache::reader input( file );
+		unsigned int magic; input.Big( magic );
+		if ( magic != BCM_MAGIC ) { return NULL; }
+		ID_TIME_T storedTimeStamp; input.Big( storedTimeStamp );
+		if ( !fileSystem->InProductionMode() && storedTimeStamp != sourceTimeStamp ) { return NULL; }
+		cmCache::decoded data;
+		cmCache::Decode( input, data );
+		cmCache::array<const idMaterial *> materials;
+		for ( size_t i = 0; i < data.materials.size(); i++ ) {
+			materials.push_back( data.materials[i].empty() ? NULL : declManager->FindMaterial( data.materials[i].c_str() ) );
 		}
+		return cmCache::Build( data, materials );
+	} catch ( const cmCache::failure &error ) {
+		idLib::Warning( "Invalid collision cache %s: %s", file->GetName(), error.message );
+	} catch ( const std::bad_alloc & ) {
+		idLib::Warning( "Insufficient memory loading collision cache %s", file->GetName() );
 	}
-	idList< cm_polygon_t * > polys;
-	idList< cm_brush_t * > brushes;
-	polys.SetNum( model->numPolygons );
-	brushes.SetNum( model->numBrushes );
-	for ( int i = 0; i < polys.Num(); i++ ) {
-		int materialIndex = 0;
-		file->ReadBig( materialIndex );
-		int numEdges = 0;
-		file->ReadBig( numEdges );
-		polys[i] = AllocPolygon( model, numEdges );
-		polys[i]->numEdges = numEdges;
-		polys[i]->material = materials[materialIndex];
-		file->ReadBig( polys[i]->bounds );
-		file->ReadBig( polys[i]->checkcount );
-		file->ReadBig( polys[i]->contents );
-		file->ReadBig( polys[i]->plane );
-		file->ReadBigArray( polys[i]->edges, polys[i]->numEdges );
-	}
-	for ( int i = 0; i < brushes.Num(); i++ ) {
-		int materialIndex = 0;
-		file->ReadBig( materialIndex );
-		int numPlanes = 0;
-		file->ReadBig( numPlanes );
-		brushes[i] = AllocBrush( model, numPlanes );
-		brushes[i]->numPlanes = numPlanes;
-		brushes[i]->material = materials[materialIndex];
-		file->ReadBig( brushes[i]->checkcount );
-		file->ReadBig( brushes[i]->bounds );
-		file->ReadBig( brushes[i]->contents );
-		file->ReadBig( brushes[i]->primitiveNum );
-		file->ReadBigArray( brushes[i]->planes, brushes[i]->numPlanes );
-	}
-	struct local {
-		static void ReadNodeTree( idFile * file, cm_model_t * model, cm_node_t * node, idList< cm_polygon_t * > & polys, idList< cm_brush_t * > & brushes ) {
-			file->ReadBig( node->planeType );
-			file->ReadBig( node->planeDist );
-			int i = 0;
-			while ( file->ReadBig( i ) == sizeof( i ) && ( i >= 0 ) ) {
-				cm_polygonRef_t * pref = collisionModelManagerLocal.AllocPolygonReference( model, model->numPolygonRefs );
-				pref->p = polys[i];
-				pref->next = node->polygons;
-				node->polygons = pref;
-			}
-			while ( file->ReadBig( i ) == sizeof( i ) && ( i >= 0 ) ) {
-				cm_brushRef_t * bref = collisionModelManagerLocal.AllocBrushReference( model, model->numBrushRefs );
-				bref->b = brushes[i];
-				bref->next = node->brushes;
-				node->brushes = bref;
-			}
-			if ( node->planeType != -1 ) {
-				node->children[0] = collisionModelManagerLocal.AllocNode( model, model->numNodes );
-				node->children[1] = collisionModelManagerLocal.AllocNode( model, model->numNodes );
-				node->children[0]->parent = node;
-				node->children[1]->parent = node;
-				ReadNodeTree( file, model, node->children[0], polys, brushes );
-				ReadNodeTree( file, model, node->children[1], polys, brushes );
-			}
-		}
-	};
-	model->node = AllocNode( model, model->numNodes + 1 );
-	local::ReadNodeTree( file, model, model->node, polys, brushes );
-
-	// We should have only allocated a single block, and used every entry in the block
-	// assert( model->nodeBlocks != NULL && model->nodeBlocks->next == NULL && model->nodeBlocks->nextNode == NULL );
-	assert( model->brushRefBlocks == NULL || ( model->brushRefBlocks->next == NULL && model->brushRefBlocks->nextRef == NULL ) );
-	assert( model->polygonRefBlocks == NULL || ( model->polygonRefBlocks->next == NULL && model->polygonRefBlocks->nextRef == NULL ) );
-	assert( model->polygonBlock->bytesRemaining == 0 );
-	assert( model->brushBlock->bytesRemaining == 0 );
-
-	model->usedMemory = model->numVertices * sizeof(cm_vertex_t) +
-		model->numEdges * sizeof(cm_edge_t) +
-		model->polygonMemory +
-		model->brushMemory +
-		model->numNodes * sizeof(cm_node_t) +
-		model->numPolygonRefs * sizeof(cm_polygonRef_t) +
-		model->numBrushRefs * sizeof(cm_brushRef_t);
-	return model;
+	return NULL;
 }
 
 /*
@@ -3138,7 +3016,13 @@ cm_model_t * idCollisionModelManagerLocal::LoadBinaryModel( const char *fileName
 	if ( file == NULL ) {
 		return NULL;
 	}
-	return LoadBinaryModelFromFile( file, sourceTimeStamp );
+	cm_model_t *model = LoadBinaryModelFromFile( file, sourceTimeStamp );
+	if ( model != NULL && file->Tell() != file->Length() ) {
+		FreeModel( model );
+		idLib::Warning( "Trailing data in collision cache %s", fileName );
+		return NULL;
+	}
+	return model;
 }
 
 /*
@@ -3181,8 +3065,10 @@ void idCollisionModelManagerLocal::WriteBinaryModelToFile( cm_model_t *model, id
 		file->WriteBig( model->edges[i].vertexNum[1] );
 		file->WriteBig( model->edges[i].normal );
 	}
-	file->WriteBig( model->polygonMemory );
-	file->WriteBig( model->brushMemory );
+	checkCount++;
+	file->WriteBig( CountPolygonMemory( model->node ) );
+	checkCount++;
+	file->WriteBig( CountBrushMemory( model->node ) );
 	struct local {
 		static void BuildUniqueLists( cm_node_t * node, idList< cm_polygon_t * > & polys, idList< cm_brush_t * > & brushes ) {
 			for ( cm_polygonRef_t * pr = node->polygons; pr != NULL; pr = pr->next ) {

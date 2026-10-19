@@ -38,6 +38,7 @@ If you have questions concerning this license or the applicable additional terms
 #pragma hdrstop
 #include "../framework/precompiled.h"
 #include "CollisionModel_local.h"
+#include "CollisionModel_cache.h"
 
 #define CM_FILE_EXT			"cm"
 #define CM_BINARYFILE_EXT	"bcm"
@@ -76,6 +77,7 @@ idCollisionModelManagerLocal::CountPolygonMemory
 ================
 */
 int idCollisionModelManagerLocal::CountPolygonMemory( cm_node_t *node ) const {
+	// Compatibility hint only: original 56-byte header plus 4 bytes per edge.
 	cm_polygonRef_t *pref;
 	cm_polygon_t *p;
 	int memory;
@@ -88,11 +90,11 @@ int idCollisionModelManagerLocal::CountPolygonMemory( cm_node_t *node ) const {
 		}
 		p->checkcount = checkCount;
 
-		memory += sizeof( cm_polygon_t ) + ( p->numEdges - 1 ) * sizeof( p->edges[0] );
+		memory = cmCache::IntSize( cmCache::Add( memory, cmCache::Add( 56, cmCache::Multiply( p->numEdges, 4 ) ) ) );
 	}
 	if ( node->planeType != -1 ) {
-		memory += CountPolygonMemory( node->children[0] );
-		memory += CountPolygonMemory( node->children[1] );
+		memory = cmCache::IntSize( cmCache::Add( memory, CountPolygonMemory( node->children[0] ) ) );
+		memory = cmCache::IntSize( cmCache::Add( memory, CountPolygonMemory( node->children[1] ) ) );
 	}
 	return memory;
 }
@@ -134,6 +136,7 @@ idCollisionModelManagerLocal::CountBrushMemory
 ================
 */
 int idCollisionModelManagerLocal::CountBrushMemory( cm_node_t *node ) const {
+	// Compatibility hint only: original 44-byte header plus 16 bytes per plane.
 	cm_brushRef_t *bref;
 	cm_brush_t *b;
 	int memory;
@@ -146,11 +149,11 @@ int idCollisionModelManagerLocal::CountBrushMemory( cm_node_t *node ) const {
 		}
 		b->checkcount = checkCount;
 
-		memory += sizeof( cm_brush_t ) + ( b->numPlanes - 1 ) * sizeof( b->planes[0] );
+		memory = cmCache::IntSize( cmCache::Add( memory, cmCache::Add( 44, cmCache::Multiply( b->numPlanes, 16 ) ) ) );
 	}
 	if ( node->planeType != -1 ) {
-		memory += CountBrushMemory( node->children[0] );
-		memory += CountBrushMemory( node->children[1] );
+		memory = cmCache::IntSize( cmCache::Add( memory, CountBrushMemory( node->children[0] ) ) );
+		memory = cmCache::IntSize( cmCache::Add( memory, CountBrushMemory( node->children[1] ) ) );
 	}
 	return memory;
 }
@@ -399,9 +402,9 @@ void idCollisionModelManagerLocal::ParsePolygons( idLexer *src, cm_model_t *mode
 	idToken token;
 
 	if ( src->CheckTokenType( TT_NUMBER, 0, &token ) ) {
-		model->polygonBlock = (cm_polygonBlock_t *) Mem_ClearedAlloc( sizeof( cm_polygonBlock_t ) + token.GetIntValue(), TAG_COLLISION );
-		model->polygonBlock->bytesRemaining = token.GetIntValue();
-		model->polygonBlock->next = ( (byte *) model->polygonBlock ) + sizeof( cm_polygonBlock_t );
+		// Consume the legacy allocation hint. Text generation uses individually
+		// owned native objects; its historical budget cannot size an x64 arena.
+		if ( token.GetIntValue() < 0 ) { src->Error( "Negative collision allocation hint" ); return; }
 	}
 
 	src->ExpectTokenString( "{" );
@@ -442,9 +445,9 @@ void idCollisionModelManagerLocal::ParseBrushes( idLexer *src, cm_model_t *model
 	idToken token;
 
 	if ( src->CheckTokenType( TT_NUMBER, 0, &token ) ) {
-		model->brushBlock = (cm_brushBlock_t *) Mem_ClearedAlloc( sizeof( cm_brushBlock_t ) + token.GetIntValue(), TAG_COLLISION );
-		model->brushBlock->bytesRemaining = token.GetIntValue();
-		model->brushBlock->next = ( (byte *) model->brushBlock ) + sizeof( cm_brushBlock_t );
+		// Consume the legacy allocation hint. Text generation uses individually
+		// owned native objects; its historical budget cannot size an x64 arena.
+		if ( token.GetIntValue() < 0 ) { src->Error( "Negative collision allocation hint" ); return; }
 	}
 
 	src->ExpectTokenString( "{" );
@@ -575,21 +578,32 @@ bool idCollisionModelManagerLocal::LoadCollisionModelFile( const char *name, uns
 	bool loaded = false;
 	idFileLocal file( fileSystem->OpenFileReadMemory( generatedFileName ) );
 	if ( file != NULL ) {
-		int numEntries = 0;
-		file->ReadBig( numEntries );
-		file->ReadString( mapName );
-		file->ReadBig( crc );
-		idStrStatic< 32 > fileID;
-		idStrStatic< 32 > fileVersion;
-		file->ReadString( fileID );
-		file->ReadString( fileVersion );
-		if ( fileID == CM_FILEID && fileVersion == CM_FILEVERSION && crc == mapFileCRC && numEntries > 0 ) {
-			for ( int i = 0; i < numEntries; i++ ) {
-				cm_model_t *model = LoadBinaryModelFromFile( file, currentTimeStamp );
-				models[ numModels ] = model;
-				numModels++;
+		const int initialModels = numModels;
+		try {
+			cmCache::reader input( file );
+			const int numEntries = input.Integer();
+			const cmCache::string cachedMapName = input.String();
+			input.Big( crc );
+			const cmCache::string fileID = input.String();
+			const cmCache::string fileVersion = input.String();
+			cmCache::Require( numEntries > 0 && numEntries <= MAX_SUBMODELS - numModels, "invalid model count" );
+			if ( fileID == CM_FILEID && fileVersion == CM_FILEVERSION && crc == mapFileCRC ) {
+				for ( int i = 0; i < numEntries; i++ ) {
+					cm_model_t *model = LoadBinaryModelFromFile( file, currentTimeStamp );
+					cmCache::Require( model != NULL, "invalid model in collision cache" );
+					models[numModels++] = model;
+				}
+				cmCache::Require( input.Remaining() == 0, "trailing collision cache data" );
+				mapName = cachedMapName.c_str();
+				loaded = true;
 			}
-			loaded = true;
+		} catch ( const cmCache::failure &error ) {
+			idLib::Warning( "Invalid collision cache %s: %s", generatedFileName.c_str(), error.message );
+		} catch ( const std::bad_alloc & ) {
+			idLib::Warning( "Insufficient memory loading %s", generatedFileName.c_str() );
+		}
+		if ( !loaded ) {
+			while ( numModels > initialModels ) { FreeModel( models[--numModels] ); models[numModels] = NULL; }
 		}
 	}
 
