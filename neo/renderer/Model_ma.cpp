@@ -78,7 +78,15 @@ bool MA_ParseHeaderIndex(maAttribHeader_t* header, int& minIndex, int& maxIndex,
 	idParser miniParse;
 	idToken token;
 
-	miniParse.LoadMemory(header->name, strlen(header->name), headerType);
+	size_t nameLength = 0;
+	while ( nameLength < sizeof( header->name ) && header->name[nameLength] != '\0' ) {
+		++nameLength;
+	}
+	if ( nameLength == sizeof( header->name ) ) {
+		throw idException( va( "Maya Loader '%s': Unterminated attribute name", headerType ) );
+	}
+	// The fixed attribute field bounds the length to at most 127 bytes.
+	miniParse.LoadMemory(header->name, static_cast<int>( nameLength ), headerType);
 	if(skipString) {
 		miniParse.SkipUntilString(skipString);
 	}
@@ -103,15 +111,29 @@ bool MA_ParseAttribHeader(idParser &parser, maAttribHeader_t* header) {
 
 	memset(header, 0, sizeof(maAttribHeader_t));
 
-	parser.ReadToken(&token);
+	if ( !parser.ReadToken( &token ) ) {
+		throw idException( va( "Maya Loader '%s': Missing attribute name", parser.GetFileName() ) );
+	}
 	if(!token.Icmp("-")) {
-		parser.ReadToken(&token);
+		if ( !parser.ReadToken( &token ) ) {
+			throw idException( va( "Maya Loader '%s': Missing attribute name", parser.GetFileName() ) );
+		}
 		if (!token.Icmp("s")) {
 			header->size = parser.ParseInt();
-			parser.ReadToken(&token);
+			if ( !parser.ReadToken( &token ) ) {
+				throw idException( va( "Maya Loader '%s': Missing attribute name", parser.GetFileName() ) );
+			}
 		}
 	}
-	strcpy(header->name, token.c_str());
+	const char *name = token.c_str();
+	size_t nameLength = 0;
+	while ( nameLength < sizeof( header->name ) && name[nameLength] != '\0' ) {
+		++nameLength;
+	}
+	if ( nameLength == sizeof( header->name ) ) {
+		throw idException( va( "Maya Loader '%s': Attribute name exceeds fixed capacity", parser.GetFileName() ) );
+	}
+	memcpy( header->name, name, nameLength + 1 );
 	return true;
 }
 
