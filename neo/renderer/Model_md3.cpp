@@ -32,7 +32,10 @@ If you have questions concerning this license or the applicable additional terms
 #include "RenderSystem_local.h"
 #include "Model_local.h"
 #include "Model_md3.h"
+#include <cmath>
+#include <memory>
 
+void R_FreeStaticTriSurf( srfTriangles_t *tri );
 srfTriangles_t *	R_AllocStaticTriSurf();
 void				R_AllocStaticTriSurfVerts( srfTriangles_t *tri, int numVerts );
 void				R_AllocStaticTriSurfIndexes( srfTriangles_t *tri, int numIndexes );
@@ -44,331 +47,406 @@ void				R_BoundTriSurf( srfTriangles_t *tri );
 
 ***********************************************************************/
 
-#define	LL(x) x=LittleLong(x)
+// File records stay little-endian bytes. Only these private descriptors contain
+// host-order metadata and native material pointers.
+struct md3Range_t {
+	size_t offset;
+	size_t bytes;
+};
 
-/*
-=================
-idRenderModelMD3::InitFromFile
-=================
-*/
-void idRenderModelMD3::InitFromFile( const char *fileName ) {
-	int					i, j;
-	md3Header_t			*pinmodel;
-    md3Frame_t			*frame;
-	md3Surface_t		*surf;
-	md3Shader_t			*shader;
-	md3Triangle_t		*tri;
-	md3St_t				*st;
-	md3XyzNormal_t		*xyz;
-	md3Tag_t			*tag;
-	void				*buffer;
-	int					version;
-	int					size;
+struct md3RuntimeSurface_s {
+	md3Surface_t header;
+	size_t offset;
+	md3Range_t shaders, triangles, texCoords, vertexes;
+	const idMaterial **materials;
+	int materialCount;
+};
 
+struct md3RuntimeData_s {
+	md3Header_t header;
+	byte *bytes;
+	md3RuntimeSurface_s surfaces[MD3_MAX_SURFACES];
+};
 
-	name = fileName;
+static_assert( sizeof( md3Header_t ) == 108 && sizeof( md3Surface_t ) == 108, "MD3 headers" );
+static_assert( sizeof( md3Frame_t ) == 56 && sizeof( md3Tag_t ) == 112, "MD3 frame/tag records" );
+static_assert( sizeof( md3Triangle_t ) == 12 && sizeof( md3St_t ) == 8 && sizeof( md3XyzNormal_t ) == 8, "MD3 geometry records" );
 
-	size = fileSystem->ReadFile( fileName, &buffer, NULL );
-	if (!size || size<0 ) {
-		return;
-	}
-
-	pinmodel = (md3Header_t *)buffer;
-
-	version = LittleLong (pinmodel->version);
-	if (version != MD3_VERSION) {
-		fileSystem->FreeFile( buffer );
-		idLib::Warning( "InitFromFile: %s has wrong version (%i should be %i)",
-				 fileName, version, MD3_VERSION);
-		return;
-	}
-
-	size = LittleLong(pinmodel->ofsEnd);
-	dataSize += size;
-	md3 = (md3Header_t *)Mem_Alloc( size, TAG_MODEL );
-
-	memcpy (md3, buffer, LittleLong(pinmodel->ofsEnd) );
-
-    LL(md3->ident);
-    LL(md3->version);
-    LL(md3->numFrames);
-    LL(md3->numTags);
-    LL(md3->numSurfaces);
-    LL(md3->ofsFrames);
-    LL(md3->ofsTags);
-    LL(md3->ofsSurfaces);
-    LL(md3->ofsEnd);
-
-	if ( md3->numFrames < 1 ) {
-		idLib::Warning( "InitFromFile: %s has no frames", fileName );
-		fileSystem->FreeFile( buffer );
-		return;
-	}
-    
-	// swap all the frames
-    frame = (md3Frame_t *) ( (byte *)md3 + md3->ofsFrames );
-    for ( i = 0 ; i < md3->numFrames ; i++, frame++) {
-    	frame->radius = LittleFloat( frame->radius );
-        for ( j = 0 ; j < 3 ; j++ ) {
-            frame->bounds[0][j] = LittleFloat( frame->bounds[0][j] );
-            frame->bounds[1][j] = LittleFloat( frame->bounds[1][j] );
-	    	frame->localOrigin[j] = LittleFloat( frame->localOrigin[j] );
-        }
-	}
-
-	// swap all the tags
-    tag = (md3Tag_t *) ( (byte *)md3 + md3->ofsTags );
-    for ( i = 0 ; i < md3->numTags * md3->numFrames ; i++, tag++) {
-        for ( j = 0 ; j < 3 ; j++ ) {
-			tag->origin[j] = LittleFloat( tag->origin[j] );
-			tag->axis[0][j] = LittleFloat( tag->axis[0][j] );
-			tag->axis[1][j] = LittleFloat( tag->axis[1][j] );
-			tag->axis[2][j] = LittleFloat( tag->axis[2][j] );
-        }
-	}
-
-	// swap all the surfaces
-	surf = (md3Surface_t *) ( (byte *)md3 + md3->ofsSurfaces );
-	for ( i = 0 ; i < md3->numSurfaces ; i++) {
-
-        LL(surf->ident);
-        LL(surf->flags);
-        LL(surf->numFrames);
-        LL(surf->numShaders);
-        LL(surf->numTriangles);
-        LL(surf->ofsTriangles);
-        LL(surf->numVerts);
-        LL(surf->ofsShaders);
-        LL(surf->ofsSt);
-        LL(surf->ofsXyzNormals);
-        LL(surf->ofsEnd);
-		
-		if ( surf->numVerts > SHADER_MAX_VERTEXES ) {
-			idLib::Error( "InitFromFile: %s has more than %i verts on a surface (%i)",
-				fileName, SHADER_MAX_VERTEXES, surf->numVerts );
+static void MD3_Free( md3RuntimeData_s *data ) {
+	if ( data != NULL ) {
+		for ( int i = 0; i < MD3_MAX_SURFACES; ++i ) {
+			Mem_Free( data->surfaces[i].materials );
 		}
-		if ( surf->numTriangles*3 > SHADER_MAX_INDEXES ) {
-			idLib::Error( "InitFromFile: %s has more than %i triangles on a surface (%i)",
-				fileName, SHADER_MAX_INDEXES / 3, surf->numTriangles );
-		}
-	
-		// change to surface identifier
-		surf->ident = 0;	//SF_MD3;
-
-		// lowercase the surface name so skin compares are faster
-		int slen = (int)strlen( surf->name );
-		for( j = 0; j < slen; j++ ) {
-			surf->name[j] = tolower( surf->name[j] );
-		}
-
-		// strip off a trailing _1 or _2
-		// this is a crutch for q3data being a mess
-		j = strlen( surf->name );
-		if ( j > 2 && surf->name[j-2] == '_' ) {
-			surf->name[j-2] = 0;
-		}
-
-        // register the shaders
-        shader = (md3Shader_t *) ( (byte *)surf + surf->ofsShaders );
-        for ( j = 0 ; j < surf->numShaders ; j++, shader++ ) {
-            const idMaterial *sh;
-
-            sh = declManager->FindMaterial( shader->name );
-			shader->shader = sh;
-        }
-
-		// swap all the triangles
-		tri = (md3Triangle_t *) ( (byte *)surf + surf->ofsTriangles );
-		for ( j = 0 ; j < surf->numTriangles ; j++, tri++ ) {
-			LL(tri->indexes[0]);
-			LL(tri->indexes[1]);
-			LL(tri->indexes[2]);
-		}
-
-		// swap all the ST
-        st = (md3St_t *) ( (byte *)surf + surf->ofsSt );
-        for ( j = 0 ; j < surf->numVerts ; j++, st++ ) {
-            st->st[0] = LittleFloat( st->st[0] );
-            st->st[1] = LittleFloat( st->st[1] );
-        }
-
-		// swap all the XyzNormals
-        xyz = (md3XyzNormal_t *) ( (byte *)surf + surf->ofsXyzNormals );
-        for ( j = 0 ; j < surf->numVerts * surf->numFrames ; j++, xyz++ ) 
-		{
-            xyz->xyz[0] = LittleShort( xyz->xyz[0] );
-            xyz->xyz[1] = LittleShort( xyz->xyz[1] );
-            xyz->xyz[2] = LittleShort( xyz->xyz[2] );
-
-            xyz->normal = LittleShort( xyz->normal );
-        }
-
-
-		// find the next surface
-		surf = (md3Surface_t *)( (byte *)surf + surf->ofsEnd );
+		Mem_Free( data->bytes );
+		Mem_Free( data );
 	}
-    
-	fileSystem->FreeFile( buffer );
 }
 
-/*
-=================
-idRenderModelMD3::IsDynamicModel
-=================
-*/
+class md3LoadOwner_t {
+public:
+	md3LoadOwner_t() : data( NULL ) {}
+	~md3LoadOwner_t() { MD3_Free( data ); }
+	md3RuntimeData_s *data;
+private:
+	md3LoadOwner_t( const md3LoadOwner_t & );
+	md3LoadOwner_t &operator=( const md3LoadOwner_t & );
+};
+
+static void MD3_Require( bool valid, const char *message ) {
+	if ( !valid ) {
+		throw idException( message );
+	}
+}
+
+// Validate by subtraction/division before either multiplication or pointer formation.
+static md3Range_t MD3_Range( size_t extent, int offset, size_t count, size_t width, size_t firstPayload ) {
+	MD3_Require( offset >= 0, "negative record offset" );
+	const size_t start = static_cast<size_t>( offset );
+	MD3_Require( width != 0 && start <= extent, "record offset outside extent" );
+	MD3_Require( count <= ( extent - start ) / width, "truncated record array" );
+	MD3_Require( count == 0 || start >= firstPayload, "record overlaps header" );
+	md3Range_t range = { start, count * width };
+	return range;
+}
+
+static size_t MD3_Product( size_t a, size_t b ) {
+	MD3_Require( b == 0 || a <= SIZE_MAX / b, "record count overflow" );
+	return a * b;
+}
+
+static bool MD3_Overlap( const md3Range_t &a, const md3Range_t &b ) {
+	return a.bytes != 0 && b.bytes != 0 && a.offset < b.offset + b.bytes && b.offset < a.offset + a.bytes;
+}
+
+// Call only with a previously admitted record. memcpy also supports unaligned files.
+template< typename T > static T MD3_Record( const byte *bytes, size_t offset ) {
+	T record;
+	memcpy( &record, bytes + offset, sizeof( record ) );
+	return record;
+}
+
+static size_t MD3_NameLength( const char *text, size_t capacity ) {
+	size_t length = 0;
+	while ( length < capacity && text[length] != '\0' ) {
+		++length;
+	}
+	MD3_Require( length < capacity, "unterminated MD3 name" );
+	return length;
+}
+
+static void MD3_DecodeHeader( md3Header_t &h ) {
+	h.ident = LittleLong( h.ident );
+	h.version = LittleLong( h.version );
+	h.flags = LittleLong( h.flags );
+	h.numFrames = LittleLong( h.numFrames );
+	h.numTags = LittleLong( h.numTags );
+	h.numSurfaces = LittleLong( h.numSurfaces );
+	h.numSkins = LittleLong( h.numSkins );
+	h.ofsFrames = LittleLong( h.ofsFrames );
+	h.ofsTags = LittleLong( h.ofsTags );
+	h.ofsSurfaces = LittleLong( h.ofsSurfaces );
+	h.ofsEnd = LittleLong( h.ofsEnd );
+}
+
+static void MD3_DecodeSurface( md3Surface_t &s ) {
+	s.ident = LittleLong( s.ident );
+	s.flags = LittleLong( s.flags );
+	s.numFrames = LittleLong( s.numFrames );
+	s.numShaders = LittleLong( s.numShaders );
+	s.numVerts = LittleLong( s.numVerts );
+	s.numTriangles = LittleLong( s.numTriangles );
+	s.ofsTriangles = LittleLong( s.ofsTriangles );
+	s.ofsShaders = LittleLong( s.ofsShaders );
+	s.ofsSt = LittleLong( s.ofsSt );
+	s.ofsXyzNormals = LittleLong( s.ofsXyzNormals );
+	s.ofsEnd = LittleLong( s.ofsEnd );
+}
+
+static void MD3_ValidateHeader( const md3Header_t &h ) {
+	MD3_Require( h.numFrames >= 1 && h.numFrames <= MD3_MAX_FRAMES, "invalid frame count" );
+	MD3_Require( h.numTags >= 0 && h.numTags <= MD3_MAX_TAGS, "invalid tag count" );
+	MD3_Require( h.numSurfaces >= 0 && h.numSurfaces <= MD3_MAX_SURFACES, "invalid surface count" );
+	MD3_Require( h.numSkins >= 0, "negative skin count" );
+	const size_t extent = static_cast<size_t>( h.ofsEnd );
+	const md3Range_t frames = MD3_Range( extent, h.ofsFrames, h.numFrames, sizeof( md3Frame_t ), sizeof( h ) );
+	const md3Range_t tags = MD3_Range( extent, h.ofsTags, MD3_Product( h.numFrames, h.numTags ), sizeof( md3Tag_t ), sizeof( h ) );
+	MD3_Require( !MD3_Overlap( frames, tags ), "overlapping frame/tag arrays" );
+	MD3_Range( extent, h.ofsSurfaces, h.numSurfaces != 0 ? 1 : 0, sizeof( md3Surface_t ), sizeof( h ) );
+}
+
+static void MD3_Validate( md3RuntimeData_s &data ) {
+	const md3Header_t &h = data.header;
+	const size_t extent = static_cast<size_t>( h.ofsEnd );
+	const md3Range_t frames = MD3_Range( extent, h.ofsFrames, h.numFrames, sizeof( md3Frame_t ), sizeof( h ) );
+	const md3Range_t tags = MD3_Range( extent, h.ofsTags, MD3_Product( h.numFrames, h.numTags ), sizeof( md3Tag_t ), sizeof( h ) );
+	size_t cursor = static_cast<size_t>( h.ofsSurfaces );
+	for ( int i = 0; i < h.numSurfaces; ++i ) {
+		MD3_Require( cursor <= extent && sizeof( md3Surface_t ) <= extent - cursor, "truncated surface header" );
+		md3RuntimeSurface_s &surface = data.surfaces[i];
+		surface.offset = cursor;
+		surface.header = MD3_Record<md3Surface_t>( data.bytes, cursor );
+		md3Surface_t &s = surface.header;
+		MD3_DecodeSurface( s );
+		MD3_Require( s.ident == MD3_IDENT, "invalid surface identifier" );
+		MD3_Require( s.ofsEnd >= static_cast<int>( sizeof( s ) ) && static_cast<size_t>( s.ofsEnd ) <= extent - cursor, "invalid surface extent" );
+		const md3Range_t wholeSurface = { cursor, static_cast<size_t>( s.ofsEnd ) };
+		MD3_Require( !MD3_Overlap( wholeSurface, frames ) && !MD3_Overlap( wholeSurface, tags ), "surface overlaps frames/tags" );
+		MD3_Require( s.numFrames == h.numFrames, "surface frame count mismatch" );
+		MD3_Require( s.numShaders >= 0 && s.numShaders <= MD3_MAX_SHADERS, "invalid shader count" );
+		MD3_Require( s.numVerts >= 0 && s.numVerts <= SHADER_MAX_VERTEXES, "invalid vertex count" );
+		MD3_Require( s.numTriangles >= 0 && s.numTriangles <= SHADER_MAX_INDEXES / 3, "invalid triangle count" );
+		surface.shaders = MD3_Range( s.ofsEnd, s.ofsShaders, s.numShaders, sizeof( md3DiskShader_t ), sizeof( s ) );
+		surface.triangles = MD3_Range( s.ofsEnd, s.ofsTriangles, s.numTriangles, sizeof( md3Triangle_t ), sizeof( s ) );
+		surface.texCoords = MD3_Range( s.ofsEnd, s.ofsSt, s.numVerts, sizeof( md3St_t ), sizeof( s ) );
+		surface.vertexes = MD3_Range( s.ofsEnd, s.ofsXyzNormals, MD3_Product( s.numFrames, s.numVerts ), sizeof( md3XyzNormal_t ), sizeof( s ) );
+		const md3Range_t ranges[] = { surface.shaders, surface.triangles, surface.texCoords, surface.vertexes };
+		for ( int a = 0; a < 4; ++a ) {
+			for ( int b = 0; b < a; ++b ) {
+				MD3_Require( !MD3_Overlap( ranges[a], ranges[b] ), "overlapping surface records" );
+			}
+		}
+		const size_t nameLength = MD3_NameLength( s.name, sizeof( s.name ) );
+		for ( size_t j = 0; j < nameLength; ++j ) {
+			s.name[j] = static_cast<char>( tolower( static_cast<unsigned char>( s.name[j] ) ) );
+		}
+		// Preserve the original rule: any final _X suffix, not just _1 and _2.
+		if ( nameLength > 2 && s.name[nameLength - 2] == '_' ) {
+			s.name[nameLength - 2] = '\0';
+		}
+		for ( int j = 0; j < s.numShaders; ++j ) {
+			const md3DiskShader_t shader = MD3_Record<md3DiskShader_t>( data.bytes, cursor + surface.shaders.offset + static_cast<size_t>( j ) * sizeof( md3DiskShader_t ) );
+			MD3_NameLength( shader.name, sizeof( shader.name ) );
+		}
+		for ( int j = 0; j < s.numTriangles; ++j ) {
+			const md3Triangle_t tri = MD3_Record<md3Triangle_t>( data.bytes, cursor + surface.triangles.offset + static_cast<size_t>( j ) * sizeof( md3Triangle_t ) );
+			for ( int k = 0; k < 3; ++k ) {
+				const int vertex = LittleLong( tri.indexes[k] );
+				MD3_Require( vertex >= 0 && vertex < s.numVerts, "triangle index outside vertex array" );
+			}
+		}
+		cursor += wholeSurface.bytes;
+	}
+}
+
+idRenderModelMD3::idRenderModelMD3() : index( 0 ), dataSize( 0 ), md3( NULL ), numLods( 0 ) {
+	purged = true;
+}
+
+idRenderModelMD3::~idRenderModelMD3() {
+	PurgeModel();
+}
+
+void idRenderModelMD3::PurgeModel() {
+	MD3_Free( md3 );
+	md3 = NULL;
+	dataSize = 0;
+	numLods = 0;
+	timeStamp = 0;
+	idRenderModelStatic::PurgeModel();
+}
+
+void idRenderModelMD3::InitFromFile( const char *fileName ) {
+	name = fileName;
+	PurgeModel();
+	// A failed attempt is a defined defaulted model, not a partially loaded blob.
+	defaulted = true;
+	purged = false;
+	md3LoadOwner_t pending;
+	try {
+		idFileLocal file( fileSystem->OpenFileRead( name ) );
+		MD3_Require( file != NULL, "file not found" );
+		const int fileLength = file->Length();
+		MD3_Require( fileLength >= static_cast<int>( sizeof( md3Header_t ) ), "truncated model header" );
+		md3Header_t diskHeader;
+		MD3_Require( file->Read( &diskHeader, sizeof( diskHeader ) ) == sizeof( diskHeader ), "short header read" );
+		md3Header_t header = diskHeader;
+		MD3_DecodeHeader( header );
+		MD3_Require( header.ident == MD3_IDENT, "invalid MD3 identifier" );
+		MD3_Require( header.version == MD3_VERSION, "invalid MD3 version" );
+		MD3_Require( header.ofsEnd >= static_cast<int>( sizeof( header ) ) && header.ofsEnd <= fileLength, "invalid model extent" );
+		MD3_ValidateHeader( header );
+		pending.data = static_cast<md3RuntimeData_s *>( Mem_Alloc( sizeof( md3RuntimeData_s ), TAG_MODEL ) );
+		MD3_Require( pending.data != NULL, "runtime allocation failed" );
+		memset( pending.data, 0, sizeof( *pending.data ) );
+		pending.data->header = header;
+		pending.data->bytes = static_cast<byte *>( Mem_Alloc( static_cast<size_t>( header.ofsEnd ), TAG_MODEL ) );
+		MD3_Require( pending.data->bytes != NULL, "model allocation failed" );
+		memcpy( pending.data->bytes, &diskHeader, sizeof( diskHeader ) );
+		const int remaining = header.ofsEnd - static_cast<int>( sizeof( diskHeader ) );
+		MD3_Require( file->Read( pending.data->bytes + sizeof( diskHeader ), remaining ) == remaining, "short model read" );
+		MD3_Validate( *pending.data );
+		// All binary records and names are admitted before material lookup begins.
+		for ( int i = 0; i < header.numSurfaces; ++i ) {
+			md3RuntimeSurface_s &s = pending.data->surfaces[i];
+			if ( s.header.numShaders == 0 ) {
+				continue;
+			}
+			const size_t materialBytes = MD3_Product( static_cast<size_t>( s.header.numShaders ), sizeof( *s.materials ) );
+			s.materials = static_cast<const idMaterial **>( Mem_Alloc( materialBytes, TAG_MODEL ) );
+			MD3_Require( s.materials != NULL, "material reference allocation failed" );
+			for ( int j = 0; j < s.header.numShaders; ++j ) {
+				const md3DiskShader_t shader = MD3_Record<md3DiskShader_t>( pending.data->bytes, s.offset + s.shaders.offset + static_cast<size_t>( j ) * sizeof( md3DiskShader_t ) );
+				s.materials[j] = declManager->FindMaterial( shader.name );
+				MD3_Require( s.materials[j] != NULL, "material lookup failed" );
+				++s.materialCount;
+			}
+		}
+		timeStamp = file->Timestamp();
+		md3 = pending.data;
+		pending.data = NULL;
+		dataSize = header.ofsEnd;
+		numLods = 1;
+		defaulted = false;
+	} catch ( idException &e ) {
+		idLib::Warning( "InitFromFile: %s: %s", name.c_str(), e.GetError() );
+	}
+}
+
+void idRenderModelMD3::TouchData() {
+	if ( md3 == NULL || purged ) {
+		return;
+	}
+	for ( int i = 0; i < md3->header.numSurfaces; ++i ) {
+		const md3RuntimeSurface_s &s = md3->surfaces[i];
+		if ( s.materialCount != s.header.numShaders || ( s.materialCount != 0 && s.materials == NULL ) ) {
+			return;
+		}
+		for ( int j = 0; j < s.materialCount; ++j ) {
+			if ( s.materials[j] != NULL ) {
+				declManager->FindMaterial( s.materials[j]->GetName() );
+			}
+		}
+	}
+}
+
 dynamicModel_t idRenderModelMD3::IsDynamicModel() const {
 	return DM_CACHED;
 }
 
-/*
-=================
-idRenderModelMD3::LerpMeshVertexes
-=================
-*/
-void idRenderModelMD3::LerpMeshVertexes ( srfTriangles_t *tri, const struct md3Surface_s *surf, const float backlerp, const int frame, const int oldframe ) const {
-	short	*oldXyz, *newXyz;
-	float	oldXyzScale, newXyzScale;
-	int		vertNum;
-	int		numVerts;
-
-	newXyz = (short *)((byte *)surf + surf->ofsXyzNormals) + (frame * surf->numVerts * 4);
-
-	newXyzScale = MD3_XYZ_SCALE * (1.0 - backlerp);
-
-	numVerts = surf->numVerts;
-
-	if ( backlerp == 0 ) {
-		//
-		// just copy the vertexes
-		//
-		for (vertNum=0 ; vertNum < numVerts ; vertNum++, newXyz += 4 ) {
-
-			idDrawVert *outvert = &tri->verts[tri->numVerts];
-
-			outvert->xyz.x = newXyz[0] * newXyzScale;
-			outvert->xyz.y = newXyz[1] * newXyzScale;
-			outvert->xyz.z = newXyz[2] * newXyzScale;
-
-			tri->numVerts++;
-		}
-	} else {
-		//
-		// interpolate and copy the vertexes
-		//
-		oldXyz = (short *)((byte *)surf + surf->ofsXyzNormals) + (oldframe * surf->numVerts * 4);
-
-		oldXyzScale = MD3_XYZ_SCALE * backlerp;
-
-		for (vertNum=0 ; vertNum < numVerts ; vertNum++, oldXyz += 4, newXyz += 4 ) {
-
-			idDrawVert *outvert = &tri->verts[tri->numVerts];
-
-			// interpolate the xyz
-			outvert->xyz.x = oldXyz[0] * oldXyzScale + newXyz[0] * newXyzScale;
-			outvert->xyz.y = oldXyz[1] * oldXyzScale + newXyz[1] * newXyzScale;
-			outvert->xyz.z = oldXyz[2] * oldXyzScale + newXyz[2] * newXyzScale;
-
-			tri->numVerts++;
-		}
-   	}
+static bool MD3_FrameIndex( float value, int frameCount, int &result ) {
+	if ( !std::isfinite( value ) ) {
+		return false;
+	}
+	const double truncated = std::trunc( static_cast<double>( value ) );
+	if ( truncated < 0 || truncated >= frameCount ) {
+		return false;
+	}
+	result = static_cast<int>( truncated );
+	return true;
 }
 
-/*
-=============
-idRenderModelMD3::InstantiateDynamicModel
-=============
-*/
+bool idRenderModelMD3::LerpMeshVertexes( srfTriangles_t *tri, const md3RuntimeSurface_s &surface, const float backlerp, const int frame, const int oldframe ) const {
+	if ( md3 == NULL || frame < 0 || frame >= surface.header.numFrames ||
+		oldframe < 0 || oldframe >= surface.header.numFrames || !std::isfinite( backlerp ) ) {
+		return false;
+	}
+	const size_t frameBytes = static_cast<size_t>( surface.header.numVerts ) * sizeof( md3XyzNormal_t );
+	const size_t start = surface.offset + surface.vertexes.offset;
+	const size_t newOffset = start + static_cast<size_t>( frame ) * frameBytes;
+	const size_t oldOffset = start + static_cast<size_t>( oldframe ) * frameBytes;
+	const float newScale = MD3_XYZ_SCALE * ( 1.0 - backlerp );
+	const float oldScale = MD3_XYZ_SCALE * backlerp;
+	for ( int i = 0; i < surface.header.numVerts; ++i ) {
+		const size_t offset = static_cast<size_t>( i ) * sizeof( md3XyzNormal_t );
+		const md3XyzNormal_t current = MD3_Record<md3XyzNormal_t>( md3->bytes, newOffset + offset );
+		idDrawVert &out = tri->verts[tri->numVerts++];
+		if ( backlerp == 0 ) {
+			for ( int axis = 0; axis < 3; ++axis ) {
+				out.xyz[axis] = LittleShort( current.xyz[axis] ) * newScale;
+			}
+		} else {
+			const md3XyzNormal_t previous = MD3_Record<md3XyzNormal_t>( md3->bytes, oldOffset + offset );
+			for ( int axis = 0; axis < 3; ++axis ) {
+				out.xyz[axis] = LittleShort( previous.xyz[axis] ) * oldScale + LittleShort( current.xyz[axis] ) * newScale;
+			}
+		}
+	}
+	return true;
+}
+
 idRenderModel *idRenderModelMD3::InstantiateDynamicModel( const renderEntity_t *ent, const viewDef_t *view, idRenderModel *cachedModel ) {
-	int				i, j;
-	float			backlerp;
-	int *			triangles;
-	int				indexes;
-	int				numVerts;
-	md3Surface_t *	surface;
-	int				frame, oldframe;
-	idRenderModelStatic	*staticModel;
-
-	if ( cachedModel ) {
-		delete cachedModel;
-		cachedModel = NULL;
+	delete cachedModel;
+	if ( md3 == NULL || purged || ent == NULL ) {
+		return NULL;
 	}
-
-	staticModel = new (TAG_MODEL) idRenderModelStatic;
-	staticModel->bounds.Clear();
-
-	surface = (md3Surface_t *) ((byte *)md3 + md3->ofsSurfaces);
-
-	// TODO: these need set by an entity
-	frame = ent->shaderParms[SHADERPARM_MD3_FRAME];			// probably want to keep frames < 1000 or so
-	oldframe = ent->shaderParms[SHADERPARM_MD3_LASTFRAME];
-	backlerp = ent->shaderParms[SHADERPARM_MD3_BACKLERP];
-
-	for( i = 0; i < md3->numSurfaces; i++ ) {
-
-		srfTriangles_t *tri = R_AllocStaticTriSurf();
-		R_AllocStaticTriSurfVerts( tri, surface->numVerts );
-		R_AllocStaticTriSurfIndexes( tri, surface->numTriangles * 3 );
-		tri->bounds.Clear();
-
-		modelSurface_t	surf;
-
-		surf.geometry = tri;
-
-		md3Shader_t* shaders = (md3Shader_t *) ((byte *)surface + surface->ofsShaders);
-		surf.shader = shaders->shader;
-
-		LerpMeshVertexes( tri, surface, backlerp, frame, oldframe );
-
-		triangles = (int *) ((byte *)surface + surface->ofsTriangles);
-		indexes = surface->numTriangles * 3;
-		for (j = 0 ; j < indexes ; j++) {
-			tri->indexes[j] = triangles[j];
-		}
-		tri->numIndexes += indexes;
-
-		const idVec2 * texCoords = (idVec2 *) ((byte *)surface + surface->ofsSt);
-
-		numVerts = surface->numVerts;
-		for ( j = 0; j < numVerts; j++ ) {
-			tri->verts[j].SetTexCoord( texCoords[j] );
-		}
-
-		R_BoundTriSurf( tri );
-
-		staticModel->AddSurface( surf );
-		staticModel->bounds.AddPoint( surf.geometry->bounds[0] );
-		staticModel->bounds.AddPoint( surf.geometry->bounds[1] );
-
-		// find the next surface
-		surface = (md3Surface_t *)( (byte *)surface + surface->ofsEnd );
+	int frame, oldframe;
+	const float backlerp = ent->shaderParms[SHADERPARM_MD3_BACKLERP];
+	if ( !MD3_FrameIndex( ent->shaderParms[SHADERPARM_MD3_FRAME], md3->header.numFrames, frame ) ||
+		!MD3_FrameIndex( ent->shaderParms[SHADERPARM_MD3_LASTFRAME], md3->header.numFrames, oldframe ) || !std::isfinite( backlerp ) ) {
+		idLib::Warning( "InstantiateDynamicModel: %s: invalid MD3 animation parameters", name.c_str() );
+		return NULL;
 	}
-
-	return staticModel;
+	for ( int i = 0; i < md3->header.numSurfaces; ++i ) {
+		const md3RuntimeSurface_s &s = md3->surfaces[i];
+		if ( s.materialCount != s.header.numShaders || ( s.materialCount > 0 && ( s.materials == NULL || s.materials[0] == NULL ) ) ||
+			( s.materialCount == 0 && tr.defaultMaterial == NULL ) ) {
+			idLib::Warning( "InstantiateDynamicModel: %s: missing MD3 material reference", name.c_str() );
+			return NULL;
+		}
+	}
+	// Own the snapshot and any not-yet-attached surface during allocation failures.
+	void *snapshotStorage = Mem_Alloc( sizeof( idRenderModelStatic ), TAG_MODEL );
+	if ( snapshotStorage == NULL ) {
+		idLib::Warning( "InstantiateDynamicModel: %s: MD3 snapshot allocation failed", name.c_str() );
+		return NULL;
+	}
+	std::unique_ptr<idRenderModelStatic> snapshot( new (snapshotStorage) idRenderModelStatic );
+	snapshot->bounds.Clear();
+	for ( int i = 0; i < md3->header.numSurfaces; ++i ) {
+		const md3RuntimeSurface_s &s = md3->surfaces[i];
+		if ( s.header.numVerts == 0 ) {
+			continue;
+		}
+		srfTriangles_t *allocated = static_cast<srfTriangles_t *>( Mem_Alloc( sizeof( srfTriangles_t ), TAG_SRFTRIS ) );
+		if ( allocated == NULL ) {
+			idLib::Warning( "InstantiateDynamicModel: %s: MD3 surface allocation failed", name.c_str() );
+			return NULL;
+		}
+		memset( allocated, 0, sizeof( *allocated ) );
+		std::unique_ptr<srfTriangles_t, void (*)( srfTriangles_t * )> tri( allocated, R_FreeStaticTriSurf );
+		R_AllocStaticTriSurfVerts( tri.get(), s.header.numVerts );
+		const int indexes = s.header.numTriangles * 3; // admitted <= SHADER_MAX_INDEXES
+		R_AllocStaticTriSurfIndexes( tri.get(), indexes );
+		if ( tri->verts == NULL || ( indexes != 0 && tri->indexes == NULL ) ) {
+			idLib::Warning( "InstantiateDynamicModel: %s: MD3 geometry allocation failed", name.c_str() );
+			return NULL;
+		}
+		if ( !LerpMeshVertexes( tri.get(), s, backlerp, frame, oldframe ) ) {
+			return NULL;
+		}
+		for ( int j = 0; j < s.header.numTriangles; ++j ) {
+			const md3Triangle_t diskTri = MD3_Record<md3Triangle_t>( md3->bytes, s.offset + s.triangles.offset + static_cast<size_t>( j ) * sizeof( md3Triangle_t ) );
+			for ( int k = 0; k < 3; ++k ) {
+				tri->indexes[j * 3 + k] = LittleLong( diskTri.indexes[k] );
+			}
+		}
+		tri->numIndexes = indexes;
+		for ( int j = 0; j < s.header.numVerts; ++j ) {
+			const md3St_t st = MD3_Record<md3St_t>( md3->bytes, s.offset + s.texCoords.offset + static_cast<size_t>( j ) * sizeof( md3St_t ) );
+			tri->verts[j].SetTexCoord( idVec2( LittleFloat( st.st[0] ), LittleFloat( st.st[1] ) ) );
+		}
+		R_BoundTriSurf( tri.get() );
+		modelSurface_t output = {};
+		output.id = i;
+		output.geometry = tri.get();
+		output.shader = s.materialCount != 0 ? s.materials[0] : tr.defaultMaterial;
+		snapshot->AddSurface( output );
+		tri.release();
+	}
+	return snapshot.release();
 }
-
-/*
-=====================
-idRenderModelMD3::Bounds
-=====================
-*/
 
 idBounds idRenderModelMD3::Bounds( const renderEntity_t *ent ) const {
-	idBounds		ret;
-
-	ret.Clear();
-
-	if (!ent || !md3) {
-		// just give it the editor bounds
-		ret.AddPoint(idVec3(-10,-10,-10));
-		ret.AddPoint(idVec3( 10, 10, 10));
-		return ret;
+	idBounds result;
+	result.Clear();
+	if ( ent == NULL || md3 == NULL || purged ) {
+		result.AddPoint( idVec3( -10, -10, -10 ) );
+		result.AddPoint( idVec3( 10, 10, 10 ) );
+		return result;
 	}
-
-	md3Frame_t	*frame = (md3Frame_t *)( (byte *)md3 + md3->ofsFrames );
-
-	ret.AddPoint( frame->bounds[0] );
-	ret.AddPoint( frame->bounds[1] );
-
-	return ret;
+	const md3Frame_t frame = MD3_Record<md3Frame_t>( md3->bytes, static_cast<size_t>( md3->header.ofsFrames ) );
+	for ( int i = 0; i < 2; ++i ) {
+		result.AddPoint( idVec3( LittleFloat( frame.bounds[i][0] ), LittleFloat( frame.bounds[i][1] ), LittleFloat( frame.bounds[i][2] ) ) );
+	}
+	return result;
 }
-

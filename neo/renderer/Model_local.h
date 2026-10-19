@@ -219,12 +219,16 @@ private:
 ===============================================================================
 */
 
-struct md3Header_s;
-struct md3Surface_s;
+struct md3RuntimeData_s;
+struct md3RuntimeSurface_s;
 
 class idRenderModelMD3 : public idRenderModelStatic {
 public:
+								idRenderModelMD3();
+	virtual						~idRenderModelMD3();
 	virtual void				InitFromFile( const char *fileName );
+	virtual void				PurgeModel();
+	virtual void				TouchData();
 	virtual bool				SupportsBinaryModel() { return false; }
 	virtual dynamicModel_t		IsDynamicModel() const;
 	virtual idRenderModel *		InstantiateDynamicModel( const struct renderEntity_t *ent, const viewDef_t *view, idRenderModel *cachedModel );
@@ -233,10 +237,10 @@ public:
 private:
 	int							index;			// model = tr.models[model->index]
 	int							dataSize;		// just for listing purposes
-	struct md3Header_s *		md3;			// only if type == MOD_MESH
+	struct md3RuntimeData_s *	md3;			// owned bytes and native material references
 	int							numLods;
 
-	void						LerpMeshVertexes( srfTriangles_t *tri, const struct md3Surface_s *surf, const float backlerp, const int frame, const int oldframe ) const;
+	bool						LerpMeshVertexes( srfTriangles_t *tri, const struct md3RuntimeSurface_s &surface, const float backlerp, const int frame, const int oldframe ) const;
 };
 
 /*

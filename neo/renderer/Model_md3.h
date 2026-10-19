@@ -77,7 +77,7 @@ typedef struct md3Tag_s {
 **
 ** CHUNK			SIZE
 ** header			sizeof( md3Surface_t )
-** shaders			sizeof( md3Shader_t ) * numShaders
+** shaders			sizeof( md3DiskShader_t ) * numShaders
 ** triangles[0]		sizeof( md3Triangle_t ) * numTriangles
 ** st				sizeof( md3St_t ) * numVerts
 ** XyzNormals		sizeof( md3XyzNormal_t ) * numVerts * numFrames
@@ -106,8 +106,11 @@ typedef struct md3Surface_s {
 
 typedef struct {
 	char				name[MAX_MD3PATH];
-	const idMaterial *	shader;			// for in-game use
-} md3Shader_t;
+	int32				shaderIndex;	// fixed disk field, never a native pointer
+} md3DiskShader_t;
+
+static_assert( sizeof( md3DiskShader_t ) == 68, "MD3 disk shader stride" );
+static_assert( offsetof( md3DiskShader_t, shaderIndex ) == 64, "MD3 disk shader index offset" );
 
 typedef struct {
 	int			indexes[3];
