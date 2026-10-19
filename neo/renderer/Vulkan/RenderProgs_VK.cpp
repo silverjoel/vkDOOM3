@@ -769,6 +769,40 @@ void idRenderProgManager::BindProgram( int index ) {
 	RENDERLOG_PRINTF( "Binding SPIRV Program %s\n", m_renderProgs[ index ].name.c_str() );
 }
 
+// Keep arithmetic wide until the complete reference fits the int-backed buffer API.
+static bool GetParmBlockSize( VkDeviceSize numParms, VkDeviceSize alignment, VkDeviceSize maxRange, VkDeviceSize & bytes ) {
+	const VkDeviceSize maxSize = ~VkDeviceSize( 0 );
+	if ( numParms == 0 || numParms > maxSize / sizeof( idVec4 ) ||
+		alignment == 0 || ( alignment & ( alignment - 1 ) ) != 0 ) {
+		return false;
+	}
+	const VkDeviceSize payload = numParms * sizeof( idVec4 );
+	const VkDeviceSize mask = alignment - 1;
+	if ( payload > maxSize - mask ) {
+		return false;
+	}
+	const VkDeviceSize alignedBytes = ( payload + mask ) & ~mask;
+	if ( alignedBytes > INT_MAX || alignedBytes > maxRange ) {
+		return false;
+	}
+	bytes = alignedBytes;
+	return true;
+}
+
+static bool GetParmBlockRange( VkDeviceSize bytes, VkDeviceSize alignment, int offset, int capacity, int & refSize, int & nextOffset ) {
+	if ( bytes == 0 || bytes > INT_MAX || alignment == 0 || ( alignment & ( alignment - 1 ) ) != 0 ||
+		offset < 0 || capacity <= 0 || offset > capacity ) {
+		return false;
+	}
+	const VkDeviceSize start = static_cast< VkDeviceSize >( offset );
+	if ( start % alignment != 0 || bytes % alignment != 0 || bytes > static_cast< VkDeviceSize >( capacity ) - start ) {
+		return false;
+	}
+	refSize = static_cast< int >( bytes );
+	nextOffset = static_cast< int >( start + bytes );
+	return true;
+}
+
 /*
 ========================
 idRenderProgManager::AllocParmBlockBuffer
@@ -776,9 +810,28 @@ idRenderProgManager::AllocParmBlockBuffer
 */
 void idRenderProgManager::AllocParmBlockBuffer( const idList< int > & parmIndices, idUniformBuffer & ubo ) {
 	const int numParms = parmIndices.Num();
-	const int bytes = ALIGN( numParms * sizeof( idVec4 ), vkcontext.gpu.props.limits.minUniformBufferOffsetAlignment );
+	if ( numParms == 0 ) {
+		return; // CommitCurrent does not request references for empty parameter lists.
+	}
+	const VkPhysicalDeviceLimits & limits = vkcontext.gpu.props.limits;
+	idUniformBuffer * backing = m_parmBuffers[ m_currentData ];
+	VkDeviceSize alignedBytes = 0;
+	int bytes = 0;
+	int nextOffset = 0;
+	// Init creates owning, dynamic buffers with base offset zero. Do not accept a
+	// nested reference: Reference adds the backing offset using signed int arithmetic.
+	if ( numParms < 0 || backing == NULL || backing->GetOffset() != 0 ||
+		!GetParmBlockSize( static_cast< VkDeviceSize >( numParms ), limits.minUniformBufferOffsetAlignment, limits.maxUniformBufferRange, alignedBytes ) ||
+		!GetParmBlockRange( alignedBytes, limits.minUniformBufferOffsetAlignment, m_currentParmBufferOffset, backing->GetSize(), bytes, nextOffset ) ) {
+		idLib::FatalError( "idRenderProgManager::AllocParmBlockBuffer: invalid or exhausted uniform buffer range" );
+	}
+	for ( int i = 0; i < numParms; ++i ) {
+		if ( parmIndices[ i ] < 0 || parmIndices[ i ] >= RENDERPARM_TOTAL ) {
+			idLib::FatalError( "idRenderProgManager::AllocParmBlockBuffer: invalid uniform index" );
+		}
+	}
 
-	ubo.Reference( *m_parmBuffers[ m_currentData ], m_currentParmBufferOffset, bytes );
+	ubo.Reference( *backing, m_currentParmBufferOffset, bytes );
 
 	idVec4 * uniforms = (idVec4 *)ubo.MapBuffer( BM_WRITE );
 	
@@ -788,7 +841,7 @@ void idRenderProgManager::AllocParmBlockBuffer( const idList< int > & parmIndice
 
 	ubo.UnmapBuffer();
 
-	m_currentParmBufferOffset += bytes;
+	m_currentParmBufferOffset = nextOffset;
 }
 
 /*
@@ -1017,7 +1070,9 @@ void idRenderProgManager::LoadShader( shader_t & shader ) {
 		src.ExpectTokenString( "[" );
 
 		while ( !src.CheckTokenString( "]" ) ) {
-			src.ReadToken( &token );
+			if ( !src.ReadToken( &token ) ) {
+				idLib::FatalError( "idRenderProgManager::LoadShader: unterminated uniforms in %s", layoutPath.c_str() );
+			}
 
 			int index = -1;
 			for ( int i = 0; i < RENDERPARM_TOTAL && index == -1; ++i ) {
@@ -1030,6 +1085,14 @@ void idRenderProgManager::LoadShader( shader_t & shader ) {
 				idLib::Error( "Invalid uniform %s", token.c_str() );
 			}
 
+			// Duplicates are legal; RENDERPARM_TOTAL does not bound this list's length.
+			VkDeviceSize bytes = 0;
+			const VkPhysicalDeviceLimits & limits = vkcontext.gpu.props.limits;
+			const VkDeviceSize capacity = VkDeviceSize( MAX_DESC_SETS ) * MAX_DESC_SET_UNIFORMS * sizeof( idVec4 );
+			if ( !GetParmBlockSize( static_cast< VkDeviceSize >( shader.parmIndices.Num() ) + 1,
+				limits.minUniformBufferOffsetAlignment, limits.maxUniformBufferRange, bytes ) || bytes > capacity ) {
+				idLib::FatalError( "idRenderProgManager::LoadShader: uniform block too large in %s", layoutPath.c_str() );
+			}
 			shader.parmIndices.Append( static_cast< renderParm_t >( index ) );
 		}
 	}
