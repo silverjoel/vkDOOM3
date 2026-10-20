@@ -251,24 +251,61 @@ idClipModel::RestoreTraceModels
 void idClipModel::RestoreTraceModels( idRestoreGame *savefile ) {
 	int i, num;
 
+	// The map's default model is not restored with the serialized entity objects.
+	idClipModel *defaultModel = gameLocal.clip.DefaultClipModel();
+	const int defaultIndex = defaultModel->traceModelIndex;
+	const int realDefaultIndex = defaultIndex & ~TRACE_MODEL_SAVED;
+	if ( defaultIndex < 0 || !( defaultIndex & TRACE_MODEL_SAVED ) ||
+		realDefaultIndex >= traceModelCache.Num() || !traceModelCache[realDefaultIndex] ||
+		traceModelCache[realDefaultIndex]->refCount <= 0 ) {
+		defaultModel->traceModelIndex = -1; // Do not release an invalid reference during error cleanup.
+		savefile->Error( "RestoreTraceModels: invalid default clip model reference" );
+		return;
+	}
+	const idTraceModel defaultTraceModel = traceModelCache[realDefaultIndex]->trm;
+	// Discard the old registration before destroying its cache. Do not free this
+	// identifier against the replacement cache through LoadModel().
+	defaultModel->traceModelIndex = -1;
 	ClearTraceModelCache();
 
 	savefile->ReadInt( num );
+	if ( num < 0 || num > TRACE_MODEL_SAVED ) {
+		savefile->Error( "RestoreTraceModels: invalid trace model count" );
+		return;
+	}
 	traceModelCache.SetNum( num );
+	for ( i = 0; i < num; i++ ) {
+		traceModelCache[i] = NULL;
+	}
 
 	for ( i = 0; i < num; i++ ) {
 		trmCache_t *entry = new (TAG_PHYSICS_CLIP) trmCache_t;
+		entry->refCount = 0;
+		traceModelCache[i] = entry; // Keep partial restoration safe to clean up.
 		
 		savefile->ReadTraceModel( entry->trm );
 
 		savefile->ReadFloat( entry->volume );
 		savefile->ReadVec3( entry->centerOfMass );
 		savefile->ReadMat3( entry->inertiaTensor );
-		entry->refCount = 0;
-
-		traceModelCache[i] = entry;
 		traceModelHash.Add( GetTraceModelHashKey( entry->trm ), i );
 	}
+
+	// Match geometry, not the old numeric index: saved entry order can differ
+	// from the new map's initial cache. All restored reference counts are zero.
+	const int hashKey = GetTraceModelHashKey( defaultTraceModel );
+	for ( i = traceModelHash.First( hashKey ); i >= 0; i = traceModelHash.Next( i ) ) {
+		if ( traceModelCache[i]->trm == defaultTraceModel ) {
+			if ( traceModelCache[i]->refCount != 0 ) {
+				savefile->Error( "RestoreTraceModels: invalid restored default reference count" );
+				return;
+			}
+			traceModelCache[i]->refCount = 1;
+			defaultModel->traceModelIndex = i | TRACE_MODEL_SAVED;
+			return;
+		}
+	}
+	savefile->Error( "RestoreTraceModels: default clip model missing from saved cache" );
 }
 
 
