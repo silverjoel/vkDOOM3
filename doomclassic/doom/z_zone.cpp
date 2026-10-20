@@ -28,6 +28,9 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "Precompiled.h"
 
+#include <cstddef>
+#include <limits.h>
+
 #include "z_zone.h"
 #include "i_system.h"
 #include "doomdef.h"
@@ -47,6 +50,41 @@ If you have questions concerning this license or the applicable additional terms
  
 #define ZONEID	0x1d4a11
 
+// Current Classic Doom payloads have fundamental alignment (eight on Win64).
+static const size_t ZONE_ALIGNMENT = alignof( std::max_align_t );
+static_assert( ( ZONE_ALIGNMENT & ( ZONE_ALIGNMENT - 1 ) ) == 0, "zone alignment must be a power of two" );
+static_assert( ZONE_ALIGNMENT >= alignof( memblock_t ) && ZONE_ALIGNMENT >= alignof( memzone_t ),
+	"zone metadata requires stronger alignment" );
+static_assert( sizeof( memblock_t ) % ZONE_ALIGNMENT == 0 && sizeof( memzone_t ) % ZONE_ALIGNMENT == 0,
+	"zone headers must preserve payload and block alignment" );
+
+static void Z_Require( bool valid, const char *message ) {
+	if ( !valid ) {
+		// I_Error returns. Do not resume allocation after an invalid request.
+		idLib::Printf( "DOOM Classic error: %s\n", message );
+		DoomLib::Interface.QuitCurrentGame();
+		common->SwitchToGame( DOOM3_BFG );
+		throw idException( message );
+	}
+}
+
+static int Z_BlockBytes( int payloadBytes ) {
+	Z_Require( payloadBytes >= 0, "Z_Malloc: negative allocation size" );
+	const size_t mask = ZONE_ALIGNMENT - 1;
+	const size_t maxPayload = ( size_t( INT_MAX ) - sizeof( memblock_t ) ) & ~mask;
+	Z_Require( size_t( payloadBytes ) <= maxPayload, "Z_Malloc: allocation size exceeds zone contract" );
+	// The bound above covers rounding, header addition and the final int conversion.
+	const size_t alignedPayload = ( size_t( payloadBytes ) + mask ) & ~mask;
+	return static_cast<int>( alignedPayload + sizeof( memblock_t ) );
+}
+
+static void Z_ValidateZone( const memzone_t *zone ) {
+	Z_Require( zone != NULL && reinterpret_cast<uintptr_t>( zone ) % ZONE_ALIGNMENT == 0,
+		"Z_Init: invalid zone base alignment" );
+	Z_Require( zone->size >= int( sizeof( memzone_t ) + sizeof( memblock_t ) ) &&
+		size_t( zone->size ) % ZONE_ALIGNMENT == 0, "Z_Init: invalid zone capacity" );
+}
+
 
 //
 // Z_ClearZone
@@ -54,6 +92,7 @@ If you have questions concerning this license or the applicable additional terms
 void Z_ClearZone (memzone_t* zone)
 {
     memblock_t*		block;
+	Z_ValidateZone( zone );
 	
     // set the entire zone to one free block
     zone->blocklist.next =
@@ -87,29 +126,14 @@ void *I_ZoneBase( int *size )
 //
 void Z_Init (void)
 {
-    memblock_t*	block;
     int		size;
 
     ::g->mainzone = (memzone_t *)I_ZoneBase (&size);
+	Z_Require( ::g->mainzone != NULL, "Z_Init: could not allocate zone" );
 
 	memset( ::g->mainzone, 0, size );
 	::g->mainzone->size = size;
-
-    // set the entire zone to one free block
-    ::g->mainzone->blocklist.next =
-	::g->mainzone->blocklist.prev =
-	block = (memblock_t *)( (byte *)::g->mainzone + sizeof(memzone_t) );
-
-    ::g->mainzone->blocklist.user = (void **)::g->mainzone;
-    ::g->mainzone->blocklist.tag = PU_STATIC;
-    ::g->mainzone->rover = block;
-	
-    block->prev = block->next = &::g->mainzone->blocklist;
-
-    // NULL indicates a free block.
-    block->user = NULL;
-    
-    block->size = ::g->mainzone->size - sizeof(memzone_t);
+	Z_ClearZone( ::g->mainzone );
 }
 
 int NumAlloc = 0;
@@ -191,18 +215,19 @@ Z_Malloc
     memblock_t* rover;
     memblock_t* newblock;
     memblock_t*	base;
-	NumAlloc += size;
-    	
-	size = (size + 3) & ~3;
+	const int payloadBytes = size;
+	size = Z_BlockBytes( payloadBytes );
+	Z_ValidateZone( ::g->mainzone );
+	Z_Require( size_t( size ) <= size_t( ::g->mainzone->size ) - sizeof( memzone_t ),
+		"Z_Malloc: allocation exceeds zone capacity" );
+	Z_Require( user != NULL || tag < PU_PURGELEVEL,
+		"Z_Malloc: an owner is required for purgable blocks" );
     
     // scan through the block list,
     // looking for the first free block
     // of sufficient size,
     // throwing out any purgable blocks along the way.
 
-    // account for size of block header
-    size += sizeof(memblock_t);
-    
     // if there is a free block behind the rover,
     //  back up over them
     base = ::g->mainzone->rover;
@@ -218,7 +243,7 @@ Z_Malloc
 		if (rover == start)
 		{
 			// scanned all the way around the list
-			I_Error ("Z_Malloc: failed on allocation of %i bytes", size);
+			Z_Require( false, "Z_Malloc: insufficient zone memory" );
 		}
 	
 		if (rover->user)
@@ -273,9 +298,6 @@ Z_Malloc
     }
     else
     {
-		if (tag >= PU_PURGELEVEL)
-			I_Error ("Z_Malloc: an owner is required for purgable blocks");
-
 		// mark as in use, but unowned	
 		base->user = (void **)2;		
     }
@@ -285,6 +307,7 @@ Z_Malloc
     ::g->mainzone->rover = base->next;	
 	
     base->id = ZONEID;
+	NumAlloc += payloadBytes;
     
     return (void *) ((byte *)base + sizeof(memblock_t));
 }
@@ -400,23 +423,37 @@ void Z_FileDumpHeap (FILE* f)
 void Z_CheckHeap (void)
 {
     memblock_t*	block;
+	Z_ValidateZone( ::g->mainzone );
+	const uintptr_t zoneBase = reinterpret_cast<uintptr_t>( ::g->mainzone );
+	const size_t zoneSize = size_t( ::g->mainzone->size );
+	memblock_t *sentinel = &::g->mainzone->blocklist;
+	memblock_t *previous = sentinel;
+	size_t offset = sizeof( memzone_t );
+	bool foundRover = ::g->mainzone->rover == sentinel;
 	
     for (block = ::g->mainzone->blocklist.next ; ; block = block->next)
     {
-	if (block->next == &::g->mainzone->blocklist)
+	Z_Require( offset <= zoneSize - sizeof( memblock_t ) &&
+		reinterpret_cast<uintptr_t>( block ) == zoneBase + offset &&
+		offset % ZONE_ALIGNMENT == 0, "Z_CheckHeap: invalid block address or alignment" );
+	Z_Require( block->prev == previous, "Z_CheckHeap: invalid back link" );
+	Z_Require( block->size >= int( sizeof( memblock_t ) ) &&
+		size_t( block->size ) <= zoneSize - offset &&
+		size_t( block->size ) % ZONE_ALIGNMENT == 0, "Z_CheckHeap: invalid block extent" );
+	foundRover = foundRover || block == ::g->mainzone->rover;
+	offset += size_t( block->size );
+	if (block->next == sentinel)
 	{
+		Z_Require( offset == zoneSize && sentinel->prev == block && foundRover,
+			"Z_CheckHeap: invalid zone coverage or rover" );
 	    // all blocks have been hit
 	    break;
 	}
-	
-	if ( (byte *)block + block->size != (byte *)block->next)
-	    I_Error ("Z_CheckHeap: block size does not touch the next block\n");
-
-	if ( block->next->prev != block)
-	    I_Error ("Z_CheckHeap: next block doesn't have proper back link\n");
-
-	if (!block->user && !block->next->user)
-	    I_Error ("Z_CheckHeap: two consecutive free blocks\n");
+	Z_Require( offset <= zoneSize - sizeof( memblock_t ) &&
+		reinterpret_cast<uintptr_t>( block->next ) == zoneBase + offset,
+		"Z_CheckHeap: block size does not touch the next block" );
+	Z_Require( block->user || block->next->user, "Z_CheckHeap: two consecutive free blocks" );
+	previous = block;
     }
 }
 
