@@ -31,6 +31,8 @@ If you have questions concerning this license or the applicable additional terms
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "idlib/sys/sys_defines.h"
 // mus header
 
@@ -136,6 +138,22 @@ int Midi_UpdateBytesWritten(int* bytes_written, int to_add, int max)
 static bool MusCanRead(const unsigned char* cur, const unsigned char* end, int count)
 {
 	return cur != NULL && end != NULL && count >= 0 && cur <= end && static_cast<size_t>(end - cur) >= static_cast<size_t>(count);
+}
+
+static bool Midi_TrackPayloadLength( ptrdiff_t trackExtent, int bytesWritten, int outputCapacity, unsigned int &payloadLength ) {
+	static_assert( sizeof( MidiTrackChunk_t ) == 8 && sizeof( unsigned int ) == 4, "MIDI track header requires a four-byte length" );
+	const int headerBytes = MIDIHEADERSIZE + sizeof( MidiTrackChunk_t );
+	if ( bytesWritten < headerBytes || bytesWritten > outputCapacity ||
+		trackExtent != static_cast<ptrdiff_t>( bytesWritten - MIDIHEADERSIZE ) ) {
+		return false;
+	}
+	// The checked counter includes both headers; the track length includes neither.
+	const size_t payloadBytes = static_cast<size_t>( bytesWritten - headerBytes );
+	if ( payloadBytes > UINT32_MAX ) {
+		return false;
+	}
+	payloadLength = static_cast<unsigned int>( payloadBytes );
+	return true;
 }
 
 unsigned char MidiMap[] = 
@@ -410,8 +428,13 @@ int Mus2Midi(const unsigned char* bytes, int inputLength, unsigned char* out, in
 	}
 
 	// Write out track header
+	// Both positions remain in the caller's output allocation after checked reservations.
+	unsigned int trackPayloadLength;
+	if ( !Midi_TrackPayloadLength( out - midiTrackHeaderOut, bytes_written, outputCapacity, trackPayloadLength ) ) {
+		return 0;
+	}
 	WriteInt(midiTrackHeader.name, 'MTrk');
-	WriteInt(&midiTrackHeader.length, out - midiTrackHeaderOut - sizeof(midiTrackHeader));
+	WriteInt(&midiTrackHeader.length, trackPayloadLength);
 	memcpy(midiTrackHeaderOut, &midiTrackHeader, sizeof(midiTrackHeader));
 	
 	// Store length written
