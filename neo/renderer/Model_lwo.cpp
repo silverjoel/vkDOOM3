@@ -1013,16 +1013,48 @@ void set_flen( int i ) { flen = i; }
 
 int get_flen() { return flen; }
 
+// Keep this loader's int-sized allocation contract without clearing a failed allocation.
+static void *lwAllocCleared( size_t bytes ) {
+   if ( bytes == 0 || bytes > INT_MAX || bytes > SIZE_MAX - 15 ) return NULL;
+   void *data = Mem_Alloc( bytes, TAG_MODEL );
+   if ( data ) memset( data, 0, bytes );
+   return data;
+}
+
+static bool lwArrayBytes( size_t count, size_t elementSize, size_t &bytes ) {
+   if ( elementSize == 0 || count > static_cast<size_t>( INT_MAX ) / elementSize ) return false;
+   bytes = count * elementSize;
+   return true;
+}
+
+static bool lwS0Extent( size_t textBytes, size_t remaining, size_t &encodedBytes ) {
+   // Subtraction proves both the terminator and optional pad before addition.
+   if ( textBytes >= remaining || textBytes >= INT_MAX ) return false;
+   const size_t terminated = textBytes + 1;
+   const size_t pad = terminated & 1;
+   if ( pad > remaining - terminated || terminated > static_cast<size_t>( INT_MAX ) - pad ) return false;
+   encodedBytes = terminated + pad;
+   return true;
+}
+
+static bool lwMeasureS0( const unsigned char *begin, size_t remaining, size_t &textBytes, size_t &encodedBytes ) {
+   if ( remaining == 0 ) return false;
+   const unsigned char *nul = static_cast<const unsigned char *>( memchr( begin, 0, remaining ) );
+   if ( !nul ) return false;
+   textBytes = static_cast<size_t>( nul - begin );
+   return lwS0Extent( textBytes, remaining, encodedBytes );
+}
+
 void *getbytes( idFile *fp, int size )
 {
    void *data;
 
    if ( flen == FLEN_ERROR ) return NULL;
-   if ( size < 0 ) {
+   if ( size < 0 || flen < 0 || size > INT_MAX - flen ) {
       flen = FLEN_ERROR;
       return NULL;
    }
-   data = Mem_ClearedAlloc( size, TAG_MODEL );
+   data = lwAllocCleared( static_cast<size_t>( size ) );
    if ( !data ) {
       flen = FLEN_ERROR;
       return NULL;
@@ -1368,30 +1400,28 @@ float sgetF4( unsigned char **bp )
 }
 
 
-char *sgetS0( unsigned char **bp )
+char *sgetS0( unsigned char **bp, const unsigned char *end )
 {
-   char *s;
-   unsigned char *buf = *bp;
-   int len;
-
    if ( flen == FLEN_ERROR ) return NULL;
-
-   len = strlen( (const char*)buf ) + 1;
-   if ( len == 1 ) {
-      flen += 2;
-      (*bp) += 2;
-      return NULL;
-   }
-   len += len & 1;
-   s = (char*)Mem_ClearedAlloc( len, TAG_MODEL );
-   if ( !s ) {
+   size_t textBytes, encodedBytes;
+   if ( !bp || !*bp || !end || *bp > end || flen < 0 ||
+        !lwMeasureS0( *bp, static_cast<size_t>( end - *bp ), textBytes, encodedBytes ) ||
+        encodedBytes > static_cast<size_t>( INT_MAX - flen ) ) {
       flen = FLEN_ERROR;
       return NULL;
    }
-
-   memcpy( s, buf, len );
-   flen += len;
-   (*bp) += len;
+   char *s = NULL;
+   if ( textBytes != 0 ) {
+      s = static_cast<char *>( lwAllocCleared( encodedBytes ) );
+      if ( !s ) {
+         flen = FLEN_ERROR;
+         return NULL;
+      }
+      memcpy( s, *bp, encodedBytes );
+   }
+   // NULL with nonnegative flen denotes a valid empty S0, not failure.
+   *bp += encodedBytes;
+   flen += static_cast<int>( encodedBytes );
    return s;
 }
 
@@ -1455,13 +1485,37 @@ can be used to diagnose the cause.
 If you don't need this information, failID and failpos can be NULL.
 ====================================================================== */
 
+// FORM/chunk sizes are wire values until checked against the int-bounded file.
+static bool lwFormEnd( idFile *fp, unsigned int size, int &end ) {
+   const int length = fp->Length();
+   if ( length < 12 || size < 4 || size > static_cast<unsigned int>( length - 8 ) ) return false;
+   end = static_cast<int>( size ) + 8;
+   return true;
+}
+
+static bool lwChunkHeader( idFile *fp, int formEnd, int &id, int &logical, int &padded, int &chunkEnd ) {
+   const int position = fp->Tell();
+   if ( position < 0 || position > formEnd || formEnd - position < 8 ) return false;
+   set_flen( 0 );
+   id = getU4( fp );
+   const size_t size = getU4( fp );
+   if ( get_flen() != 8 ) return false;
+   const size_t remaining = static_cast<size_t>( formEnd - position - 8 );
+   if ( size > remaining || ( size & 1 ) > remaining - size ) return false;
+   logical = static_cast<int>( size );
+   padded = static_cast<int>( size + ( size & 1 ) );
+   chunkEnd = position + 8 + padded;
+   return true;
+}
+
 lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos )
 {
    idFile *fp = NULL;
-   lwObject *object;
+   lwObject *object = NULL;
    lwLayer *layer;
    lwNode *node;
-   int id, formsize, type, cksize;
+   int id, type, cksize, logicalSize, chunkEnd, formEnd;
+   unsigned int formsize;
    int i, rlen;
 
    fp = fileSystem->OpenFileRead( filename );
@@ -1498,33 +1552,28 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
       }
    }
 
+   if ( !lwFormEnd( fp, formsize, formEnd ) ) goto Fail;
+
    /* allocate an object and a default layer */
 
-   object = (lwObject*)Mem_ClearedAlloc( sizeof( lwObject ), TAG_MODEL );
+   object = (lwObject*)lwAllocCleared( sizeof( lwObject ) );
    if ( !object ) goto Fail;
 
-   layer = (lwLayer*)Mem_ClearedAlloc( sizeof( lwLayer ), TAG_MODEL );
+   layer = (lwLayer*)lwAllocCleared( sizeof( lwLayer ) );
    if ( !layer ) goto Fail;
    object->layer = layer;
 
    object->timeStamp = fp->Timestamp();
 
-   /* get the first chunk header */
-
-   id = getU4( fp );
-   cksize = getU4( fp );
-   if ( 0 > get_flen() ) goto Fail;
-
-   /* process chunks as they're encountered */
-
+   /* Validate each chunk against FORM and the physical file before dispatch. */
    while ( 1 ) {
-      cksize += cksize & 1;
+      if ( !lwChunkHeader( fp, formEnd, id, logicalSize, cksize, chunkEnd ) ) goto Fail;
 
       switch ( id )
       {
          case ID_LAYR:
             if ( object->nlayers > 0 ) {
-               layer = (lwLayer*)Mem_ClearedAlloc( sizeof( lwLayer ), TAG_MODEL );
+               layer = (lwLayer*)lwAllocCleared( sizeof( lwLayer ) );
                if ( !layer ) goto Fail;
                lwListAdd( (void**)&object->layer, layer );
             }
@@ -1544,7 +1593,7 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
                layer->parent = getU2( fp );
             rlen = get_flen();
             if ( rlen < cksize )
-               fp->Seek( cksize - rlen, FS_SEEK_CUR );
+               if ( fp->Seek( cksize - rlen, FS_SEEK_CUR ) ) goto Fail;
             break;
 
          case ID_PNTS:
@@ -1560,7 +1609,7 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
 
          case ID_VMAP:
          case ID_VMAD:
-            node = ( lwNode * ) lwGetVMap( fp, cksize, layer->point.offset,
+            node = ( lwNode * ) lwGetVMap( fp, logicalSize, layer->point.offset,
                layer->polygon.offset, id == ID_VMAD );
             if ( !node ) goto Fail;
             lwListAdd( (void**)&layer->vmap, node );
@@ -1580,11 +1629,11 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
             rlen = get_flen();
             if ( rlen < 0 || rlen > cksize ) goto Fail;
             if ( rlen < cksize )
-               fp->Seek( cksize - rlen, FS_SEEK_CUR );
+               if ( fp->Seek( cksize - rlen, FS_SEEK_CUR ) ) goto Fail;
             break;
 
          case ID_TAGS:
-            if ( !lwGetTags( fp, cksize, &object->taglist ))
+            if ( !lwGetTags( fp, logicalSize, &object->taglist ))
                goto Fail;
             break;
 
@@ -1613,20 +1662,17 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
          case ID_TEXT:
          case ID_ICON:
          default:
-            fp->Seek( cksize, FS_SEEK_CUR );
+            if ( fp->Seek( cksize, FS_SEEK_CUR ) ) goto Fail;
             break;
       }
 
-      /* end of the file? */
-
-      if ( formsize <= fp->Tell() - 8 ) break;
-
-      /* get the next chunk header */
-
-      set_flen( 0 );
-      id = getU4( fp );
-      cksize = getU4( fp );
-      if ( 8 != get_flen() ) goto Fail;
+      // String/map handlers consume logical bytes; the outer IFF pad is separate.
+      const int position = fp->Tell();
+      if ( position == chunkEnd - ( cksize - logicalSize ) && cksize != logicalSize ) {
+         if ( fp->Seek( cksize - logicalSize, FS_SEEK_CUR ) ) goto Fail;
+      }
+      if ( fp->Tell() != chunkEnd ) goto Fail;
+      if ( chunkEnd == formEnd ) break;
    }
 
    fileSystem->CloseFile( fp );
@@ -2248,10 +2294,11 @@ If you don't need this information, failID and failpos can be NULL.
 lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos )
 {
    idFile *fp = NULL;
-   lwObject *object;
+   lwObject *object = NULL;
    lwLayer *layer;
    lwNode *node;
-   int id, formsize, type, cksize;
+   int id, type, cksize, logicalSize, chunkEnd, formEnd;
+   unsigned int formsize;
 
 
    /* open the file */
@@ -2282,26 +2329,21 @@ lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos
       return NULL;
    }
 
+   if ( !lwFormEnd( fp, formsize, formEnd ) ) goto Fail2;
+
    /* allocate an object and a default layer */
 
-   object = (lwObject*)Mem_ClearedAlloc( sizeof( lwObject ), TAG_MODEL );
+   object = (lwObject*)lwAllocCleared( sizeof( lwObject ) );
    if ( !object ) goto Fail2;
 
-   layer = (lwLayer*)Mem_ClearedAlloc( sizeof( lwLayer ), TAG_MODEL );
+   layer = (lwLayer*)lwAllocCleared( sizeof( lwLayer ) );
    if ( !layer ) goto Fail2;
    object->layer = layer;
    object->nlayers = 1;
 
-   /* get the first chunk header */
-
-   id = getU4( fp );
-   cksize = getU4( fp );
-   if ( 0 > get_flen() ) goto Fail2;
-
-   /* process chunks as they're encountered */
-
+   /* Validate each chunk against FORM and the physical file before dispatch. */
    while ( 1 ) {
-      cksize += cksize & 1;
+      if ( !lwChunkHeader( fp, formEnd, id, logicalSize, cksize, chunkEnd ) ) goto Fail2;
 
       switch ( id )
       {
@@ -2317,7 +2359,7 @@ lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos
             break;
 
          case ID_SRFS:
-            if ( !lwGetTags( fp, cksize, &object->taglist ))
+            if ( !lwGetTags( fp, logicalSize, &object->taglist ))
                goto Fail2;
             break;
 
@@ -2329,20 +2371,17 @@ lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos
             break;
 
          default:
-            fp->Seek( cksize, FS_SEEK_CUR );
+            if ( fp->Seek( cksize, FS_SEEK_CUR ) ) goto Fail2;
             break;
       }
 
-      /* end of the file? */
-
-      if ( formsize <= fp->Tell() - 8 ) break;
-
-      /* get the next chunk header */
-
-      set_flen( 0 );
-      id = getU4( fp );
-      cksize = getU4( fp );
-      if ( 8 != get_flen() ) goto Fail2;
+      // String/map handlers consume logical bytes; the outer IFF pad is separate.
+      const int position = fp->Tell();
+      if ( position == chunkEnd - ( cksize - logicalSize ) && cksize != logicalSize ) {
+         if ( fp->Seek( cksize - logicalSize, FS_SEEK_CUR ) ) goto Fail2;
+      }
+      if ( fp->Tell() != chunkEnd ) goto Fail2;
+      if ( chunkEnd == formEnd ) break;
    }
 
    fileSystem->CloseFile( fp );
@@ -2705,42 +2744,51 @@ default surface is created.
 int lwResolvePolySurfaces( lwPolygonList *polygon, lwTagList *tlist,
    lwSurface **surf, int *nsurfs )
 {
-   lwSurface **s, *st;
-   int i, index;
-
-   if ( tlist->count == 0 ) return 1;
-
-   s = (lwSurface**)Mem_ClearedAlloc( tlist->count * sizeof( lwSurface * ), TAG_MODEL );
+   if ( tlist->count < 0 || polygon->count < 0 || *nsurfs < 0 ||
+        ( polygon->count != 0 && !polygon->pol ) ) return 0;
+   if ( tlist->count == 0 ) return polygon->count == 0;
+   if ( !tlist->tag ) return 0;
+   size_t bytes;
+   if ( !lwArrayBytes( static_cast<size_t>( tlist->count ), sizeof( lwSurface * ), bytes ) ) return 0;
+   lwSurface **s = static_cast<lwSurface **>( lwAllocCleared( bytes ) );
    if ( !s ) return 0;
 
-   for ( i = 0; i < tlist->count; i++ ) {
-      st = *surf;
-      while ( st ) {
-         if ( !strcmp( st->name, tlist->tag[ i ] )) {
+   for ( int i = 0; i < tlist->count; ++i ) {
+      if ( !tlist->tag[ i ] ) continue; // Preserve unused empty tag slots.
+      for ( lwSurface *st = *surf; st; st = st->next ) {
+         if ( st->name && !strcmp( st->name, tlist->tag[ i ] ) ) {
             s[ i ] = st;
             break;
          }
-         st = st->next;
       }
    }
-
-   for ( i = 0; i < polygon->count; i++ ) {
-      index = ( int ) polygon->pol[ i ].surf;
-      if ( index < 0 || index > tlist->count ) return 0;
+   for ( int i = 0; i < polygon->count; ++i ) {
+      int index = ( int ) polygon->pol[ i ].surf;
+      if ( index < 0 || index >= tlist->count || !tlist->tag[ index ] ) goto Fail;
       if ( !s[ index ] ) {
-         s[ index ] = lwDefaultSurface();
-         if ( !s[ index ] ) return 0;
-         s[ index ]->name = (char*)Mem_ClearedAlloc( strlen( tlist->tag[ index ] ) + 1, TAG_MODEL );
-         if ( !s[ index ]->name ) return 0;
-         strcpy( s[ index ]->name, tlist->tag[ index ] );
-         lwListAdd( (void**)surf, s[ index ] );
-         *nsurfs = *nsurfs + 1;
+         const size_t length = strlen( tlist->tag[ index ] ); // Owned, validated S0.
+         if ( length >= INT_MAX || *nsurfs == INT_MAX ) goto Fail;
+         lwSurface *created = lwDefaultSurface();
+         if ( !created ) goto Fail;
+         created->name = static_cast<char *>( lwAllocCleared( length + 1 ) );
+         if ( !created->name ) {
+            lwFreeSurface( created );
+            goto Fail;
+         }
+         memcpy( created->name, tlist->tag[ index ], length + 1 );
+         lwListAdd( (void**)surf, created );
+         ++*nsurfs;
+         s[ index ] = created;
       }
       polygon->pol[ i ].surf = s[ index ];
    }
-
    Mem_Free( s );
    return 1;
+
+Fail:
+   // Previously linked defaults belong to the object; the table only borrows them.
+   Mem_Free( s );
+   return 0;
 }
 
 
@@ -2826,53 +2874,59 @@ added to the lwTagList array.
 
 int lwGetTags( idFile *fp, int cksize, lwTagList *tlist )
 {
-	char *buf, *bp;
-	int i, len, ntags;
+   if ( cksize == 0 ) return 1;
+   if ( cksize < 0 || tlist->count < 0 || tlist->offset < 0 ||
+        tlist->offset > tlist->count || ( tlist->count != 0 && !tlist->tag ) ) {
+      set_flen( FLEN_ERROR );
+      return 0;
+   }
+   set_flen( 0 );
+   unsigned char *buf = static_cast<unsigned char *>( getbytes( fp, cksize ) );
+   if ( !buf ) return 0;
+   const unsigned char *end = buf + cksize;
+   unsigned char *bp = buf;
+   size_t ntags = 0, textBytes, encodedBytes, arrayBytes;
+   const size_t oldCount = static_cast<size_t>( tlist->count );
+   size_t newCount = 0, copied = 0;
+   char **tags = NULL;
 
-	if ( cksize == 0 ) return 1;
+   while ( bp < end ) {
+      if ( !lwMeasureS0( bp, static_cast<size_t>( end - bp ), textBytes, encodedBytes ) ||
+           ntags == static_cast<size_t>( INT_MAX ) - oldCount ) goto Fail;
+      bp += encodedBytes;
+      ++ntags;
+   }
+   newCount = oldCount + ntags;
+   // The resolver must also be able to allocate its int-bounded pointer table.
+   if ( !lwArrayBytes( newCount, sizeof( lwSurface * ), arrayBytes ) ||
+        !lwArrayBytes( newCount, sizeof( char * ), arrayBytes ) ) goto Fail;
+   tags = static_cast<char **>( lwAllocCleared( arrayBytes ) );
+   if ( !tags ) goto Fail;
+   if ( oldCount ) memcpy( tags, tlist->tag, oldCount * sizeof( char * ) );
 
-	/* read the whole chunk */
+   bp = buf;
+   set_flen( 0 ); // File read and memory decoding are separate passes.
+   for ( ; copied < ntags; ++copied ) {
+      tags[ oldCount + copied ] = sgetS0( &bp, end );
+      if ( get_flen() == FLEN_ERROR ) goto Fail;
+   }
+   if ( bp != end || get_flen() != cksize ) goto Fail;
 
-	set_flen( 0 );
-	buf = (char*)getbytes( fp, cksize );
-	if ( !buf ) return 0;
-
-	/* count the strings */
-
-	ntags = 0;
-	bp = buf;
-	while ( bp < buf + cksize ) {
-		len = strlen( bp ) + 1;
-		len += len & 1;
-		bp += len;
-		++ntags;
-	}
-
-	/* expand the string array to hold the new tags */
-
-	tlist->offset = tlist->count;
-	tlist->count += ntags;
-	char **oldtag = tlist->tag;
-	tlist->tag = (char**)Mem_Alloc( tlist->count * sizeof( char * ), TAG_MODEL );
-	if ( !tlist->tag ) goto Fail;
-	if ( oldtag ) {
-		memcpy( tlist->tag, oldtag, tlist->offset * sizeof( char * ) );
-		Mem_Free( oldtag );
-	}
-	memset( &tlist->tag[ tlist->offset ], 0, ntags * sizeof( char * ) );
-
-	/* copy the new tags to the tag array */
-
-	bp = buf;
-	for ( i = 0; i < ntags; i++ )
-		tlist->tag[ i + tlist->offset ] = sgetS0( (unsigned char**)&bp );
-
-	Mem_Free( buf );
-	return 1;
+   Mem_Free( tlist->tag ); // Transfer the borrowed old strings only on success.
+   tlist->tag = tags;
+   tlist->offset = tlist->count;
+   tlist->count = static_cast<int>( newCount );
+   Mem_Free( buf );
+   return 1;
 
 Fail:
-	if ( buf ) Mem_Free( buf );
-	return 0;
+   if ( tags ) {
+      for ( size_t i = 0; i < copied; ++i ) Mem_Free( tags[ oldCount + i ] );
+      Mem_Free( tags );
+   }
+   Mem_Free( buf );
+   set_flen( FLEN_ERROR );
+   return 0;
 }
 
 
@@ -3658,7 +3712,7 @@ lwSurface *lwDefaultSurface()
 {
    lwSurface *surf;
 
-   surf = (lwSurface*)Mem_ClearedAlloc( sizeof( lwSurface ), TAG_MODEL );
+   surf = (lwSurface*)lwAllocCleared( sizeof( lwSurface ) );
    if ( !surf ) return NULL;
 
    surf->color.rgb[ 0 ] = 0.78431f;
@@ -3967,82 +4021,78 @@ Read an lwVMap from a VMAP or VMAD chunk in an LWO2.
 lwVMap *lwGetVMap( idFile *fp, int cksize, int ptoffset, int poloffset,
    int perpoly )
 {
-   unsigned char *buf, *bp;
-   lwVMap *vmap;
-   float *f;
-   int i, j, npts, rlen;
-
-
-   /* read the whole chunk */
-
    set_flen( 0 );
-   buf = (unsigned char*)getbytes( fp, cksize );
-   if ( !buf ) return NULL;
-
-   vmap = (lwVMap*)Mem_ClearedAlloc( sizeof( lwVMap ), TAG_MODEL );
-   if ( !vmap ) {
-      Mem_Free( buf );
+   if ( cksize < 6 ) {
+      set_flen( FLEN_ERROR );
       return NULL;
    }
-
-   /* initialize the vmap */
-
+   unsigned char *buf = static_cast<unsigned char *>( getbytes( fp, cksize ) );
+   if ( !buf ) return NULL;
+   lwVMap *vmap = static_cast<lwVMap *>( lwAllocCleared( sizeof( lwVMap ) ) );
+   if ( !vmap ) {
+      Mem_Free( buf );
+      set_flen( FLEN_ERROR );
+      return NULL;
+   }
+   const unsigned char *end = buf + cksize;
+   unsigned char *bp = buf;
+   unsigned char *records = NULL;
+   size_t npts = 0, indexBytes = 0, rowBytes = 0, valueBytes = 0;
+   size_t floatsPerRecord = 0;
    vmap->perpoly = perpoly;
-
-   bp = buf;
    set_flen( 0 );
    vmap->type = sgetU4( &bp );
-   vmap->dim  = sgetU2( &bp );
-   vmap->name = sgetS0( &bp );
-   rlen = get_flen();
+   vmap->dim = sgetU2( &bp );
+   vmap->name = sgetS0( &bp, end );
+   if ( get_flen() == FLEN_ERROR ) goto Fail;
+   records = bp;
+   floatsPerRecord = static_cast<size_t>( vmap->dim ) * sizeof( float );
 
-   /* count the vmap records */
-
-   npts = 0;
-   while ( bp < buf + cksize ) {
-      i = sgetVX( &bp );
-      if ( perpoly )
-         i = sgetVX( &bp );
-      bp += vmap->dim * sizeof( float );
+   // Preflight every encoded index and float payload before replaying any record.
+   while ( bp < end ) {
+      for ( int index = 0; index < ( perpoly ? 2 : 1 ); ++index ) {
+         const size_t remaining = static_cast<size_t>( end - bp );
+         if ( remaining == 0 ) goto Fail;
+         const size_t width = bp[ 0 ] == 0xFF ? 4 : 2;
+         if ( width > remaining ) goto Fail;
+         bp += width;
+      }
+      if ( floatsPerRecord > static_cast<size_t>( end - bp ) || npts == INT_MAX ) goto Fail;
+      bp += floatsPerRecord;
       ++npts;
    }
-
-   /* allocate the vmap */
-
-   vmap->nverts = npts;
-   vmap->vindex = (int*)Mem_ClearedAlloc( npts * sizeof( int ), TAG_MODEL );
+   if ( npts == 0 || !lwArrayBytes( npts, sizeof( int ), indexBytes ) ) goto Fail;
+   if ( vmap->dim > 0 &&
+        ( !lwArrayBytes( npts, sizeof( float * ), rowBytes ) ||
+          !lwArrayBytes( npts, floatsPerRecord, valueBytes ) ) ) goto Fail;
+   vmap->nverts = static_cast<int>( npts );
+   vmap->vindex = static_cast<int *>( lwAllocCleared( indexBytes ) );
    if ( !vmap->vindex ) goto Fail;
    if ( perpoly ) {
-      vmap->pindex = (int*)Mem_ClearedAlloc( npts * sizeof( int ), TAG_MODEL );
+      vmap->pindex = static_cast<int *>( lwAllocCleared( indexBytes ) );
       if ( !vmap->pindex ) goto Fail;
    }
-
    if ( vmap->dim > 0 ) {
-      vmap->val = (float**)Mem_ClearedAlloc( npts * sizeof( float * ), TAG_MODEL );
+      vmap->val = static_cast<float **>( lwAllocCleared( rowBytes ) );
       if ( !vmap->val ) goto Fail;
-      f = (float*)Mem_ClearedAlloc( npts * vmap->dim * sizeof( float ), TAG_MODEL );
-      if ( !f ) goto Fail;
-      for ( i = 0; i < npts; i++ )
-         vmap->val[ i ] = f + i * vmap->dim;
+      float *values = static_cast<float *>( lwAllocCleared( valueBytes ) );
+      if ( !values ) goto Fail;
+      for ( size_t i = 0; i < npts; ++i ) vmap->val[ i ] = values + i * static_cast<size_t>( vmap->dim );
    }
-
-   /* fill in the vmap values */
-
-   bp = buf + rlen;
-   for ( i = 0; i < npts; i++ ) {
+   bp = records;
+   for ( int i = 0; i < vmap->nverts; ++i ) {
       vmap->vindex[ i ] = sgetVX( &bp );
-      if ( perpoly )
-         vmap->pindex[ i ] = sgetVX( &bp );
-      for ( j = 0; j < vmap->dim; j++ )
-         vmap->val[ i ][ j ] = sgetF4( &bp );
+      if ( perpoly ) vmap->pindex[ i ] = sgetVX( &bp );
+      for ( int j = 0; j < vmap->dim; ++j ) vmap->val[ i ][ j ] = sgetF4( &bp );
    }
-
+   if ( bp != end || get_flen() != cksize ) goto Fail;
    Mem_Free( buf );
    return vmap;
 
 Fail:
-   if ( buf ) Mem_Free( buf );
+   Mem_Free( buf );
    lwFreeVMap( vmap );
+   set_flen( FLEN_ERROR );
    return NULL;
 }
 

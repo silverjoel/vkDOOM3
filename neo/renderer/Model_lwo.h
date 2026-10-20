@@ -671,6 +671,6 @@ unsigned short sgetU2( unsigned char **bp );
 unsigned int   sgetU4( unsigned char **bp );
 int   sgetVX( unsigned char **bp );
 float sgetF4( unsigned char **bp );
-char *sgetS0( unsigned char **bp );
+char *sgetS0( unsigned char **bp, const unsigned char *end );
 
 #endif /* !__LWO2_H__ */
