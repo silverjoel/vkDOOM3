@@ -30,6 +30,9 @@ If you have questions concerning this license or the applicable additional terms
 #define __Z_ZONE__
 
 #include <stdio.h>
+#include <limits.h>
+
+#include "doomlib.h"
 
 //
 // ZONE MEMORY
@@ -79,7 +82,16 @@ int     Z_FreeMemory (void);
 
 template< class _type_ >
 bool MallocForLump( int lump, size_t size, _type_ * & ptr, int tag ) {
-	ptr = static_cast< _type_ * >( Z_Malloc( size, tag, 0 ) );
+	if ( size > static_cast<size_t>( INT_MAX ) ) {
+		// Match Z_Malloc's nonreturning failure path; I_Error alone returns.
+		const char *message = "MallocForLump: allocation size exceeds int byte-count range";
+		idLib::Printf( "DOOM Classic error: %s\n", message );
+		DoomLib::Interface.QuitCurrentGame();
+		common->SwitchToGame( DOOM3_BFG );
+		throw idException( message );
+	}
+	// Z_Malloc independently checks alignment, header overhead and zone capacity.
+	ptr = static_cast< _type_ * >( Z_Malloc( static_cast<int>( size ), tag, 0 ) );
 
 	return true;
 }
