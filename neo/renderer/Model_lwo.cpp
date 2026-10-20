@@ -1508,8 +1508,74 @@ static bool lwChunkHeader( idFile *fp, int formEnd, int &id, int &logical, int &
    return true;
 }
 
+// Unresolved surface references are integers, owned only by this load attempt.
+// Polygon lists can grow and layers can change without moving their state key.
+// surf stays NULL until resolution; destruction never follows a model pointer.
+class lwSurfaceIndexState {
+   struct Entry {
+      lwPolygonList *polygon;
+      int *indices;
+      int count;
+      Entry *next;
+   };
+   Entry *entries;
+   lwSurfaceIndexState( const lwSurfaceIndexState & );
+   lwSurfaceIndexState &operator=( const lwSurfaceIndexState & );
+public:
+   lwSurfaceIndexState() : entries( NULL ) {}
+   ~lwSurfaceIndexState() {
+      while ( entries ) {
+         Entry *entry = entries;
+         entries = entry->next;
+         Mem_Free( entry->indices );
+         Mem_Free( entry );
+      }
+   }
+   bool Get( lwPolygonList *polygon, int *&indices ) {
+      indices = NULL;
+      if ( polygon->count < 0 || ( polygon->count && !polygon->pol ) ) return false;
+      Entry *entry = entries;
+      while ( entry && entry->polygon != polygon ) entry = entry->next;
+      if ( entry && entry->count > polygon->count ) return false;
+      if ( !entry && polygon->count == 0 ) return true;
+      if ( !entry || entry->count < polygon->count ) {
+         size_t bytes;
+         if ( !lwArrayBytes( static_cast<size_t>( polygon->count ), sizeof( int ), bytes ) ) return false;
+         int *grown = static_cast<int *>( lwAllocCleared( bytes ) );
+         if ( !grown ) return false;
+         if ( !entry ) {
+            entry = static_cast<Entry *>( lwAllocCleared( sizeof( Entry ) ) );
+            if ( !entry ) { Mem_Free( grown ); return false; }
+            entry->polygon = polygon;
+            entry->next = entries;
+            entries = entry;
+         } else {
+            memcpy( grown, entry->indices, static_cast<size_t>( entry->count ) * sizeof( int ) );
+            Mem_Free( entry->indices );
+         }
+         // Unassigned polygons historically use surface tag zero.
+         entry->indices = grown;
+         entry->count = polygon->count;
+      }
+      indices = entry->indices;
+      return true;
+   }
+   void Release( lwPolygonList *polygon ) {
+      for ( Entry **link = &entries; *link; link = &( *link )->next ) {
+         if ( ( *link )->polygon == polygon ) {
+            Entry *entry = *link;
+            *link = entry->next;
+            Mem_Free( entry->indices );
+            Mem_Free( entry );
+            return;
+         }
+      }
+   }
+};
+
 lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos )
 {
+   lwSurfaceIndexState surfaceIndices;
    idFile *fp = NULL;
    lwObject *object = NULL;
    lwLayer *layer;
@@ -1617,8 +1683,8 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
             break;
 
          case ID_PTAG:
-            if ( !lwGetPolygonTags( fp, cksize, &object->taglist,
-               &layer->polygon ))
+            if ( !lwGetPolygonTags( fp, logicalSize, &object->taglist,
+               &layer->polygon, surfaceIndices ))
                goto Fail;
             break;
 
@@ -1687,7 +1753,7 @@ lwObject *lwGetObject( const char *filename, unsigned int *failID, int *failpos 
       lwGetPolyNormals( &layer->point, &layer->polygon );
       if ( !lwGetPointPolygons( &layer->point, &layer->polygon )) goto Fail;
       if ( !lwResolvePolySurfaces( &layer->polygon, &object->taglist,
-         &object->surf, &object->nsurfs )) goto Fail;
+         &object->surf, &object->nsurfs, surfaceIndices )) goto Fail;
       lwGetVertNormals( &layer->point, &layer->polygon );
       if ( !lwGetPointVMaps( &layer->point, layer->vmap )) goto Fail;
       if ( !lwGetPolyVMaps( &layer->polygon, layer->vmap )) goto Fail;
@@ -2200,42 +2266,58 @@ Read polygon records from a POLS chunk in an LWOB file.  The polygons
 are added to the array in the lwPolygonList.
 ====================================================================== */
 
-int lwGetPolygons5( idFile *fp, int cksize, lwPolygonList *plist, int ptoffset )
+int lwGetPolygons5( idFile *fp, int cksize, lwPolygonList *plist, int ptoffset,
+   lwSurfaceIndexState &surfaceIndices )
 {
    lwPolygon *pp;
    lwPolVert *pv;
    unsigned char *buf, *bp;
    int i, j, nv, nverts, npols;
+   int *indices;
+   const unsigned char *end;
 
 
    if ( cksize == 0 ) return 1;
+   if ( cksize < 0 || ptoffset < 0 || plist->count < 0 || plist->vcount < 0 ) return 0;
 
    /* read the whole chunk */
 
    set_flen( 0 );
    buf = (unsigned char*)getbytes( fp, cksize );
    if ( !buf ) goto Fail;
+   end = buf + cksize;
 
    /* count the polygons and vertices */
 
+   set_flen( 0 );
    nverts = 0;
    npols = 0;
    bp = buf;
 
-   while ( bp < buf + cksize ) {
+   while ( bp < end ) {
+      if ( end - bp < 2 ) goto Fail;
       nv = sgetU2( &bp );
+      if ( nv > INT_MAX - nverts || npols == INT_MAX || end - bp < 2 * nv + 2 ) goto Fail;
       nverts += nv;
       npols++;
-      bp += 2 * nv;
+      for ( i = 0; i < nv; i++ ) {
+         if ( sgetU2( &bp ) > INT_MAX - ptoffset ) goto Fail;
+      }
       i = sgetI2( &bp );
-      if ( i < 0 ) bp += 2;      /* detail polygons */
+      if ( i < 0 ) {
+         if ( end - bp < 2 ) goto Fail;
+         bp += 2;      /* detail polygons */
+      }
    }
 
+   if ( npols > INT_MAX - plist->count || nverts > INT_MAX - plist->vcount ) goto Fail;
    if ( !lwAllocPolygons( plist, npols, nverts ))
       goto Fail;
+   if ( !surfaceIndices.Get( plist, indices ) ) goto Fail;
 
    /* fill in the new polygons */
 
+   set_flen( 0 );
    bp = buf;
    pp = plist->pol + plist->offset;
    pv = plist->pol[ 0 ].v + plist->voffset;
@@ -2254,7 +2336,7 @@ int lwGetPolygons5( idFile *fp, int cksize, lwPolygonList *plist, int ptoffset )
          bp += 2;
       }
       j -= 1;
-      pp->surf = ( lwSurface * ) j;
+      indices[ plist->offset + i ] = j;
 
       pp++;
       pv += nv;
@@ -2293,6 +2375,7 @@ If you don't need this information, failID and failpos can be NULL.
 
 lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos )
 {
+   lwSurfaceIndexState surfaceIndices;
    idFile *fp = NULL;
    lwObject *object = NULL;
    lwLayer *layer;
@@ -2353,8 +2436,8 @@ lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos
             break;
 
          case ID_POLS:
-            if ( !lwGetPolygons5( fp, cksize, &layer->polygon,
-               layer->point.offset ))
+            if ( !lwGetPolygons5( fp, logicalSize, &layer->polygon,
+               layer->point.offset, surfaceIndices ))
                goto Fail2;
             break;
 
@@ -2391,7 +2474,7 @@ lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos
    lwGetPolyNormals( &layer->point, &layer->polygon );
    if ( !lwGetPointPolygons( &layer->point, &layer->polygon )) goto Fail2;
    if ( !lwResolvePolySurfaces( &layer->polygon, &object->taglist,
-      &object->surf, &object->nsurfs )) goto Fail2;
+      &object->surf, &object->nsurfs, surfaceIndices )) goto Fail2;
    lwGetVertNormals( &layer->point, &layer->polygon );
 
    return object;
@@ -2742,12 +2825,19 @@ default surface is created.
 ====================================================================== */
 
 int lwResolvePolySurfaces( lwPolygonList *polygon, lwTagList *tlist,
-   lwSurface **surf, int *nsurfs )
+   lwSurface **surf, int *nsurfs, lwSurfaceIndexState &surfaceIndices )
 {
    if ( tlist->count < 0 || polygon->count < 0 || *nsurfs < 0 ||
         ( polygon->count != 0 && !polygon->pol ) ) return 0;
    if ( tlist->count == 0 ) return polygon->count == 0;
    if ( !tlist->tag ) return 0;
+   int *indices;
+   if ( !surfaceIndices.Get( polygon, indices ) ) return 0;
+   for ( int i = 0; i < polygon->count; ++i ) {
+      const int index = indices[ i ];
+      // Do not retry a resolved or partially resolved list as unresolved input.
+      if ( polygon->pol[ i ].surf || index < 0 || index >= tlist->count || !tlist->tag[ index ] ) return 0;
+   }
    size_t bytes;
    if ( !lwArrayBytes( static_cast<size_t>( tlist->count ), sizeof( lwSurface * ), bytes ) ) return 0;
    lwSurface **s = static_cast<lwSurface **>( lwAllocCleared( bytes ) );
@@ -2763,8 +2853,7 @@ int lwResolvePolySurfaces( lwPolygonList *polygon, lwTagList *tlist,
       }
    }
    for ( int i = 0; i < polygon->count; ++i ) {
-      int index = ( int ) polygon->pol[ i ].surf;
-      if ( index < 0 || index >= tlist->count || !tlist->tag[ index ] ) goto Fail;
+      const int index = indices[ i ];
       if ( !s[ index ] ) {
          const size_t length = strlen( tlist->tag[ index ] ); // Owned, validated S0.
          if ( length >= INT_MAX || *nsurfs == INT_MAX ) goto Fail;
@@ -2782,6 +2871,7 @@ int lwResolvePolySurfaces( lwPolygonList *polygon, lwTagList *tlist,
       }
       polygon->pol[ i ].surf = s[ index ];
    }
+   surfaceIndices.Release( polygon );
    Mem_Free( s );
    return 1;
 
@@ -2937,34 +3027,55 @@ lwGetPolygonTags()
 Read polygon tags from a PTAG chunk in an LWO2 file.
 ====================================================================== */
 
-int lwGetPolygonTags( idFile *fp, int cksize, lwTagList *tlist, lwPolygonList *plist )
+// PTAG primitives must fit the logical chunk, including both halves of a VX.
+static bool lwReadTagIndex( idFile *fp, int &remaining, int &index ) {
+   unsigned char bytes[ 4 ];
+   if ( remaining < 2 || fp->Read( bytes, 2 ) != 2 ) return false;
+   remaining -= 2;
+   if ( bytes[ 0 ] != 0xFF ) {
+      index = ( bytes[ 0 ] << 8 ) | bytes[ 1 ];
+   } else {
+      if ( remaining < 2 || fp->Read( bytes + 2, 2 ) != 2 ) return false;
+      remaining -= 2;
+      index = ( bytes[ 1 ] << 16 ) | ( bytes[ 2 ] << 8 ) | bytes[ 3 ];
+   }
+   return true;
+}
+
+int lwGetPolygonTags( idFile *fp, int cksize, lwTagList *tlist, lwPolygonList *plist,
+   lwSurfaceIndexState &surfaceIndices )
 {
 	unsigned int type;
-	int rlen = 0, i, j;
+	int i, j;
+	int *indices = NULL;
 
 	set_flen( 0 );
+	if ( cksize < 4 || plist->offset < 0 || plist->count < plist->offset || tlist->offset < 0 ) return 0;
 	type = getU4( fp );
-	rlen = get_flen();
-	if ( rlen < 0 ) return 0;
+	if ( get_flen() != 4 ) return 0;
 
 	if ( type != ID_SURF && type != ID_PART && type != ID_SMGP ) {
-		fp->Seek( cksize - 4, FS_SEEK_CUR );
-		return 1;
+		return fp->Seek( cksize - 4, FS_SEEK_CUR ) == 0;
 	}
+	if ( plist->count && !plist->pol ) return 0;
+	if ( type == ID_SURF && !surfaceIndices.Get( plist, indices ) ) return 0;
 
-	while ( rlen < cksize ) {
-		i = getVX( fp ) + plist->offset;
-		j = getVX( fp ) + tlist->offset;
-		rlen = get_flen();
-		if ( rlen < 0 || rlen > cksize ) return 0;
+	int remaining = cksize - 4;
+	while ( remaining ) {
+		if ( !lwReadTagIndex( fp, remaining, i ) || !lwReadTagIndex( fp, remaining, j ) ) return 0;
+		if ( i >= plist->count - plist->offset || j > INT_MAX - tlist->offset ) return 0;
+		i += plist->offset;
+		j += tlist->offset;
+		if ( plist->pol[ i ].surf ) return 0;
 
 		switch ( type ) {
-			case ID_SURF:  plist->pol[ i ].surf = ( lwSurface * ) j;  break;
+			case ID_SURF:  indices[ i ] = j;  break;
 			case ID_PART:  plist->pol[ i ].part = j;  break;
 			case ID_SMGP:  plist->pol[ i ].smoothgrp = j;  break;
 		}
 	}
 
+	set_flen( cksize );
 	return 1;
 }
 

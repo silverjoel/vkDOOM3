@@ -576,6 +576,8 @@ void lwFreeLayer( lwLayer *layer );
 
 /* pntspols.c */
 
+class lwSurfaceIndexState; // Private, object-load lifetime; never part of a model.
+
 void lwFreePoints( lwPointList *point );
 void lwFreePolygons( lwPolygonList *plist );
 int lwGetPoints( idFile *fp, int cksize, lwPointList *point );
@@ -585,12 +587,12 @@ int lwGetPolygons( idFile *fp, int cksize, lwPolygonList *plist, int ptoffset );
 void lwGetPolyNormals( lwPointList *point, lwPolygonList *polygon );
 int lwGetPointPolygons( lwPointList *point, lwPolygonList *polygon );
 int lwResolvePolySurfaces( lwPolygonList *polygon, lwTagList *tlist,
-   lwSurface **surf, int *nsurfs );
+   lwSurface **surf, int *nsurfs, lwSurfaceIndexState &surfaceIndices );
 void lwGetVertNormals( lwPointList *point, lwPolygonList *polygon );
 void lwFreeTags( lwTagList *tlist );
 int lwGetTags( idFile *fp, int cksize, lwTagList *tlist );
 int lwGetPolygonTags( idFile *fp, int cksize, lwTagList *tlist,
-   lwPolygonList *plist );
+   lwPolygonList *plist, lwSurfaceIndexState &surfaceIndices );
 
 /* vmap.c */
 
@@ -631,7 +633,8 @@ lwSurface *lwDefaultSurface();
 /* lwob.c */
 
 lwSurface *lwGetSurface5( idFile *fp, int cksize, lwObject *obj );
-int lwGetPolygons5( idFile *fp, int cksize, lwPolygonList *plist, int ptoffset );
+int lwGetPolygons5( idFile *fp, int cksize, lwPolygonList *plist, int ptoffset,
+   lwSurfaceIndexState &surfaceIndices );
 lwObject *lwGetObject5( const char *filename, unsigned int *failID, int *failpos );
 
 /* list.c */
