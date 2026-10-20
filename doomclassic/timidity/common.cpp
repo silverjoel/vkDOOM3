@@ -28,6 +28,7 @@ common.c
 #include <string.h>
 
 #include <errno.h>
+#include <limits.h>
 #include "config.h"
 #include "common.h"
 #include "output.h"
@@ -145,34 +146,45 @@ void close_file(idFile * fp)
 /* This is meant for skipping a few bytes in a file or fifo. */
 void skip(idFile * fp, size_t len)
 {
-	size_t c;
 	char tmp[1024];
+	static_assert(sizeof(tmp)<=INT_MAX, "skip buffer must fit idFile::Read");
 	while (len>0)
 	{
-		c=len;
-		if (c>1024) c=1024;
-		len-=c;
-		if (c!=fp->Read(tmp, c ))
-			ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: skip: %s",
-			current_filename, strerror(errno));
+		const size_t chunk=len<sizeof(tmp) ? len : sizeof(tmp);
+		const int requested=static_cast<int>(chunk); /* bounded by sizeof(tmp) */
+		const int consumed=fp->Read(tmp, requested);
+		if (consumed<=0 || consumed>requested)
+		{
+			if (consumed<0)
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: skip: read failed (%d): %s",
+					current_filename, consumed, strerror(errno));
+			else
+				ctl->cmsg(CMSG_ERROR, VERB_NORMAL, "%s: skip: %s",
+					current_filename, consumed==0 ? "unexpected end of file" : "invalid read count");
+			return;
+		}
+		/* Positive short reads are progress; retry only the unread remainder. */
+		len-=static_cast<size_t>(consumed);
 	}
 }
 
 //extern void *Real_Tim_Malloc( size_t );
-/* This'll allocate memory or die. */
+/* Report fatal errors, close the control output and return NULL on failure. */
 void *safe_malloc(size_t count)
 {
 	void *p;
 	if (count > (1<<21))
 	{
 		ctl->cmsg(CMSG_FATAL, VERB_NORMAL, 
-			"Strange, I feel like allocating %d bytes. This must be a bug.",
-			count);
+			"Strange, I feel like allocating %llu bytes. This must be a bug.",
+			static_cast<unsigned long long>(count));
 	}
-	else if ((p=Real_Tim_Malloc(count)))
+	/* The existing 2 MiB admission limit fits the int allocator interface. */
+	else if ((p=Real_Tim_Malloc(static_cast<int>(count))))
 		return p;
 	else
-		ctl->cmsg(CMSG_FATAL, VERB_NORMAL, "Sorry. Couldn't malloc %d bytes.", count);
+		ctl->cmsg(CMSG_FATAL, VERB_NORMAL, "Sorry. Couldn't malloc %llu bytes.",
+			static_cast<unsigned long long>(count));
 
 	ctl->close();
 	//exit(10);
