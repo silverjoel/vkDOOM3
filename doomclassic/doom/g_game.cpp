@@ -1386,83 +1386,102 @@ void G_LoadGame (char* name)
 	::g->gameaction = ga_loadgame; 
 } 
 
-qboolean G_DoLoadGame () 
-{ 
-	int		i; 
-	int		a,b,c;
-	char	vcheck[VERSIONSIZE]; 
-
-	loadingGame = true;
-
-	::g->gameaction = ga_nothing; 
-
-	M_ReadFile (::g->savename, &::g->savebuffer); 
-
-	waitingForWipe = true;
-
-	// DHM - Nerve :: Clear possible net demo state
-	::g->netdemo = false;
-	::g->netgame = false;
-	::g->deathmatch = false;
-	::g->playeringame[1] = ::g->playeringame[2] = ::g->playeringame[3] = 0;
-	::g->respawnparm = false;
-	::g->fastparm = false;
-	::g->nomonsters = false;
-	::g->consoleplayer = 0;
-
-	::g->save_p = ::g->savebuffer + SAVESTRINGSIZE;
-
-	// skip the description field 
-	memset (vcheck,0,sizeof(vcheck)); 
-	sprintf (vcheck,"version %i",VERSION); 
-	if (strcmp ((char *)::g->save_p, vcheck)) {
-		loadingGame = false;
-		waitingForWipe = false;
-
-		return FALSE;				// bad version
+// Save buffers and the archive cursor have one operation owner. In particular,
+// the loaded extent is never borrowed from the previous save's byte count.
+class classicSaveOperation_t {
+public:
+	idFile *file;
+	byte *loaded;
+	int player;
+	classicSaveOperation_t() : file( NULL ), loaded( NULL ), player( DoomLib::GetPlayer() ) {}
+	~classicSaveOperation_t() {
+		DoomLib::SetPlayer( player );
+		P_EndSaveArchive();
+		if ( file ) fileSystem->CloseFile( file );
+		if ( loaded ) Z_Free( loaded );
+		::g->save_p = ::g->savebuffer = NULL;
 	}
+private:
+	classicSaveOperation_t( const classicSaveOperation_t & );
+	classicSaveOperation_t &operator=( const classicSaveOperation_t & );
+};
 
-	::g->save_p += VERSIONSIZE; 
+static void G_AbortClassicSave( bool discardLevel ) {
+	// G_Ticker ignores G_DoLoadGame's boolean return. Throw through it to the
+	// existing host frame handler; PerformGameSwitch runs before the next tic.
+	if ( discardLevel ) P_DiscardSaveThinkers();
+	loadingGame = waitingForWipe = false;
+	::g->gameaction = ga_nothing;
+	::g->sendsave = false;
+	const int player = DoomLib::GetPlayer();
+	DoomLib::Interface.QuitCurrentGame();
+	DoomLib::SetPlayer( player );
+	::g->gameaction = ga_nothing;
+	common->SwitchToGame( DOOM3_BFG );
+	idLib::Printf( "DOOM Classic save operation rejected; returning to Doom 3.\n" );
+}
 
-	::g->gameskill = (skill_t)*::g->save_p++; 
-	::g->gameepisode = *::g->save_p++; 
-	::g->gamemission = *::g->save_p++;
-	::g->gamemap = *::g->save_p++; 
-	for (i=0 ; i<MAXPLAYERS ; i++) 
-		::g->playeringame[i] = *::g->save_p++; 
+qboolean G_DoLoadGame () {
+	classicSaveOperation_t operation;
+	bool levelReady = false;
+	loadingGame = true;
+	::g->gameaction = ga_nothing;
+	try {
+		operation.file = fileSystem->OpenFileRead( ::g->savename, false );
+		P_SaveRequire( operation.file != NULL, "Cannot open Classic save" );
+		const int length = operation.file->Length();
+		const int headerSize = SAVESTRINGSIZE + VERSIONSIZE + 4 + MAXPLAYERS + 3;
+		P_SaveRequire( length >= headerSize && length <= SAVEGAMESIZE, "Invalid Classic save length" );
+		operation.loaded = static_cast<byte *>( Z_Malloc( length, PU_STATIC, NULL ) );
+		P_SaveRequire( operation.loaded != NULL, "Classic save allocation failed" );
+		P_SaveRequire( operation.file->Read( operation.loaded, length ) == length, "Short Classic save read" );
+		fileSystem->CloseFile( operation.file );
+		operation.file = NULL;
+		::g->savebuffer = operation.loaded;
+		P_BeginSaveArchive( operation.loaded, size_t( length ), true );
+		P_SaveBytes( SAVESTRINGSIZE, true );
+		const byte *version = P_SaveBytes( VERSIONSIZE, true );
+		char expected[VERSIONSIZE] = {};
+		sprintf( expected, "version %i", VERSION );
+		P_SaveRequire( memchr( version, 0, VERSIONSIZE ) && !strcmp( reinterpret_cast<const char *>( version ), expected ), "Invalid Classic save version" );
+		const byte *header = P_SaveBytes( 4 + MAXPLAYERS + 3, true );
+		P_SaveRequire( header[0] <= sk_nightmare && header[1] >= 1 && header[1] <= 4 &&
+			header[2] <= pack_nerve && header[2] == ::g->gamemission && header[3] >= 1,
+			"Invalid Classic save level header" );
+		for ( int i = 0; i < MAXPLAYERS; ++i ) P_SaveRequire( header[4+i] <= 1, "Invalid Classic saved player flag" );
+		P_SaveRequire( header[4] == 1, "Classic save has no console player" );
+		char mapName[16];
+		if ( ::g->gamemode == commercial ) sprintf( mapName, "MAP%02i", header[3] );
+		else sprintf( mapName, "E%iM%i", header[1], header[3] );
+		P_SaveRequire( W_CheckNumForName( mapName ) >= 0, "Classic save map is unavailable" );
 
-	// load a base level 
-	G_InitNew (::g->gameskill, ::g->gameepisode, ::g->gamemap ); 
-
-	// get the times 
-	a = *::g->save_p++; 
-	b = *::g->save_p++; 
-	c = *::g->save_p++; 
-	::g->leveltime = (a<<16) + (b<<8) + c; 
-
-	// dearchive all the modifications
-	P_UnArchivePlayers (); 
-	P_UnArchiveWorld (); 
-	P_UnArchiveThinkers ();
-
-	// specials are archived with thinkers
-	//P_UnArchiveSpecials (); 
-
-	if (*::g->save_p != 0x1d) 
-		I_Error ("Bad savegame");
-
-	if (::g->setsizeneeded)
-		R_ExecuteSetViewSize ();
-
-	// draw the pattern into the back screen
-	R_FillBackScreen ();
-
-	loadingGame = false;
-
-	Z_Free(g->savebuffer);
-
-	return TRUE;
-} 
+		waitingForWipe = true;
+		::g->netdemo = ::g->netgame = ::g->deathmatch = false;
+		::g->respawnparm = ::g->fastparm = ::g->nomonsters = false;
+		::g->consoleplayer = 0;
+		::g->gameskill = static_cast<skill_t>( header[0] );
+		::g->gameepisode = header[1];
+		::g->gamemission = header[2];
+		::g->gamemap = header[3];
+		for ( int i = 0; i < MAXPLAYERS; ++i ) ::g->playeringame[i] = header[4+i];
+		G_InitNew( ::g->gameskill, ::g->gameepisode, ::g->gamemap );
+		levelReady = true;
+		const byte *time = header + 4 + MAXPLAYERS;
+		::g->leveltime = ( int( time[0] ) << 16 ) | ( int( time[1] ) << 8 ) | time[2];
+		P_UnArchivePlayers();
+		P_UnArchiveWorld();
+		P_UnArchiveThinkers();
+		P_SaveRequire( *P_SaveBytes( 1, true ) == 0x1d, "Invalid Classic save final marker" );
+		if ( ::g->setsizeneeded ) R_ExecuteSetViewSize();
+		R_FillBackScreen();
+		loadingGame = false;
+		return TRUE;
+	} catch ( idException & ) {
+		DoomLib::SetPlayer( operation.player );
+		G_AbortClassicSave( levelReady );
+		throw;
+	}
+}
 
 
 //
@@ -1481,20 +1500,20 @@ G_SaveGame
 	::g->gameaction = ga_savegame;
 } 
 
-qboolean G_DoSaveGame (void) 
-{ 
-	char	name[100]; 
-	char	name2[VERSIONSIZE]; 
-	char*	description; 
-	int		length; 
-	int		i; 
+qboolean G_DoSaveGame (void)
+{
+	char	name[100];
+	char	name2[VERSIONSIZE];
+	char*	description;
+	int		length;
+	int		i;
 	qboolean	bResult = true;
 
 	if ( ::g->gamestate != GS_LEVEL ) {
 		return false;
 	}
 
-	description = ::g->savedescription; 
+	description = ::g->savedescription;
 
 	if( common->GetCurrentGame() == DOOM_CLASSIC ) {
 		sprintf(name,"DOOM\\%s%d.dsg", SAVEGAMENAME,::g->savegameslot );
@@ -1507,54 +1526,63 @@ qboolean G_DoSaveGame (void)
 
 	}
 
-	::g->save_p = ::g->savebuffer = ::g->screens[1];
+	classicSaveOperation_t operation;
+	try {
+		const size_t screenCapacity = size_t( SCREENWIDTH ) * SCREENHEIGHT * 3;
+		const size_t capacity = screenCapacity < size_t( SAVEGAMESIZE ) ? screenCapacity : size_t( SAVEGAMESIZE );
+		::g->savebuffer = ::g->screens[1];
+		P_BeginSaveArchive( ::g->savebuffer, capacity, false );
 
-	memcpy (::g->save_p, description, SAVESTRINGSIZE); 
-	::g->save_p += SAVESTRINGSIZE; 
+		memcpy (P_SaveBytes( SAVESTRINGSIZE, false ), description, SAVESTRINGSIZE);
 
-	memset (name2,0,sizeof(name2)); 
-	sprintf (name2,"version %i",VERSION); 
-	memcpy (::g->save_p, name2, VERSIONSIZE); 
-	::g->save_p += VERSIONSIZE; 
 
-	*::g->save_p++ = ::g->gameskill; 
-	*::g->save_p++ = ::g->gameepisode; 
-	*::g->save_p++ = ::g->gamemission;
-	*::g->save_p++ = ::g->gamemap; 
+		memset (name2,0,sizeof(name2));
+		sprintf (name2,"version %i",VERSION);
+		memcpy (P_SaveBytes( VERSIONSIZE, false ), name2, VERSIONSIZE);
 
-	for (i=0 ; i<MAXPLAYERS ; i++) {
-		*::g->save_p++ = ::g->playeringame[i];
+
+		*P_SaveBytes( 1, false ) = ::g->gameskill;
+		*P_SaveBytes( 1, false ) = ::g->gameepisode;
+		*P_SaveBytes( 1, false ) = ::g->gamemission;
+		*P_SaveBytes( 1, false ) = ::g->gamemap;
+
+		for (i=0 ; i<MAXPLAYERS ; i++) {
+			*P_SaveBytes( 1, false ) = ::g->playeringame[i];
+		}
+
+		*P_SaveBytes( 1, false ) = ::g->leveltime>>16;
+		*P_SaveBytes( 1, false ) = ::g->leveltime>>8;
+		*P_SaveBytes( 1, false ) = ::g->leveltime;
+
+		P_ArchivePlayers ();
+		P_ArchiveWorld ();
+		P_ArchiveThinkers ();
+
+		// specials are archived with thinkers
+		//P_ArchiveSpecials ();
+
+		*P_SaveBytes( 1, false ) = 0x1d;		// ::g->consistancy marker
+
+		length = static_cast<int>( P_SavePosition() );
+		P_SaveRequire( length <= SAVEGAMESIZE, "Classic save buffer overrun" );
+
+		::g->savebufferSize = length;
+
+		bResult = M_WriteFile (name, ::g->savebuffer, length);
+
+		::g->gameaction = ga_nothing;
+		::g->savedescription[0] = 0;
+
+		// draw the pattern into the back screen
+		R_FillBackScreen ();
+
+		return bResult;
+	} catch ( idException & ) {
+		DoomLib::SetPlayer( operation.player );
+		G_AbortClassicSave( false );
+		throw;
 	}
-
-	*::g->save_p++ = ::g->leveltime>>16; 
-	*::g->save_p++ = ::g->leveltime>>8; 
-	*::g->save_p++ = ::g->leveltime; 
-
-	P_ArchivePlayers (); 
-	P_ArchiveWorld (); 
-	P_ArchiveThinkers ();
-
-	// specials are archived with thinkers
-	//P_ArchiveSpecials (); 
-
-	*::g->save_p++ = 0x1d;		// ::g->consistancy marker 
-
-	length = ::g->save_p - ::g->savebuffer; 
-	if (length > SAVEGAMESIZE) 
-		I_Error ("Savegame buffer overrun");
-
-	::g->savebufferSize = length;
-	
-	M_WriteFile (name, ::g->savebuffer, length); 
-
-	::g->gameaction = ga_nothing; 
-	::g->savedescription[0] = 0;		 
-
-	// draw the pattern into the back screen
-	R_FillBackScreen ();
-
-	return bResult;
-} 
+}
 
 
 //

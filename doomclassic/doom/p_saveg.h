@@ -48,6 +48,15 @@ void P_UnArchiveSpecials (void);
 
 extern byte*		save_p; 
 
+// Internal operation boundary owned by G_DoSaveGame/G_DoLoadGame. These do not
+// describe a disk structure; the existing native record bytes remain unchanged.
+void P_BeginSaveArchive( byte *buffer, size_t length, bool reading );
+void P_EndSaveArchive();
+void P_SaveRequire( bool valid, const char *message );
+byte *P_SaveBytes( size_t amount, bool reading );
+size_t P_SavePosition();
+void P_DiscardSaveThinkers();
+
 
 #endif
 
