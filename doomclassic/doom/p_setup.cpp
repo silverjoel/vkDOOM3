@@ -31,6 +31,7 @@ If you have questions concerning this license or the applicable additional terms
 
 
 #include <math.h>
+#include <limits.h>
 
 #include "z_zone.h"
 
@@ -521,12 +522,30 @@ void P_LoadBlockMap (int lump)
 // Builds sector line lists and subsector sector numbers.
 // Finds block bounding boxes for ::g->sectors.
 //
+static void P_GroupLinesRequire( bool valid, const char *message ) {
+	if ( !valid ) {
+		// I_Error returns. Unwind level setup instead of using an invalid table.
+		idLib::Printf( "DOOM Classic error: %s\n", message );
+		DoomLib::Interface.QuitCurrentGame();
+		common->SwitchToGame( DOOM3_BFG );
+		throw idException( message );
+	}
+}
+
+static int P_LinePointerAllocationBytes( size_t count ) {
+	// Leave room for Z_Malloc's four-byte rounding and native block header.
+	const size_t maxBytes = ( size_t( INT_MAX ) - sizeof( memblock_t ) ) & ~size_t( 3 );
+	P_GroupLinesRequire( count <= maxBytes / sizeof( line_t * ),
+		"P_GroupLines: line pointer allocation exceeds zone size contract" );
+	return static_cast<int>( count * sizeof( line_t * ) );
+}
+
 void P_GroupLines (void)
 {
 	line_t**		linebuffer;
 	int			i;
 	int			j;
-	int			total;
+	size_t			total;
 	line_t*		li;
 	sector_t*		sector;
 	subsector_t*	ss;
@@ -534,6 +553,12 @@ void P_GroupLines (void)
 	fixed_t		bbox[4];
 	int			block;
 
+	P_GroupLinesRequire( ::g->numlines >= 0 && ::g->numsectors >= 0,
+		"P_GroupLines: negative map count" );
+	for ( i = 0; i < ::g->numsectors; ++i ) {
+		P_GroupLinesRequire( ::g->sectors[i].linecount == 0,
+			"P_GroupLines: sector line count was not cleared" );
+	}
 	
 	// look up sector number for each subsector
 	ss = ::g->subsectors;
@@ -546,6 +571,8 @@ void P_GroupLines (void)
 	// count number of ::g->lines in each sector
 	li = ::g->lines;
 	total = 0;
+	// At most two entries per int-counted line: the total fits size_t.
+	// A sector receives at most one entry per line, so its int count fits.
 	for (i=0 ; i < ::g->numlines ; i++, li++)
 	{
 		total++;
@@ -559,7 +586,9 @@ void P_GroupLines (void)
 	}
 
 	// build line tables for each sector	
-	linebuffer = (line_t**)Z_Malloc (total*4, PU_LEVEL, 0);
+	linebuffer = (line_t**)Z_Malloc (P_LinePointerAllocationBytes( total ), PU_LEVEL, 0);
+	P_GroupLinesRequire( linebuffer != NULL, "P_GroupLines: allocation failed" );
+	size_t written = 0;
 	sector = ::g->sectors;
 	for (i=0 ; i < ::g->numsectors ; i++, sector++)
 	{
@@ -570,13 +599,15 @@ void P_GroupLines (void)
 		{
 			if (li->frontsector == sector || li->backsector == sector)
 			{
+				P_GroupLinesRequire( written < total, "P_GroupLines: line pointer table overflow" );
 				*linebuffer++ = li;
+				++written;
 				M_AddToBox (bbox, li->v1->x, li->v1->y);
 				M_AddToBox (bbox, li->v2->x, li->v2->y);
 			}
 		}
-		if (linebuffer - sector->lines != sector->linecount)
-			I_Error ("P_GroupLines: miscounted");
+		P_GroupLinesRequire( linebuffer - sector->lines == sector->linecount,
+			"P_GroupLines: miscounted" );
 
 		// set the degenmobj_t to the middle of the bounding box
 		sector->soundorg.x = (bbox[BOXRIGHT]+bbox[BOXLEFT])/2;
@@ -599,6 +630,7 @@ void P_GroupLines (void)
 		block = block < 0 ? 0 : block;
 		sector->blockbox[BOXLEFT]=block;
 	}
+	P_GroupLinesRequire( written == total, "P_GroupLines: incomplete line pointer table" );
 
 }
 
