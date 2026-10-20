@@ -80,6 +80,7 @@ RestartSound_f
 ========================
 */
 void RestartSound_f( const idCmdArgs & args ) {
+	I_ClassicAudioEvent( "manual-restart-command" );
 	soundSystemLocal.Restart();
 }
 
@@ -106,6 +107,7 @@ idSoundSystemLocal::Restart
 ========================
 */
 void idSoundSystemLocal::Restart() {
+	I_ClassicAudioEvent( "restart-begin" );
 	// A full restart satisfies any request that was already pending when the
 	// restart began, including a manual s_restart. Clear it at entry rather
 	// than at exit so a new recovery request raised during hardware shutdown
@@ -154,6 +156,7 @@ void idSoundSystemLocal::Restart() {
 			}
 		}
 	}
+	I_ClassicAudioEvent( "restart-complete" );
 }
 
 /*
@@ -182,6 +185,7 @@ void idSoundSystemLocal::Init() {
 	cmdSystem->AddCommand( "testSound", TestSound_f, 0, "tests a sound", idCmdSystem::ArgCompletion_SoundName );
 	cmdSystem->AddCommand( "s_restart", RestartSound_f, 0, "restart sound system" );
 	cmdSystem->AddCommand( "listSamples", ListSamples_f, 0, "lists all loaded sound samples" );
+	I_ClassicAudioRegisterCommands();
 
 	idLib::Printf( "sound system initialized.\n" );
 	idLib::Printf( "--------------------------------------\n" );
@@ -288,12 +292,14 @@ void idSoundSystemLocal::Render() {
 	// (including context-local sample buffers) when enabling.
 	if (s_noSound.IsModified()) 
 	{
+		I_ClassicAudioEvent( "sound-disable-transition", 0, s_noSound.GetBool() );
 		s_noSound.ClearModified();
 
 		Restart();
 	}
 
 	if ( s_noSound.GetBool() ) {
+		I_ClassicAudioSample( false );
 		return;
 	}
 
@@ -309,7 +315,11 @@ void idSoundSystemLocal::Render() {
 	// source names be used while another/no OpenAL context is current. Keep
 	// logical sound time advancing while hardware is unavailable so expired
 	// one-shots do not resume later.
-	if (!hardware.Update()) {
+	const bool hardwareReady = hardware.Update();
+	// Immediately after Update's production AL error check, before any world
+	// update can produce a new error. false forbids diagnostic AL queries.
+	I_ClassicAudioSample( hardwareReady );
+	if (!hardwareReady) {
 		// A missing/wrong/disconnected context can persist for many frames.
 		// Do not freeze the sound world's CPU-side bookkeeping for the whole
 		// outage: completed emitters/channels should still age out while the

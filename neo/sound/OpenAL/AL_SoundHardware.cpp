@@ -247,6 +247,7 @@ idSoundHardware_OpenAL::Init
 */
 void idSoundHardware_OpenAL::Init()
 {
+	I_ClassicAudioEvent( "hardware-init-begin" );
 	cmdSystem->AddCommand( "listDevices", listDevices_f, 0, "Lists the connected sound devices", NULL );
 	
 	common->Printf( "Setup OpenAL device and context... " );
@@ -317,6 +318,7 @@ void idSoundHardware_OpenAL::Init()
 	// Start every hardware context with fresh OpenAL extension caches.
 	OpenAL_ResetContextCaches();
 	OpenAL_ResetSampleContextCaches();
+	I_ClassicAudioEvent( "context-created-current" );
 	
 	common->Printf( "Done.\n" );
 	
@@ -346,6 +348,7 @@ idSoundHardware_OpenAL::Shutdown
 */
 void idSoundHardware_OpenAL::Shutdown()
 {
+	I_ClassicAudioEvent( "hardware-shutdown-begin" );
 	// All OpenAL sources and buffers must be released while this context is
 	// still valid and current.
 	bool contextCurrent = false;

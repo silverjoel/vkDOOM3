@@ -86,11 +86,14 @@ typedef enum {
 #include "OpenAL/AL_SoundVoice.h"
 #include "OpenAL/AL_SoundHardware.h"
 
+#include "ClassicAudioCapture.h"
+
 ID_INLINE_EXTERN ALenum CheckALErrors_(const char* filename, int line)
 {
 	ALenum err = alGetError();
 	if (err != AL_NO_ERROR)
 	{
+		I_ClassicAudioEvent( "engine-al-error", 0, err, "", filename, line );
 		idLib::Printf("OpenAL Error: %s (0x%x), @ %s %d\n", alGetString(err), err, filename, line);
 	}
 	return err;
@@ -102,6 +105,7 @@ ID_INLINE_EXTERN ALCenum CheckALCErrors_(ALCdevice* device, const char* filename
 	ALCenum err = alcGetError(device);
 	if (err != ALC_NO_ERROR)
 	{
+		I_ClassicAudioEvent( "engine-alc-error", 0, err, "", filename, linenum );
 		idLib::Printf("ALC Error: %s (0x%x), @ %s %d\n", alcGetString(device, err), err, filename, linenum);
 	}
 	return err;
@@ -388,7 +392,12 @@ public:
 	// sets the final output volume to 0
 	// This should only be used when the app is deactivated
 	// Since otherwise there will be problems with different subsystems muting and unmuting at different times
-	virtual void			SetMute( bool mute ) { muted = mute; }
+	virtual void			SetMute( bool mute ) {
+		if ( muted != mute ) {
+			I_ClassicAudioEvent( "engine-mute", muted, mute, "SetMute; correlate WM_ACTIVATE/WM_CLOSE" );
+		}
+		muted = mute;
+	}
 	virtual bool			IsMuted() { return muted; }
 
 	virtual void			OnReloadSound( const idDecl * sound );
@@ -417,7 +426,10 @@ public:
 	void					StopVoicesWithSample( const idSoundSample * const sample );
 
 	void					Restart();
-	void					SetNeedsRestart() { needsRestart = true; }
+	void					SetNeedsRestart( const char * file = __builtin_FILE(), int line = __builtin_LINE() ) {
+		I_ClassicAudioEvent( "restart-request", needsRestart, 1, "", file, line );
+		needsRestart = true;
+	}
 
 	int						SoundTime() const;
 

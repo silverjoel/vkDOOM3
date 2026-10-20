@@ -59,6 +59,13 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "sound/snd_local.h"
 #include "sound/sound.h"
+class idDebugGraph;
+#include "framework/Console.h"
+#include "framework/Common_dialog.h"
+#include "sys/win32/win_local.h"
+
+extern idCVar s_volume_dB;
+extern idCVar s_noSound;
 
 #pragma warning ( disable : 4244 )
 
@@ -161,6 +168,353 @@ doomListener_t		doom_Listener;
 
 void			I_InvalidateSoundHardware();
 void			I_InitSoundChannel(int channel, int numOutputChannels_);
+
+// Diagnostic storage is independent of source/buffer ownership. Snapshots and
+// events have separate rings so an error storm cannot evict the state history.
+namespace {
+const int CAPTURE_SAMPLES = 640;	// >= 128 seconds at at most 5 Hz
+const int CAPTURE_EVENTS = 2048;
+const uint64 CAPTURE_INTERVAL_US = 200000;
+struct captureRecord_t {
+	uint64 time;
+	int frame, player;
+	unsigned long thread;
+	char text[1536];
+};
+template< int Capacity > struct captureRing_t {
+	captureRecord_t records[Capacity];
+	int next, count;
+	uint64 overwritten;
+	captureRecord_t & Add() {
+		captureRecord_t & record = records[next];
+		next = ( next + 1 ) % Capacity;
+		if ( count < Capacity ) { ++count; } else { ++overwritten; }
+		record.time = Sys_Microseconds();
+		record.frame = idLib::frameNumber;
+		record.player = DoomLib::GetPlayer();
+		record.thread = GetCurrentThreadId();
+		return record;
+	}
+};
+static captureRing_t<CAPTURE_SAMPLES> captureSamples;
+static captureRing_t<CAPTURE_EVENTS> captureEvents;
+static bool captureEnabled;
+static uint64 captureStart, captureEnd, captureLastSample;
+static uint64 captureLastUpdate[3], captureUpdateCount[3];
+static int captureUpdateFrame[3];
+static const char * captureUpdateReason[3];
+static const char * captureFrameReason = "not-observed";
+static int captureClassicFrame = -1;
+static uint64 captureStarts, captureStops, captureRetirements;
+static uint64 captureSourceFailures, captureBufferFailures, captureErrors;
+static uint64 captureQueryErrors, captureMaxProbeUS;
+static char captureStartUTC[32], captureIdentity[512], captureDll[MAX_PATH];
+static ALCcontext * captureIdentityContext;
+static bool captureHaveState;
+struct captureState_t {
+	int game, player, paused, musicPaused, menu, consoleOpen, dialog, systemUI;
+	int focus, muted, musicVolume, sfxVolume, deviceIndex, noSound;
+	float masterDB, musicGain, sfxGain;
+};
+static captureState_t capturePreviousState;
+
+static bool CaptureActive() {
+	// All rings are main-thread only. No locks or AL calls on another thread.
+	return idLib::IsMainThread() && captureEnabled;
+}
+static void CaptureUTC( char * buffer, int capacity ) {
+	SYSTEMTIME now;
+	GetSystemTime( &now );
+	idStr::snPrintf( buffer, capacity, "%04u-%02u-%02uT%02u:%02u:%02uZ",
+		now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond );
+}
+static void CaptureUpdate( int index, const char * reason = NULL ) {
+	if ( !CaptureActive() ) { return; }
+	if ( reason == NULL ) {
+		captureLastUpdate[index] = Sys_Microseconds();
+		captureUpdateFrame[index] = idLib::frameNumber;
+		++captureUpdateCount[index];
+	}
+	captureUpdateReason[index] = reason != NULL ? reason : "ran";
+}
+static long long CaptureAge( uint64 now, uint64 then ) {
+	return then != 0 ? static_cast<long long>( now - then ) : -1;
+}
+static captureState_t CaptureState() {
+	captureState_t state = {};
+	state.game = common->GetCurrentGame();
+	state.player = DoomLib::GetPlayer();
+	const Globals * player = static_cast<const Globals *>( DoomLib::GetGlobalData( 0 ) );
+	state.paused = player != NULL ? player->paused : -1;
+	state.musicPaused = player != NULL ? player->mus_paused : -1;
+	state.menu = player != NULL ? player->menuactive : -1;
+	state.consoleOpen = console->Active();
+	state.dialog = common->Dialog().IsDialogPausing();
+	state.systemUI = session->IsSystemUIShowing();
+	state.focus = win32.activeApp;
+	state.muted = soundSystem->IsMuted();
+	state.masterDB = s_volume_dB.GetFloat();
+	state.musicVolume = s_volume_midi.GetInteger();
+	state.sfxVolume = s_volume_sound.GetInteger();
+	state.musicGain = x_MusicVolume * GLOBAL_VOLUME_MULTIPLIER;
+	state.sfxGain = x_SoundVolume;
+	state.deviceIndex = cvarSystem->GetCVarInteger( "s_device" );
+	state.noSound = s_noSound.GetBool();
+	return state;
+}
+static void CaptureStateEdges( const captureState_t & state ) {
+#define CAPTURE_EDGE(member) \
+	if ( !captureHaveState || state.member != capturePreviousState.member ) { \
+		I_ClassicAudioEvent( "state-" #member, capturePreviousState.member, state.member, \
+			captureHaveState ? "observed" : "initial; before unavailable" ); \
+	}
+	CAPTURE_EDGE(game) CAPTURE_EDGE(paused) CAPTURE_EDGE(musicPaused)
+	CAPTURE_EDGE(menu) CAPTURE_EDGE(consoleOpen) CAPTURE_EDGE(dialog)
+	CAPTURE_EDGE(systemUI) CAPTURE_EDGE(focus) CAPTURE_EDGE(muted)
+	CAPTURE_EDGE(musicVolume) CAPTURE_EDGE(sfxVolume) CAPTURE_EDGE(deviceIndex) CAPTURE_EDGE(noSound)
+#undef CAPTURE_EDGE
+	if ( !captureHaveState || state.masterDB != capturePreviousState.masterDB ||
+		state.musicGain != capturePreviousState.musicGain || state.sfxGain != capturePreviousState.sfxGain ) {
+		char detail[256];
+		idStr::snPrintf( detail, sizeof(detail), "masterDB %.6g->%.6g musicGain %.6g->%.6g sfxGain %.6g->%.6g%s",
+			capturePreviousState.masterDB, state.masterDB, capturePreviousState.musicGain, state.musicGain,
+			capturePreviousState.sfxGain, state.sfxGain, captureHaveState ? "" : " initial; before unavailable" );
+		I_ClassicAudioEvent( "gain-state", 0, 0, detail );
+	}
+	capturePreviousState = state;
+	captureHaveState = true;
+}
+// Called only at the clean, owned-context boundary supplied by Render(). Never
+// clears an error before a query: production already checked its own result.
+// Errors generated by OUR read-only queries are recorded and consumed here.
+static bool CaptureQueryOK() {
+	const ALenum error = alGetError();
+	if ( error == AL_NO_ERROR ) { return true; }
+	++captureQueryErrors;
+	I_ClassicAudioEvent( "diagnostic-query-error", 0, error );
+	return false;
+}
+static bool CaptureSource( ALuint source, int & state, float & gain, float & offset ) {
+	state = -1; gain = offset = -1.0f;
+	const ALboolean exists = alIsSource( source );
+	if ( !CaptureQueryOK() || exists != AL_TRUE ) { return false; }
+	ALint queriedState = -1;
+	ALfloat queriedGain = -1.0f, queriedOffset = -1.0f;
+	alGetSourcei( source, AL_SOURCE_STATE, &queriedState );
+	alGetSourcef( source, AL_GAIN, &queriedGain );
+	alGetSourcef( source, AL_SEC_OFFSET, &queriedOffset );
+	if ( !CaptureQueryOK() ) { return false; }
+	state = queriedState; gain = queriedGain; offset = queriedOffset;
+	return true;
+}
+static void CaptureControl_f( const idCmdArgs & args ) {
+	if ( args.Argc() != 2 || ( idStr::Cmp( args.Argv(1), "0" ) && idStr::Cmp( args.Argv(1), "1" ) ) ) {
+		idLib::Printf( "Usage: classicAudioCapture 1|0 (1 clears previous capture)\n" );
+		return;
+	}
+	if ( !idLib::IsMainThread() ) { return; }
+	if ( args.Argv(1)[0] == '0' ) {
+		I_ClassicAudioEvent( "capture-stop" );
+		if ( captureEnabled ) { captureEnd = Sys_Microseconds(); }
+		captureEnabled = false;
+		return;
+	}
+	captureSamples.next = captureSamples.count = captureEvents.next = captureEvents.count = 0;
+	captureSamples.overwritten = captureEvents.overwritten = 0;
+	captureStarts = captureStops = captureRetirements = captureSourceFailures = captureBufferFailures = 0;
+	captureErrors = captureQueryErrors = captureMaxProbeUS = 0;
+	for ( int i = 0; i < 3; ++i ) {
+		captureLastUpdate[i] = captureUpdateCount[i] = 0;
+		captureUpdateFrame[i] = -1;
+		captureUpdateReason[i] = "not-observed";
+	}
+	captureFrameReason = "not-observed";
+	captureClassicFrame = -1;
+	captureHaveState = false;
+	capturePreviousState = captureState_t();
+	captureIdentityContext = NULL;
+	idStr::Copynz( captureIdentity, "unavailable: no clean context sampled", sizeof(captureIdentity) );
+	captureDll[0] = '\0';
+	const HMODULE module = GetModuleHandleA( "OpenAL32.dll" );
+	if ( module != NULL ) { GetModuleFileNameA( module, captureDll, sizeof(captureDll) ); }
+	captureDll[sizeof(captureDll)-1] = '\0';
+	CaptureUTC( captureStartUTC, sizeof(captureStartUTC) );
+	captureStart = Sys_Microseconds();
+	captureEnd = captureLastSample = 0;
+	captureEnabled = true;
+	I_ClassicAudioEvent( "capture-start", 0, 1, "main-thread; console/marker state is recorded" );
+}
+static void CaptureMark_f( const idCmdArgs & args ) {
+	I_ClassicAudioEvent( "user-marker", console->Active(), win32.activeApp, args.Argc() > 1 ? args.Argv(1) : "marker" );
+}
+template< int Capacity > static void CaptureWriteRing( idFile * file, const char * type, const captureRing_t<Capacity> & ring ) {
+	for ( int i = 0; i < ring.count; ++i ) {
+		const captureRecord_t & record = ring.records[( ring.next - ring.count + Capacity + i ) % Capacity];
+		file->Printf( "%s\t%llu\t%d\t%d\t%lu\t%s\n", type, static_cast<unsigned long long>(record.time),
+			record.frame, record.player, record.thread, record.text );
+	}
+}
+static void CaptureDump_f( const idCmdArgs & args ) {
+	if ( !idLib::IsMainThread() || captureStart == 0 ) { return; }
+	if ( captureEnabled ) {
+		idLib::Printf( "Stop with classicAudioCapture 0 before dumping (disk I/O can interrupt gameplay).\n" );
+		return;
+	}
+	char name[128], endUTC[32], executable[MAX_PATH] = {};
+	CaptureUTC( endUTC, sizeof(endUTC) );
+	GetModuleFileNameA( NULL, executable, sizeof(executable) );
+	executable[sizeof(executable)-1] = '\0';
+	idStr::snPrintf( name, sizeof(name), "classic-audio-capture/capture-%lu-%llu.tsv",
+		GetCurrentProcessId(), static_cast<unsigned long long>(Sys_Microseconds()) );
+	idFile * file = fileSystem->OpenFileWrite( name );
+	if ( file == NULL ) { idLib::Warning( "Could not write Classic audio capture" ); return; }
+#ifdef _DEBUG
+	const char * configuration = "Debug x64";
+#else
+	const char * configuration = "Release x64";
+#endif
+	file->Printf( "# ClassicAudioCapture schema=1 configuration=%s compiled=%s %s\n", configuration, __DATE__, __TIME__ );
+	file->Printf( "# executable=%s\n# source_base_commit=20d1fb1415a7863c808d9fc5bada89169295365f + Stage A1 instrumentation; exact binary/commit mapping in verification report\n", executable );
+	file->Printf( "# startUTC=%s dumpUTC=%s startUS=%llu stopUS=%llu\n", captureStartUTC, endUTC,
+		static_cast<unsigned long long>(captureStart), static_cast<unsigned long long>(captureEnd) );
+	file->Printf( "# OpenAL_DLL=%s\n# %s\n", captureDll, captureIdentity );
+	file->Printf( "# samples=%d capacity=%d overwritten=%llu events=%d capacity=%d overwritten=%llu staticBytes=%llu\n",
+		captureSamples.count, CAPTURE_SAMPLES, static_cast<unsigned long long>(captureSamples.overwritten),
+		captureEvents.count, CAPTURE_EVENTS, static_cast<unsigned long long>(captureEvents.overwritten),
+		static_cast<unsigned long long>(sizeof(captureSamples) + sizeof(captureEvents)) );
+	file->Printf( "# probeMaxUS=%llu queryErrors=%llu productionALErrors=%llu; values -1=unavailable; ages in microseconds\n",
+		static_cast<unsigned long long>(captureMaxProbeUS), static_cast<unsigned long long>(captureQueryErrors),
+		static_cast<unsigned long long>(captureErrors) );
+	file->Printf( "# SFX stopped is ambiguous (one-shot completion is normal); unexpected stop cannot be inferred from state alone.\n" );
+	file->Printf( "# type\tmonotonicUS\tframe\tplayer\tthread\tfields (sort by monotonicUS across both rings)\n" );
+	CaptureWriteRing( file, "sample", captureSamples );
+	CaptureWriteRing( file, "event", captureEvents );
+	fileSystem->CloseFile( file );
+	idLib::Printf( "Classic audio capture: %s\n", fileSystem->RelativePathToOSPath( name, "fs_savepath" ) );
+}
+} // namespace
+
+void I_ClassicAudioRegisterCommands() {
+	cmdSystem->AddCommand( "classicAudioCapture", CaptureControl_f, 0, "1 starts a fresh bounded capture; 0 stops" );
+	cmdSystem->AddCommand( "classicAudioMark", CaptureMark_f, 0, "mark dropout/recovered without modifying audio" );
+	cmdSystem->AddCommand( "classicAudioDump", CaptureDump_f, 0, "dump stopped capture under fs_savepath" );
+}
+void I_ClassicAudioEvent( const char * event, int before, int after, const char * detail, const char * file, int line ) {
+	if ( !CaptureActive() ) { return; }
+	captureRecord_t & record = captureEvents.Add();
+	idStr::snPrintf( record.text, sizeof(record.text), "%s before=%d after=%d detail=%s source=%s:%d console=%d focus=%d",
+		event, before, after, detail, file, line, console->Active(), win32.activeApp );
+	// Markers are arbitrary console text; keep each bounded record on one line.
+	for ( char * p = record.text; *p; ++p ) { if ( *p == '\n' || *p == '\r' || *p == '\t' ) { *p = ' '; } }
+}
+void I_ClassicAudioFrame( const char * reason ) {
+	if ( !CaptureActive() ) { return; }
+	captureClassicFrame = idLib::frameNumber;
+	captureFrameReason = reason;
+}
+void I_ClassicAudioSample( bool cleanContext ) {
+	if ( !CaptureActive() ) { return; }
+	const captureState_t state = CaptureState();
+	CaptureStateEdges( state );
+	const uint64 now = Sys_Microseconds();
+	if ( captureLastSample != 0 && now - captureLastSample < CAPTURE_INTERVAL_US ) { return; }
+	captureLastSample = now;
+	// The caller just consumed the production listener-update error. Do not
+	// call IsContextCurrent here: it consumes ALC errors. false means no queries.
+	const bool query = cleanContext && alcGetCurrentContext() != NULL;
+	int musicState = -1, musicExists = -1, bufferExists = -1;
+	float musicGain = -1.0f, musicOffset = -1.0f, listenerGain = -1.0f;
+	int sfxActive = 0, sfxAllocated = 0, sfxPlaying = query ? 0 : -1, sfxStopped = query ? 0 : -1, sfxPaused = query ? 0 : -1;
+	int sfxUnavailable = 0;
+	int logical = 0, pending = 0, representative = -1;
+	float representativeGain = -1.0f, representativeOffset = -1.0f;
+	if ( query ) {
+		alGetListenerf( AL_GAIN, &listenerGain );
+		if ( !CaptureQueryOK() ) { listenerGain = -1.0f; }
+		musicExists = alMusicSourceVoice == 0 ? 0 :
+			( CaptureSource( alMusicSourceVoice, musicState, musicGain, musicOffset ) ? 1 : -1 );
+		bufferExists = alMusicBuffer != 0 && alIsBuffer( alMusicBuffer ) == AL_TRUE;
+		if ( !CaptureQueryOK() ) { bufferExists = -1; }
+		if ( captureIdentityContext != alcGetCurrentContext() ) {
+			captureIdentityContext = alcGetCurrentContext();
+			const char * vendor = alGetString( AL_VENDOR );
+			const char * renderer = alGetString( AL_RENDERER );
+			const char * version = alGetString( AL_VERSION );
+			if ( CaptureQueryOK() ) {
+				idStr::snPrintf( captureIdentity, sizeof(captureIdentity), "vendor=%s renderer=%s version=%s requestedDeviceIndex=%d (physical endpoint not queried)",
+					vendor != NULL ? vendor : "?", renderer != NULL ? renderer : "?", version != NULL ? version : "?", state.deviceIndex );
+				I_ClassicAudioEvent( "context-identity", 0, 0, captureIdentity );
+			}
+		}
+	}
+	for ( int i = 0; i < NUM_SOUNDBUFFERS; ++i ) {
+		if ( activeSounds[i].valid ) { ++sfxActive; }
+		if ( activeSounds[i].alSourceVoice == 0 ) { continue; }
+		++sfxAllocated;
+		if ( query ) {
+			int sourceState; float gain, offset;
+			if ( CaptureSource( activeSounds[i].alSourceVoice, sourceState, gain, offset ) ) {
+				if ( sourceState == AL_PLAYING ) { ++sfxPlaying; }
+				if ( activeSounds[i].valid && ( sourceState == AL_STOPPED || sourceState == AL_INITIAL ) ) { ++sfxStopped; }
+				if ( sourceState == AL_PAUSED ) { ++sfxPaused; }
+				if ( representative < 0 || sourceState == AL_PLAYING ) {
+					representative = i; representativeGain = gain; representativeOffset = offset;
+				}
+			} else {
+				++sfxUnavailable;
+			}
+		} else {
+			++sfxUnavailable;
+		}
+	}
+	for ( int i = 0; i < MAXPLAYERS; ++i ) {
+		const Globals * player = static_cast<const Globals *>( DoomLib::GetGlobalData(i) );
+		if ( player == NULL || player->channels == NULL ) { continue; }
+		for ( int c = 0; c < player->numChannels && c < NUM_SOUNDBUFFERS; ++c ) {
+			if ( player->channels[c].sfxinfo != NULL ) { ++logical; }
+		}
+	}
+	for ( int i = 0; i < 128; ++i ) { if ( soundEvents[i].handle != 0 ) { ++pending; } }
+	const char * gate = captureClassicFrame == idLib::frameNumber ? captureFrameReason : "no-Classic-frame-observed";
+	if ( state.game != DOOM_CLASSIC && state.game != DOOM2_CLASSIC ) { gate = "not-Classic"; }
+	else if ( state.dialog || state.systemUI ) { gate = "dialog/systemUI"; }
+	const char * reason[3];
+	for ( int i = 0; i < 3; ++i ) {
+		reason[i] = captureUpdateFrame[i] == idLib::frameNumber ? captureUpdateReason[i] : gate;
+	}
+	captureRecord_t & record = captureSamples.Add();
+	idStr::snPrintf( record.text, sizeof(record.text),
+		"game=%d paused=%d musPaused=%d menu=%d console=%d focus=%d mute=%d masterDB=%.6g musicVol=%d sfxVol=%d "
+		"ctxOK=%d context=%p device=%p listenerGain=%.6g "
+		"submitAge=%lld soundAge=%lld musicAge=%lld submit=%s sound=%s music=%s updates=%llu,%llu,%llu "
+		"track=%s loop=%d init=%d ready=%d waiting=%d recovery=%d musicSource=%u exists=%d buffer=%u bufferExists=%d musicState=%d musicGain=%.6g musicOffset=%.6g "
+		"sfxLogical=%d active=%d allocated=%d playing=%d stoppedAmbiguous=%d pausedSources=%d unavailable=%d pending=%d representative=%d sfxGain=%.6g sfxOffset=%.6g "
+		"starts=%llu stopRequests=%llu retirements=%llu sourceFailures=%llu bufferFailures=%llu",
+		state.game, state.paused, state.musicPaused, state.menu, state.consoleOpen, state.focus, state.muted, state.masterDB, state.musicVolume, state.sfxVolume,
+		query, query ? alcGetCurrentContext() : NULL, soundSystemLocal.hardware.GetOpenALDevice(), listenerGain,
+		CaptureAge(now,captureLastUpdate[0]), CaptureAge(now,captureLastUpdate[1]), CaptureAge(now,captureLastUpdate[2]), reason[0], reason[1], reason[2],
+		static_cast<unsigned long long>(captureUpdateCount[0]), static_cast<unsigned long long>(captureUpdateCount[1]), static_cast<unsigned long long>(captureUpdateCount[2]),
+		currentMusicName.c_str(), currentMusicLooping, Music_initialized, musicReady, waitingForMusic, musicHardwareRestartAttempted,
+		alMusicSourceVoice, musicExists, alMusicBuffer, bufferExists, musicState, musicGain, musicOffset,
+		logical, sfxActive, sfxAllocated, sfxPlaying, sfxStopped, sfxPaused, sfxUnavailable, pending, representative, representativeGain, representativeOffset,
+		static_cast<unsigned long long>(captureStarts), static_cast<unsigned long long>(captureStops), static_cast<unsigned long long>(captureRetirements),
+		static_cast<unsigned long long>(captureSourceFailures), static_cast<unsigned long long>(captureBufferFailures) );
+	const uint64 elapsed = Sys_Microseconds() - now;
+	if ( elapsed > captureMaxProbeUS ) { captureMaxProbeUS = elapsed; }
+}
+
+// Observe only the error reads production already performs; do not add clears
+// or change their returned values. Restrict the wrapper to the playback code
+// below (diagnostic probe errors above are tracked separately).
+static ALenum CaptureProductionALError( const char * file, int line ) {
+	const ALenum error = alGetError();
+	if ( error != AL_NO_ERROR && CaptureActive() ) {
+		++captureErrors;
+		I_ClassicAudioEvent( "classic-al-error", 0, error, "existing production error read", file, line );
+	}
+	return error;
+}
+#define alGetError() CaptureProductionALError( __FILE__, __LINE__ )
 
 /*
 ======================
@@ -276,6 +630,8 @@ allocator can create a fresh source for this logical channel later.
 */
 static void I_RetireFailedSoundSource(activeSound_t* sound)
 {
+	if ( CaptureActive() ) { ++captureRetirements; }
+	I_ClassicAudioEvent( "sfx-retire" );
 	if (sound == NULL) {
 		return;
 	}
@@ -497,6 +853,7 @@ I_SetSfxVolume
 */
 void I_SetSfxVolume(int volume)
 {
+	I_ClassicAudioEvent( "sfx-volume-request", s_volume_sound.GetInteger(), volume );
 	x_SoundVolume = ((float)volume / 15.f) * GLOBAL_VOLUME_MULTIPLIER;
 
 	// New sounds pick up x_SoundVolume in I_StartSound2(), but existing
@@ -569,6 +926,7 @@ static bool I_EnsureSfxBuffer(int id)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || buffer == 0) {
 		printf("[doomclassic] failed to recreate SFX buffer %d: 0x%X\n", id, alError);
+		if ( CaptureActive() ) { ++captureBufferFailures; }
 		I_RetireFailedSfxBuffer(buffer, id);
 		return false;
 	}
@@ -763,6 +1121,7 @@ int I_StartSound2(int id, int player, mobj_t* origin, mobj_t* listener_origin, i
 	sound->localSound = localSound;
 	sound->originator = origin;
 
+	if ( CaptureActive() ) { ++captureStarts; }
 	return handle;
 }
 
@@ -832,6 +1191,7 @@ I_StopSound
 */
 void I_StopSound(int handle, int player)
 {
+	if ( CaptureActive() ) { ++captureStops; }
 	// You need the handle returned by StartSound.
 	// Would be looping all channels,
 	// tracking down the handle,
@@ -964,7 +1324,9 @@ I_UpdateSound
 // channels and update sound positions.
 void I_UpdateSound(void)
 {
+	CaptureUpdate( 1 );
 	if (!soundHardwareInitialized || !I_ValidateSoundHardwareContext()) {
+		CaptureUpdate( 1, "uninitialized/invalid-context" );
 		return;
 	}
 
@@ -1155,6 +1517,7 @@ I_ShutdownSound
 */
 void I_ShutdownSound(void)
 {
+	I_ClassicAudioEvent( "classic-sound-shutdown" );
 	int done = 0;
 	int i;
 
@@ -1262,6 +1625,7 @@ sound channels.
 */
 void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 {
+	I_ClassicAudioEvent( "classic-hardware-init" );
 	::numOutputChannels = numOutputChannels_;
 
 	// This function is entered only after the OpenAL hardware layer has made
@@ -1295,6 +1659,7 @@ void I_InitSoundHardware(int numOutputChannels_, int channelMask)
 		const ALenum bufferError = alGetError();
 		if (bufferError != AL_NO_ERROR || alBuffers[i] == 0) {
 			printf("[doomclassic] failed to create SFX buffer %d: 0x%X\n", i, bufferError);
+			if ( CaptureActive() ) { ++captureBufferFailures; }
 			I_RetireFailedSfxBuffer(alBuffers[i], i);
 		}
 	}
@@ -1364,6 +1729,7 @@ sound channels.
 */
 void I_ShutdownSoundHardware()
 {
+	I_ClassicAudioEvent( "classic-hardware-shutdown" );
 	soundHardwareInitialized = false;
 
 	I_ShutdownMusic();
@@ -1421,6 +1787,7 @@ No OpenAL calls are made from this path.
 */
 void I_InvalidateSoundHardware()
 {
+	I_ClassicAudioEvent( "classic-context-invalidate" );
 	soundHardwareInitialized = false;
 
 	// The context is unavailable, so its source state cannot be queried.
@@ -1502,6 +1869,7 @@ void I_InitSoundChannel(int channel, int numOutputChannels_)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || soundchannel->alSourceVoice == 0) {
 		printf("[doomclassic] failed to create SFX source %d: 0x%X\n", channel, alError);
+		if ( CaptureActive() ) { ++captureSourceFailures; }
 		I_RetireFailedSoundSource(soundchannel);
 		return;
 	}
@@ -1530,6 +1898,7 @@ I_InitSound
 */
 void I_InitSound()
 {
+	I_ClassicAudioEvent( "classic-sound-init" );
 	if (S_initialized == 0) {
 		// A newly-entered Classic session gets a fresh bounded cleanup
 		// recovery episode for partial music initialization failures.
@@ -1614,6 +1983,7 @@ I_SubmitSound
 */
 void I_SubmitSound(void)
 {
+	CaptureUpdate( 0 );
 	// Only do this for player 0, it will still handle positioning
 	//		for other players, but it can't be outside the game
 	//		frame like the soundEvents are.
@@ -1623,6 +1993,8 @@ void I_SubmitSound(void)
 
 		// Change music if required
 		I_UpdateMusic();
+	} else {
+		CaptureUpdate( 0, "nonzero-player" );
 	}
 }
 
@@ -1640,6 +2012,7 @@ I_SetMusicVolume
 */
 void I_SetMusicVolume(int volume)
 {
+	I_ClassicAudioEvent( "music-volume-request", s_volume_midi.GetInteger(), volume );
 	x_MusicVolume = (float)volume / 15.f;
 }
 
@@ -1724,6 +2097,7 @@ I_InitMusic
 */
 void I_InitMusic(void)
 {
+	I_ClassicAudioEvent( "music-init" );
 	if (Music_initialized || classicHardwareDeferredUntilRestart) {
 		return;
 	}
@@ -1749,6 +2123,7 @@ void I_InitMusic(void)
 	ALenum alError = alGetError();
 	if (alError != AL_NO_ERROR || alMusicSourceVoice == 0) {
 		printf("[doomclassic] failed to create music source: 0x%X\n", alError);
+		I_ClassicAudioEvent( "music-source-create-failed", 0, alError );
 		I_CleanupFailedMusicInitObjects();
 		Timidity_Shutdown();
 		return;
@@ -1770,6 +2145,7 @@ void I_InitMusic(void)
 	alError = alGetError();
 	if (alError != AL_NO_ERROR || alMusicBuffer == 0) {
 		printf("[doomclassic] failed to create music buffer: 0x%X\n", alError);
+		I_ClassicAudioEvent( "music-buffer-create-failed", 0, alError );
 		I_CleanupFailedMusicInitObjects();
 		Timidity_Shutdown();
 		return;
@@ -1798,6 +2174,7 @@ I_ShutdownMusic
 */
 void I_ShutdownMusic(void)
 {
+	I_ClassicAudioEvent( "music-shutdown" );
 	if (Music_initialized) {
 		// Preserve only music that was actually pending, playing, or paused.
 		// A naturally completed non-looping track should not be restarted.
@@ -1978,6 +2355,7 @@ I_PlaySong
 */
 void I_PlaySong(const char* songname, int looping)
 {
+	I_ClassicAudioEvent( "music-change-request", currentMusicLooping, looping, songname );
 	const bool hardwareContextCurrent = I_ValidateSoundHardwareContext();
 
 	const bool retryingAbandonedTrack = !restoringMusicAfterHardwareRestart && musicNeedsExplicitRetry;
@@ -2160,6 +2538,7 @@ new context, do not create an endless restart loop.
 */
 static void I_HandleMusicHardwareFailure()
 {
+	I_ClassicAudioEvent( "music-recovery-attempt", musicHardwareRestartAttempted, 1, currentMusicName.c_str() );
 	musicReady = false;
 	waitingForMusic = false;
 	
@@ -2188,7 +2567,9 @@ I_UpdateMusic
 */
 void I_UpdateMusic(void)
 {
+	CaptureUpdate( 2 );
 	if (!I_ValidateSoundHardwareContext()) {
+		CaptureUpdate( 2, "invalid-context" );
 		return;
 	}
 
@@ -2215,6 +2596,7 @@ void I_UpdateMusic(void)
 			I_InitMusic();
 		}
 		 if (!Music_initialized) {
+			CaptureUpdate( 2, "music-uninitialized" );
 			return;
 		}
 	}
@@ -2223,6 +2605,7 @@ void I_UpdateMusic(void)
 	// paused. Keep it pending rather than starting playback underneath the
 	// pause state; I_ResumeSong() leaves pending songs for this path to start.
 	if (DoomLib::GetPlayer() >= 0 && ::g->mus_paused) {
+		CaptureUpdate( 2, "music-paused" );
 		return;
 	}
 
@@ -2257,6 +2640,7 @@ void I_UpdateMusic(void)
 			}
 			
 			if (!currentMusicLooping && sourceState == AL_STOPPED) {
+				I_ClassicAudioEvent( "music-natural-end", AL_PLAYING, sourceState, currentMusicName.c_str() );
 				// Natural completion of a one-shot track.
 				currentMusicName.Clear();
 				currentMusicLooping = 0;
@@ -2264,6 +2648,7 @@ void I_UpdateMusic(void)
 				musicReady = false;
 			}
 			else if (sourceState != AL_PLAYING) {
+				I_ClassicAudioEvent( "music-unexpected-state", AL_PLAYING, sourceState, currentMusicName.c_str() );
 				printf("[doomclassic] active music source entered unexpected state 0x%X; requesting recovery\n", sourceState);
 				I_HandleMusicHardwareFailure();
 				return;
@@ -2314,6 +2699,7 @@ void I_UpdateMusic(void)
 	musicHardwareRestartAttempted = false;
 	musicInitRetryAttempted = false;
 	musicNeedsExplicitRetry = false;
+	I_ClassicAudioEvent( "music-started", 0, AL_PLAYING, currentMusicName.c_str() );
 }
 
 /*
@@ -2323,6 +2709,7 @@ I_PauseSong
 */
 void I_PauseSong(int handle)
 {
+	I_ClassicAudioEvent( "music-pause-request", 0, handle );
 	if (!Music_initialized || !alMusicSourceVoice || !I_ValidateSoundHardwareContext()) {
 		return;
 	}
@@ -2353,6 +2740,8 @@ void I_PauseSong(int handle)
 		if (pauseError != AL_NO_ERROR) {
 			printf("[doomclassic] failed to pause music source: 0x%X\n", pauseError);
 			I_HandleMusicHardwareFailure();
+		} else {
+			I_ClassicAudioEvent( "music-paused", AL_PLAYING, AL_PAUSED );
 		}
 	}
 }
@@ -2364,6 +2753,7 @@ I_ResumeSong
 */
 void I_ResumeSong(int handle)
 {
+	I_ClassicAudioEvent( "music-resume-request", 0, handle );
 	if (!Music_initialized || !alMusicSourceVoice || !I_ValidateSoundHardwareContext()) {
 		return;
 	}
@@ -2394,6 +2784,8 @@ void I_ResumeSong(int handle)
 		if (resumeError != AL_NO_ERROR) {
 			printf("[doomclassic] failed to resume music source: 0x%X\n", resumeError);
 			I_HandleMusicHardwareFailure();
+		} else {
+			I_ClassicAudioEvent( "music-resumed", AL_PAUSED, AL_PLAYING );
 		}
 	}
 }
@@ -2405,6 +2797,7 @@ I_StopSong
 */
 bool I_StopSong(int handle)
 {
+	I_ClassicAudioEvent( "music-stop-request", 0, handle, currentMusicName.c_str() );
 	// This is a logical stop, not a hardware-only teardown. Do not allow the
 	// stopped track to be resurrected by a later sound-system restart.
 	currentMusicName.Clear();
@@ -2468,3 +2861,5 @@ int I_RegisterSong(void* data, int length)
 	// does nothing
 	return 0;
 }
+
+#undef alGetError

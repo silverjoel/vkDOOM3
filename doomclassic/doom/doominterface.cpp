@@ -35,6 +35,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "Main.h"
 #include "m_menu.h"
 #include "g_game.h"
+#include "sound/ClassicAudioCapture.h"
 
 extern void I_SetTime( int );
 
@@ -131,6 +132,7 @@ bool DoomInterface::Frame( int iTime, idUserCmdMgr * userCmdMgr )
 	int i;
 	bool bAllFinished = true;
 
+	I_ClassicAudioFrame( "network-time-gate" );
 	if ( !globalNetworking || ( lastTicRun < iTime ) ) {
 
 		drawFullScreen = false;
@@ -145,10 +147,12 @@ bool DoomInterface::Frame( int iTime, idUserCmdMgr * userCmdMgr )
 			I_SetTime( iTime );
 
 			if (bFinished[i] == false) {
+				if ( i == 0 ) { I_ClassicAudioFrame( "startup-poll" ); }
 				bAllFinished = false;
 				bFinished[i] = DoomLib::Poll();
 			} else {
 
+				if ( i == 0 ) { I_ClassicAudioFrame( ::g->wipedone ? "eligible" : "wipe" ); }
 				if (::g->wipedone) {
 					if ( !waitingForWipe ) {
 						const bool didRunTic = DoomLib::Tic( userCmdMgr );

@@ -30,6 +30,7 @@ If you have questions concerning this license or the applicable additional terms
 #pragma hdrstop
 #include "../../framework/precompiled.h"
 #include "win_local.h"
+#include "../../sound/ClassicAudioCapture.h"
 #include <Windowsx.h>
 
 LONG WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam );
@@ -202,6 +203,7 @@ LONG WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam ) {
 			break;
 
 		case WM_CLOSE:
+			I_ClassicAudioEvent( "WM_CLOSE" );
 			soundSystem->SetMute( true );
 			cmdSystem->BufferCommandText( CMD_EXEC_APPEND, "quit\n" );
 			break;
@@ -217,6 +219,8 @@ LONG WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam ) {
 				fActive = LOWORD(wParam);
 				fMinimized = (BOOL) HIWORD(wParam);
 
+				I_ClassicAudioEvent( "WM_ACTIVATE", win32.activeApp, fActive != WA_INACTIVE,
+					fMinimized ? "minimized" : "not-minimized" );
 				win32.activeApp = (fActive != WA_INACTIVE);
 				if ( win32.activeApp ) {
 					idKeyInput::ClearStates();
