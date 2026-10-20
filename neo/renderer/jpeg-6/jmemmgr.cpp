@@ -28,6 +28,7 @@
 #define AM_MEMORY_MANAGER   /* we define jvirt_Xarray_control structs */
 #include "jinclude.h"
 #include "jpeglib.h"
+#include <limits.h>
 #include "jmemsys.h"     /* import the system-dependent declarations */
 
 // bph id software added:
@@ -132,7 +133,7 @@ typedef struct {
     jvirt_barray_ptr virt_barray_list;
 
     /* This counts total space obtained from jpeg_get_small/large */
-    long total_space_allocated;
+    size_t total_space_allocated;
 
     /* alloc_sarray and alloc_barray set this value for use by virtual
      * array routines.
@@ -195,8 +196,8 @@ print_mem_stats( j_common_ptr cinfo, int pool_id ) {
      * fprintf directly rather than going through the trace message code.
      * This is helpful because message parm array can't handle longs.
      */
-    fprintf( stderr, "Freeing pool %d, total space = %ld\n",
-             pool_id, mem->total_space_allocated );
+    fprintf( stderr, "Freeing pool %d, total space = %llu\n",
+             pool_id, (unsigned long long) mem->total_space_allocated );
 
     for ( lhdr_ptr = mem->large_list[pool_id]; lhdr_ptr != NULL;
           lhdr_ptr = lhdr_ptr->hdr.next ) {
@@ -223,6 +224,40 @@ out_of_memory( j_common_ptr cinfo, int which ) {
     cinfo->err->trace_level = 2;/* force self_destruct to report stats */
 #endif
     ERREXIT1( cinfo, JERR_OUT_OF_MEMORY, which );
+}
+
+
+/* Accounting failures use cases 5 (addition) and 6 (pool release).
+ * Like all JPEG error exits, out_of_memory must not return.
+ */
+LOCAL size_t
+checked_space_add( j_common_ptr cinfo, size_t used, size_t extra ) {
+    if ( extra > (size_t) -1 - used ) {
+        out_of_memory( cinfo, 5 );
+    }
+    return used + extra;
+}
+
+LOCAL boolean
+pool_space( size_t used, size_t left, size_t header, size_t * extent ) {
+    /* Every pool was admitted against MAX_ALLOC_CHUNK before allocation. */
+    if ( header > (size_t) MAX_ALLOC_CHUNK ||
+         used > (size_t) MAX_ALLOC_CHUNK - header ||
+         left > (size_t) MAX_ALLOC_CHUNK - header - used ) {
+        *extent = 0;
+        return FALSE;
+    }
+    *extent = used + left + header;
+    return TRUE;
+}
+
+LOCAL long
+legacy_space_allocated( size_t total ) {
+    /* nobs ignores this argument.  For the budget-based backends, a total
+     * above LONG_MAX exhausts every nonnegative long budget: saturation
+     * preserves their minimum-buffer fallback without signed wrapping.
+     */
+    return total > (size_t) LONG_MAX ? LONG_MAX : (long) total;
 }
 
 
@@ -258,7 +293,7 @@ alloc_small( j_common_ptr cinfo, int pool_id, size_t sizeofobject ) {
     my_mem_ptr mem = (my_mem_ptr) cinfo->mem;
     small_pool_ptr hdr_ptr, prev_hdr_ptr;
     char * data_ptr;
-    size_t odd_bytes, min_request, slop;
+    size_t odd_bytes, min_request, slop, extent, new_total;
 
     /* Check for unsatisfiable request (do now to ensure no overflow below) */
     if ( sizeofobject > (size_t) ( MAX_ALLOC_CHUNK - SIZEOF( small_pool_hdr ) ) ) {
@@ -288,7 +323,7 @@ alloc_small( j_common_ptr cinfo, int pool_id, size_t sizeofobject ) {
     /* Time to make a new pool? */
     if ( hdr_ptr == NULL ) {
         /* min_request is what we need now, slop is what will be leftover */
-        min_request = sizeofobject + SIZEOF( small_pool_hdr );
+        min_request = checked_space_add( cinfo, sizeofobject, SIZEOF( small_pool_hdr ) );
         if ( prev_hdr_ptr == NULL ) {/* first pool in class? */
             slop = first_pool_slop[pool_id];
         } else {
@@ -300,7 +335,9 @@ alloc_small( j_common_ptr cinfo, int pool_id, size_t sizeofobject ) {
         }
         /* Try to get space, if fail reduce slop and try again */
         for (;; ) {
-            hdr_ptr = (small_pool_ptr) jpeg_get_small( cinfo, min_request + slop );
+            extent = checked_space_add( cinfo, min_request, slop );
+            new_total = checked_space_add( cinfo, mem->total_space_allocated, extent );
+            hdr_ptr = (small_pool_ptr) jpeg_get_small( cinfo, extent );
             if ( hdr_ptr != NULL ) {
                 break;
             }
@@ -309,11 +346,11 @@ alloc_small( j_common_ptr cinfo, int pool_id, size_t sizeofobject ) {
                 out_of_memory( cinfo, 2 );
             }                /* jpeg_get_small failed */
         }
-        mem->total_space_allocated += min_request + slop;
+        mem->total_space_allocated = new_total;
         /* Success, initialize the new pool header and add to end of list */
         hdr_ptr->hdr.next = NULL;
         hdr_ptr->hdr.bytes_used = 0;
-        hdr_ptr->hdr.bytes_left = sizeofobject + slop;
+        hdr_ptr->hdr.bytes_left = extent - SIZEOF( small_pool_hdr );
         if ( prev_hdr_ptr == NULL ) {/* first pool in class? */
             mem->small_list[pool_id] = hdr_ptr;
         } else {
@@ -350,7 +387,7 @@ alloc_large( j_common_ptr cinfo, int pool_id, size_t sizeofobject ) {
 /* Allocate a "large" object */
     my_mem_ptr mem = (my_mem_ptr) cinfo->mem;
     large_pool_ptr hdr_ptr;
-    size_t odd_bytes;
+    size_t odd_bytes, extent, new_total;
 
     /* Check for unsatisfiable request (do now to ensure no overflow below) */
     if ( sizeofobject > (size_t) ( MAX_ALLOC_CHUNK - SIZEOF( large_pool_hdr ) ) ) {
@@ -368,12 +405,13 @@ alloc_large( j_common_ptr cinfo, int pool_id, size_t sizeofobject ) {
         ERREXIT1( cinfo, JERR_BAD_POOL_ID, pool_id );
     }                                           /* safety check */
 
-    hdr_ptr = (large_pool_ptr) jpeg_get_large( cinfo, sizeofobject +
-                                              SIZEOF( large_pool_hdr ) );
+    extent = checked_space_add( cinfo, sizeofobject, SIZEOF( large_pool_hdr ) );
+    new_total = checked_space_add( cinfo, mem->total_space_allocated, extent );
+    hdr_ptr = (large_pool_ptr) jpeg_get_large( cinfo, extent );
     if ( hdr_ptr == NULL ) {
         out_of_memory( cinfo, 4 );
     }                           /* jpeg_get_large failed */
-    mem->total_space_allocated += sizeofobject + SIZEOF( large_pool_hdr );
+    mem->total_space_allocated = new_total;
 
     /* Success, initialize the new pool header and add to list */
     hdr_ptr->hdr.next = mem->large_list[pool_id];
@@ -629,7 +667,7 @@ realize_virt_arrays( j_common_ptr cinfo ) {
 
     /* Determine amount of memory to actually use; this is system-dependent. */
     avail_mem = jpeg_mem_available( cinfo, space_per_minheight, maximum_space,
-                                    mem->total_space_allocated );
+                                    legacy_space_allocated( mem->total_space_allocated ) );
 
     /* If the maximum space needed is available, make all the buffers full
      * height; otherwise parcel it out with the same number of minheights
@@ -953,12 +991,13 @@ access_virt_barray( j_common_ptr cinfo, jvirt_barray_ptr ptr,
  * Release all objects belonging to a specified pool.
  */
 
-METHODDEF void
-free_pool( j_common_ptr cinfo, int pool_id ) {
+LOCAL void
+release_pool( j_common_ptr cinfo, int pool_id, boolean destroying ) {
     my_mem_ptr mem = (my_mem_ptr) cinfo->mem;
     small_pool_ptr shdr_ptr;
     large_pool_ptr lhdr_ptr;
     size_t space_freed;
+    boolean valid_extent;
 
     if ( ( pool_id < 0 ) || ( pool_id >= JPOOL_NUMPOOLS ) ) {
         ERREXIT1( cinfo, JERR_BAD_POOL_ID, pool_id );
@@ -992,32 +1031,42 @@ free_pool( j_common_ptr cinfo, int pool_id ) {
     }
 
     /* Release large objects */
-    lhdr_ptr = mem->large_list[pool_id];
-    mem->large_list[pool_id] = NULL;
-
-    while ( lhdr_ptr != NULL ) {
-        large_pool_ptr next_lhdr_ptr = lhdr_ptr->hdr.next;
-        space_freed = lhdr_ptr->hdr.bytes_used +
-                      lhdr_ptr->hdr.bytes_left +
-                      SIZEOF( large_pool_hdr );
+    while ( ( lhdr_ptr = mem->large_list[pool_id] ) != NULL ) {
+        valid_extent = pool_space( lhdr_ptr->hdr.bytes_used,
+                                   lhdr_ptr->hdr.bytes_left,
+                                   SIZEOF( large_pool_hdr ), &space_freed );
+        if ( !destroying && ( !valid_extent || space_freed > mem->total_space_allocated ) ) {
+            out_of_memory( cinfo, 6 );
+        }
+        /* Keep remaining ownership published if error_exit destroys us. */
+        mem->large_list[pool_id] = lhdr_ptr->hdr.next;
         jpeg_free_large( cinfo, (void FAR *) lhdr_ptr, space_freed );
-        mem->total_space_allocated -= space_freed;
-        lhdr_ptr = next_lhdr_ptr;
+        if ( valid_extent && space_freed <= mem->total_space_allocated ) {
+            mem->total_space_allocated -= space_freed;
+        }
     }
 
     /* Release small objects */
-    shdr_ptr = mem->small_list[pool_id];
-    mem->small_list[pool_id] = NULL;
-
-    while ( shdr_ptr != NULL ) {
-        small_pool_ptr next_shdr_ptr = shdr_ptr->hdr.next;
-        space_freed = shdr_ptr->hdr.bytes_used +
-                      shdr_ptr->hdr.bytes_left +
-                      SIZEOF( small_pool_hdr );
+    while ( ( shdr_ptr = mem->small_list[pool_id] ) != NULL ) {
+        valid_extent = pool_space( shdr_ptr->hdr.bytes_used,
+                                   shdr_ptr->hdr.bytes_left,
+                                   SIZEOF( small_pool_hdr ), &space_freed );
+        if ( !destroying && ( !valid_extent || space_freed > mem->total_space_allocated ) ) {
+            out_of_memory( cinfo, 6 );
+        }
+        /* Keep remaining ownership published if error_exit destroys us. */
+        mem->small_list[pool_id] = shdr_ptr->hdr.next;
         jpeg_free_small( cinfo, (void *) shdr_ptr, space_freed );
-        mem->total_space_allocated -= space_freed;
-        shdr_ptr = next_shdr_ptr;
+        if ( valid_extent && space_freed <= mem->total_space_allocated ) {
+            mem->total_space_allocated -= space_freed;
+        }
     }
+}
+
+
+METHODDEF void
+free_pool( j_common_ptr cinfo, int pool_id ) {
+    release_pool( cinfo, pool_id, FALSE );
 }
 
 
@@ -1035,7 +1084,12 @@ self_destruct( j_common_ptr cinfo ) {
      * with some (brain-damaged) malloc libraries.
      */
     for ( pool = JPOOL_NUMPOOLS - 1; pool >= JPOOL_PERMANENT; pool-- ) {
-        free_pool( cinfo, pool );
+        /* error_exit may have entered destruction after an accounting error.
+         * Do not raise it again or wrap the counter.  With damaged extent
+         * metadata, pool_space supplies zero; all bundled free backends ignore
+         * the size argument.  This cannot repair arbitrary heap corruption.
+         */
+        release_pool( cinfo, pool, TRUE );
     }
 
     /* Release the memory manager control block too. */
