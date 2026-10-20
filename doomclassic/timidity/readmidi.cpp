@@ -24,6 +24,7 @@ Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 
 #include "config.h"
@@ -66,9 +67,19 @@ static  int32_t read_local(void* buffer, size_t len, size_t count)
 	}
 	
 	const size_t requestedBytes = len * count;
+	static_assert(INT_MAX <= INT32_MAX, "MIDI read counts must fit int32_t");
+	// Positive len and count are each bounded by their product. This also
+	// bounds the completed-element result for both file and memory reads.
+	if (requestedBytes > static_cast<size_t>(INT_MAX)) {
+		return 0;
+	}
 	
 	if (fp) {
-		return (int32_t)fp->Read(buffer, requestedBytes) / (int32_t)len;
+		const int bytesRead = fp->Read(buffer, static_cast<int>(requestedBytes));
+		if (bytesRead <= 0 || static_cast<size_t>(bytesRead) > requestedBytes) {
+			return 0;
+		}
+		return static_cast<int32_t>(static_cast<size_t>(bytesRead) / len);
 	}
 	else if (local_buffer != NULL) {
 		if (local_buffer_cur > local_buffer_length) {
@@ -81,7 +92,7 @@ static  int32_t read_local(void* buffer, size_t len, size_t count)
 			memcpy(buffer, &local_buffer[local_buffer_cur], copyBytes);
 			local_buffer_cur += copyBytes;
 		}
-		return (int32_t)(copyBytes / len);
+		return static_cast<int32_t>(copyBytes / len);
 	}
 
 	return 0;
