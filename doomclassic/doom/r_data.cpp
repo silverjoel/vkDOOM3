@@ -51,6 +51,8 @@ If you have questions concerning this license or the applicable additional terms
 #include "r_data.h"
 
 #include <vector>
+#include <new>
+#include <limits.h>
 
 //
 // Graphics.
@@ -339,176 +341,281 @@ R_GetColumn
 // Initializes the texture list
 //  with the s_textures from the world map.
 //
-void R_InitTextures (void)
-{
-    maptexture_t*	mtexture;
-    texture_t*		texture;
-    mappatch_t*		mpatch;
-    texpatch_t*		patch;
+namespace {
 
-    int			i;
-    int			j;
+// WAD fields are little-endian bytes, never native pointer-containing records.
+const size_t TEXTURE_HEADER_BYTES = 22;
+const size_t TEXTURE_PATCH_BYTES = 10;
 
-    int*		maptex;
-    int*		maptex2;
-    int*		maptex1;
-    
-    char		name[9];
-    char*		names;
-    char*		name_p;
-    
-    int			totalwidth;
-    int			nummappatches;
-    int			offset;
-    int			maxoff;
-    int			maxoff2;
-    int			numtextures1;
-    int			numtextures2;
+struct textureInitError_t {
+	const char *message;
+};
 
-    int*		directory;
-    
-    int			temp1;
-    int			temp2;
-    int			temp3;
-
-    
-    // Load the patch names from pnames.lmp.
-    name[8] = 0;	
-    names = (char*)W_CacheLumpName ("PNAMES", PU_CACHE_SHARED);
-    nummappatches = LONG ( *((int *)names) );
-    name_p = names+4;
-    
-	std::vector<int> patchlookup(nummappatches);
-
-    for (i=0 ; i<nummappatches ; i++)
-    {
-		strncpy (name,name_p+i*8, 8);
-		patchlookup[i] = W_CheckNumForName (name);
-    }
-    Z_Free(names);
-    
-	if (::g->s_numtextures == 0)
-	{
-
-		// Load the map texture definitions from textures.lmp.
-		// The data is contained in one or two lumps,
-		//  TEXTURE1 for shareware, plus TEXTURE2 for commercial.
-		maptex = maptex1 = (int*)W_CacheLumpName ("TEXTURE1", PU_CACHE_SHARED); // ALAN:  LOADTIME
-		numtextures1 = LONG(*maptex);
-		maxoff = W_LumpLength (W_GetNumForName ("TEXTURE1"));
-		directory = maptex+1;
-
-		if (W_CheckNumForName ("TEXTURE2") != -1)
-		{
-			maptex2 = (int*)W_CacheLumpName ("TEXTURE2", PU_CACHE_SHARED); // ALAN:  LOADTIME
-			numtextures2 = LONG(*maptex2);
-			maxoff2 = W_LumpLength (W_GetNumForName ("TEXTURE2"));
-		}
-		else
-		{
-			maptex2 = NULL;
-			numtextures2 = 0;
-			maxoff2 = 0;
-		}
-
-
-		::g->s_numtextures = numtextures1 + numtextures2;
-
-		::g->s_textures = (texture_t**)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-		::g->s_texturecolumnlump = (short**)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-		::g->s_texturecolumnofs = (unsigned short**)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-		::g->s_texturewidthmask = (int*)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-		::g->s_textureheight = (fixed_t*)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-		::g->s_texturecomposite = (byte**)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-		::g->s_texturecompositesize = (int*)DoomLib::Z_Malloc (::g->s_numtextures*4, PU_STATIC_SHARED, 0);
-
-		totalwidth = 0;
-
-		//	Really complex printing shit...
-		temp1 = W_GetNumForName ("S_START");  // P_???????
-		temp2 = W_GetNumForName ("S_END") - 1;
-		temp3 = ((temp2-temp1+63)/64) + ((::g->s_numtextures+63)/64);
-		I_Printf("[");
-		for (i = 0; i < temp3; i++)
-			I_Printf(" ");
-		I_Printf("         ]");
-		for (i = 0; i < temp3; i++)
-			I_Printf("\x8");
-		I_Printf("\x8\x8\x8\x8\x8\x8\x8\x8\x8\x8");	
-
-		for (i=0 ; i < ::g->s_numtextures ; i++, directory++)
-		{
-			if (!(i&63))
-				I_Printf (".");
-
-			if (i == numtextures1)
-			{
-				// Start looking in second texture file.
-				maptex = maptex2;
-				maxoff = maxoff2;
-				directory = maptex+1;
-			}
-		
-			offset = LONG(*directory);
-
-			if (offset > maxoff)
-				I_Error ("R_InitTextures: bad texture directory");
-		
-			mtexture = (maptexture_t *) ( (byte *)maptex + offset);
-
-			texture = ::g->s_textures[i] = (texture_t*)DoomLib::Z_Malloc (sizeof(texture_t)
-				+ sizeof(texpatch_t)*(SHORT(mtexture->patchcount)-1), PU_STATIC_SHARED, 0);
-
-			texture->width = SHORT(mtexture->width);
-			texture->height = SHORT(mtexture->height);
-			texture->patchcount = SHORT(mtexture->patchcount);
-
-			memcpy (texture->name, mtexture->name, sizeof(texture->name));
-			mpatch = &mtexture->patches[0];
-			patch = &texture->patches[0];
-
-			for (j=0 ; j<texture->patchcount ; j++, mpatch++, patch++)
-			{
-				patch->originx = SHORT(mpatch->originx);
-				patch->originy = SHORT(mpatch->originy);
-				patch->patch = patchlookup[SHORT(mpatch->patch)];
-				if (patch->patch == -1)
-				{
-					I_Error ("R_InitTextures: Missing patch in texture %s",
-					texture->name);
-				}
-			}		
-			::g->s_texturecolumnlump[i] = (short*)DoomLib::Z_Malloc (texture->width*2, PU_STATIC_SHARED,0);
-			::g->s_texturecolumnofs[i] = (unsigned short*)DoomLib::Z_Malloc (texture->width*2, PU_STATIC_SHARED,0);
-
-			j = 1;
-			while (j*2 <= texture->width)
-				j<<=1;
-
-			::g->s_texturewidthmask[i] = j-1;
-			::g->s_textureheight[i] = texture->height<<FRACBITS;
-
-			totalwidth += texture->width;
-		}
-
-		Z_Free(maptex1);
-		if (maptex2)
-			Z_Free(maptex2);
-
-
-		// Precalculate whatever possible.	
-		for (i=0 ; i < ::g->s_numtextures ; i++)
-			R_GenerateLookup (i);
+static void R_TextureRequire( bool valid, const char *message ) {
+	if ( !valid ) {
+		textureInitError_t error = { message };
+		throw error;
 	}
-
-	// ALAN:  These animations are done globally -- can it be shared?
-	// Create translation table for global animation.
-	::g->texturetranslation = (int*)DoomLib::Z_Malloc ((::g->s_numtextures+1)*4, PU_STATIC, 0);
-
-	for (i=0 ; i < ::g->s_numtextures ; i++)
-		::g->texturetranslation[i] = i;	
 }
 
+static unsigned int R_TextureU32( const byte *p ) {
+	return unsigned( p[0] ) | ( unsigned( p[1] ) << 8 ) |
+		( unsigned( p[2] ) << 16 ) | ( unsigned( p[3] ) << 24 );
+}
+
+static int R_TextureS16( const byte *p ) {
+	const int value = int( p[0] ) | ( int( p[1] ) << 8 );
+	return value < 0x8000 ? value : value - 0x10000;
+}
+
+static int R_TextureCount( const byte *data, size_t length, size_t entryBytes ) {
+	R_TextureRequire( length >= 4, "R_InitTextures: truncated lump header" );
+	const unsigned int count = R_TextureU32( data );
+	R_TextureRequire( count <= INT_MAX && size_t( count ) <= ( length - 4 ) / entryBytes,
+		"R_InitTextures: invalid lump directory count" );
+	return static_cast<int>( count );
+}
+
+struct textureRecord_t {
+	const byte *data;
+	int width, height, patchCount;
+	unsigned int masked;
+};
+
+static textureRecord_t R_TextureRecord( const byte *data, size_t length, int count, int index ) {
+	R_TextureRequire( index >= 0 && index < count, "R_InitTextures: invalid texture number" );
+	const size_t directoryEnd = 4 + size_t( count ) * 4;
+	const size_t offset = R_TextureU32( data + 4 + size_t( index ) * 4 );
+	R_TextureRequire( offset >= directoryEnd && offset <= length && length - offset >= TEXTURE_HEADER_BYTES,
+		"R_InitTextures: bad texture directory" );
+	textureRecord_t record;
+	record.data = data + offset;
+	record.masked = R_TextureU32( record.data + 8 );
+	record.width = R_TextureS16( record.data + 12 );
+	record.height = R_TextureS16( record.data + 14 );
+	// Bytes 16..19 are the obsolete four-byte column-directory field.
+	record.patchCount = R_TextureS16( record.data + 20 );
+	R_TextureRequire( record.width > 0 && record.height > 0 && record.patchCount > 0,
+		"R_InitTextures: invalid texture dimensions or patch count" );
+	R_TextureRequire( size_t( record.patchCount ) <= ( length - offset - TEXTURE_HEADER_BYTES ) / TEXTURE_PATCH_BYTES,
+		"R_InitTextures: truncated texture patches" );
+	return record;
+}
+
+static int R_TexturePatchIndex( const byte *patch, const std::vector<int> &lookup ) {
+	const int index = R_TextureS16( patch + 4 );
+	R_TextureRequire( index >= 0 && size_t( index ) < lookup.size(), "R_InitTextures: invalid patch index" );
+	R_TextureRequire( lookup[index] >= 0, "R_InitTextures: missing texture patch" );
+	return index;
+}
+
+static int R_TextureAllocationBytes( size_t count, size_t elementBytes, size_t extraBytes = 0 ) {
+	R_TextureRequire( elementBytes != 0 && count <= ( size_t( -1 ) - extraBytes ) / elementBytes,
+		"R_InitTextures: allocation size overflow" );
+	const size_t bytes = count * elementBytes + extraBytes;
+	// Z_Malloc rounds to four bytes and then adds its native block header.
+	const size_t maxBytes = ( size_t( INT_MAX ) - sizeof( memblock_t ) ) & ~size_t( 3 );
+	R_TextureRequire( bytes > 0 && bytes <= maxBytes, "R_InitTextures: allocation exceeds zone size contract" );
+	return static_cast<int>( bytes );
+}
+
+static bool R_TextureZoneCanAllocate( int bytes ) {
+	// Avoid entering Z_Malloc's returning I_Error exhaustion path. Count only
+	// contiguous free/purgable blocks; an aggregate free-byte total is insufficient.
+	const size_t needed = ( ( size_t( bytes ) + 3 ) & ~size_t( 3 ) ) + sizeof( memblock_t );
+	size_t available = 0;
+	for ( const memblock_t *block = ::g->mainzone->blocklist.next;
+		block != &::g->mainzone->blocklist; block = block->next ) {
+		if ( block->user && block->tag < PU_PURGELEVEL ) {
+			available = 0;
+		} else {
+			R_TextureRequire( block->size > 0, "R_InitTextures: invalid zone block" );
+			available += size_t( block->size );
+			if ( available >= needed ) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+class textureAllocations_t {
+public:
+	~textureAllocations_t() { Clear(); }
+	void Clear() {
+		for ( size_t i = blocks.size(); i > 0; --i ) {
+			Z_Free( blocks[i - 1] );
+		}
+		blocks.clear();
+	}
+	void Release() { blocks.clear(); }
+	void Own( void *p ) {
+		try {
+			blocks.push_back( p );
+		} catch ( ... ) {
+			Z_Free( p );
+			throw;
+		}
+	}
+	void *Alloc( int bytes, void *owner = NULL ) {
+		R_TextureRequire( R_TextureZoneCanAllocate( bytes ), "R_InitTextures: insufficient zone memory" );
+		void *p = DoomLib::Z_Malloc( bytes, PU_STATIC_SHARED, owner );
+		R_TextureRequire( p != NULL, "R_InitTextures: allocation failed" );
+		Own( p );
+		memset( p, 0, size_t( bytes ) );
+		return p;
+	}
+private:
+	std::vector<void *> blocks;
+};
+
+static const byte *R_TextureLump( int lump, size_t &length, textureAllocations_t &inputs ) {
+	R_TextureRequire( lump >= 0 && lump < numlumps, "R_InitTextures: missing texture lump" );
+	const lumpinfo_t &info = lumpinfo[lump];
+	R_TextureRequire( info.size >= 4, "R_InitTextures: truncated texture lump" );
+	length = size_t( info.size );
+	const int bytes = R_TextureAllocationBytes( length, 1 );
+	if ( lumpcache[lump] != NULL ) {
+		// Pin both texture lumps until decoding finishes; neither may be purged
+		// by subsequent zone allocations while its bytes are still in use.
+		Z_ChangeTag2( &lumpcache[lump], PU_STATIC_SHARED );
+		inputs.Own( lumpcache[lump] );
+	} else {
+		R_TextureRequire( info.handle != NULL, "R_InitTextures: missing WAD file" );
+		const int fileLength = info.handle->Length();
+		R_TextureRequire( info.position >= 0 && fileLength >= info.position && info.size <= fileLength - info.position,
+			"R_InitTextures: lump outside WAD file" );
+		void *data = inputs.Alloc( bytes, &lumpcache[lump] );
+		R_TextureRequire( info.handle->Seek( info.position, FS_SEEK_SET ) == 0 &&
+			info.handle->Read( data, bytes ) == bytes, "R_InitTextures: short WAD lump read" );
+	}
+	return static_cast<const byte *>( lumpcache[lump] );
+}
+
+static void R_LoadTextures() {
+	textureAllocations_t inputs;
+	size_t namesLength;
+	const byte *names = R_TextureLump( W_CheckNumForName( "PNAMES" ), namesLength, inputs );
+	const int nameCount = R_TextureCount( names, namesLength, 8 );
+	std::vector<int> patchlookup( nameCount );
+	for ( int i = 0; i < nameCount; ++i ) {
+		char name[9];
+		memcpy( name, names + 4 + size_t( i ) * 8, 8 );
+		name[8] = 0;
+		patchlookup[i] = W_CheckNumForName( name );
+	}
+	inputs.Clear();
+
+	textureAllocations_t output;
+	if ( ::g->s_numtextures == 0 ) {
+		size_t lengths[2] = { 0, 0 };
+		const byte *lumps[2] = { R_TextureLump( W_CheckNumForName( "TEXTURE1" ), lengths[0], inputs ), NULL };
+		int counts[2] = { R_TextureCount( lumps[0], lengths[0], 4 ), 0 };
+		const int secondLump = W_CheckNumForName( "TEXTURE2" );
+		if ( secondLump >= 0 ) {
+			lumps[1] = R_TextureLump( secondLump, lengths[1], inputs );
+			counts[1] = R_TextureCount( lumps[1], lengths[1], 4 );
+		}
+		R_TextureRequire( counts[1] <= INT_MAX - counts[0], "R_InitTextures: texture count overflow" );
+		const int count = counts[0] + counts[1];
+		R_TextureRequire( count > 0, "R_InitTextures: no textures" );
+
+		// Validate every variable record and patch reference before publishing or
+		// allocating runtime tables. Numbering remains TEXTURE1 then TEXTURE2.
+		for ( int lump = 0; lump < 2; ++lump ) {
+			for ( int i = 0; i < counts[lump]; ++i ) {
+				const textureRecord_t record = R_TextureRecord( lumps[lump], lengths[lump], counts[lump], i );
+				for ( int j = 0; j < record.patchCount; ++j ) {
+					R_TexturePatchIndex( record.data + TEXTURE_HEADER_BYTES + size_t( j ) * TEXTURE_PATCH_BYTES, patchlookup );
+				}
+			}
+		}
+
+		texture_t **textures = static_cast<texture_t **>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *textures ) ) ) );
+		short **columnLump = static_cast<short **>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *columnLump ) ) ) );
+		unsigned short **columnOfs = static_cast<unsigned short **>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *columnOfs ) ) ) );
+		byte **composite = static_cast<byte **>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *composite ) ) ) );
+		int *widthMask = static_cast<int *>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *widthMask ) ) ) );
+		fixed_t *height = static_cast<fixed_t *>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *height ) ) ) );
+		int *compositeSize = static_cast<int *>( output.Alloc( R_TextureAllocationBytes( count, sizeof( *compositeSize ) ) ) );
+		int *translation = static_cast<int *>( output.Alloc( R_TextureAllocationBytes( size_t( count ) + 1, sizeof( *translation ) ) ) );
+
+		int index = 0;
+		for ( int lump = 0; lump < 2; ++lump ) {
+			for ( int i = 0; i < counts[lump]; ++i, ++index ) {
+				const textureRecord_t record = R_TextureRecord( lumps[lump], lengths[lump], counts[lump], i );
+				texture_t *texture = static_cast<texture_t *>( output.Alloc(
+					R_TextureAllocationBytes( size_t( record.patchCount - 1 ), sizeof( texpatch_t ), sizeof( texture_t ) ) ) );
+				textures[index] = texture;
+				memcpy( texture->name, record.data, sizeof( texture->name ) );
+				texture->width = static_cast<short>( record.width );
+				texture->height = static_cast<short>( record.height );
+				texture->patchcount = static_cast<short>( record.patchCount );
+				// masked, obsolete column directory, stepdir and colormap remain
+				// disk-only metadata, as in the original runtime representation.
+				for ( int j = 0; j < record.patchCount; ++j ) {
+					const byte *patch = record.data + TEXTURE_HEADER_BYTES + size_t( j ) * TEXTURE_PATCH_BYTES;
+					texture->patches[j].originx = R_TextureS16( patch );
+					texture->patches[j].originy = R_TextureS16( patch + 2 );
+					texture->patches[j].patch = patchlookup[R_TexturePatchIndex( patch, patchlookup )];
+				}
+				columnLump[index] = static_cast<short *>( output.Alloc( R_TextureAllocationBytes( record.width, sizeof( short ) ) ) );
+				columnOfs[index] = static_cast<unsigned short *>( output.Alloc( R_TextureAllocationBytes( record.width, sizeof( unsigned short ) ) ) );
+				int power = 1;
+				while ( power * 2 <= record.width ) {
+					power <<= 1;
+				}
+				widthMask[index] = power - 1;
+				height[index] = record.height << FRACBITS;
+				translation[index] = index;
+			}
+		}
+		inputs.Clear();
+		::g->s_textures = textures;
+		::g->s_texturecolumnlump = columnLump;
+		::g->s_texturecolumnofs = columnOfs;
+		::g->s_texturecomposite = composite;
+		::g->s_texturewidthmask = widthMask;
+		::g->s_textureheight = height;
+		::g->s_texturecompositesize = compositeSize;
+		::g->texturetranslation = translation;
+		::g->s_numtextures = count;
+		output.Release();
+		for ( int i = 0; i < count; ++i ) {
+			R_GenerateLookup( i );
+		}
+	} else {
+		R_TextureRequire( ::g->s_numtextures > 0, "R_InitTextures: invalid cached texture count" );
+		int *translation = static_cast<int *>( output.Alloc(
+			R_TextureAllocationBytes( size_t( ::g->s_numtextures ) + 1, sizeof( int ) ) ) );
+		for ( int i = 0; i < ::g->s_numtextures; ++i ) {
+			translation[i] = i;
+		}
+		::g->texturetranslation = translation;
+		output.Release();
+	}
+}
+
+} // namespace
+
+void R_InitTextures( void ) {
+	const char *errorMessage;
+	try {
+		R_LoadTextures();
+		return;
+	} catch ( const textureInitError_t &error ) {
+		errorMessage = error.message;
+	} catch ( const std::bad_alloc & ) {
+		errorMessage = "R_InitTextures: allocation failed";
+	}
+	// I_Error returns; allowing its callers to resume would initialize/render
+	// incomplete textures. Preserve its game-switch behavior, then unwind to
+	// the existing idCommonLocal::Frame handler after local owners clean up.
+	idLib::Printf( "DOOM Classic error: %s\n", errorMessage );
+	DoomLib::Interface.QuitCurrentGame();
+	common->SwitchToGame( DOOM3_BFG );
+	throw idException( errorMessage );
+}
 
 
 //
