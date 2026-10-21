@@ -33,6 +33,8 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "win_local.h"
 
+#include <cstddef>
+
 idCVar in_mouse( "in_mouse", "1", CVAR_SYSTEM | CVAR_BOOL, "enable mouse input" );
 
 #define DINPUT_BUFFERSIZE           256
@@ -613,17 +615,17 @@ int Sys_PollMouseInputEvents( int mouseEvents[MAX_MOUSE_EVENTS][2] ) {
 			Sys_QueEvent( SE_KEY, K_MOUSE1 + mouseButton, mouseDown, 0, NULL, 0 );
 		} else {
 			switch (polled_didod[i].dwOfs) {
-			case DIMOFS_X:
+			case offsetof( DIMOUSESTATE, lX ):
 				mouseEvents[i][0] = M_DELTAX;
 				mouseEvents[i][1] = polled_didod[i].dwData;
 				Sys_QueEvent( SE_MOUSE, polled_didod[i].dwData, 0, 0, NULL, 0 );
 				break;
-			case DIMOFS_Y:
+			case offsetof( DIMOUSESTATE, lY ):
 				mouseEvents[i][0] = M_DELTAY;
 				mouseEvents[i][1] = polled_didod[i].dwData;
 				Sys_QueEvent( SE_MOUSE, 0, polled_didod[i].dwData, 0, NULL, 0 );
 				break;
-			case DIMOFS_Z:
+			case offsetof( DIMOUSESTATE, lZ ):
 				mouseEvents[i][0] = M_DELTAZ;
 				mouseEvents[i][1] = (int)polled_didod[i].dwData / WHEEL_DELTA;
 				{
