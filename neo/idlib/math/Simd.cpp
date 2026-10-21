@@ -1274,10 +1274,7 @@ idSIMD::Test_f
 */
 void idSIMD::Test_f( const idCmdArgs &args ) {
 
-	SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL );
-
-	p_simd = processor;
-	p_generic = generic;
+	idSIMDProcessor *testProcessor = processor;
 
 	if ( idStr::Length( args.Argv( 1 ) ) != 0 ) {
 		cpuid_t cpuid = idLib::sys->GetProcessorId();
@@ -1290,13 +1287,17 @@ void idSIMD::Test_f( const idCmdArgs &args ) {
 				idLib::Printf( "CPU does not support MMX & SSE\n" );
 				return;
 			}
-			p_simd = new (TAG_MATH) idSIMD_SSE;
+			testProcessor = new (TAG_MATH) idSIMD_SSE;
 		} else {
 			idLib::Printf( "invalid argument, use: MMX, 3DNow, SSE, SSE2, SSE3, AltiVec\n" );
 			return;
 		}
 	}
 
+	// Publish test aliases and change priority only after argument validation.
+	p_simd = testProcessor;
+	p_generic = generic;
+	SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL );
 	idLib::common->SetRefreshOnPrint( true );
 
 	idLib::Printf( "using %s for SIMD processing\n", p_simd->GetName() );
