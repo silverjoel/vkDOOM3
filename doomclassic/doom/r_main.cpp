@@ -312,7 +312,7 @@ R_PointToAngle
 			if (x>y)
 			{
 				// octant 8
-				return -tantoangle[SlopeDiv(y,x)]; // // ALANHACK UNSIGNED
+				return angle_t(0) - tantoangle[SlopeDiv(y,x)]; // // ALANHACK UNSIGNED
 			}
 			else
 			{
