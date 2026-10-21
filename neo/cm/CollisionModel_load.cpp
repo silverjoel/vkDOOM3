@@ -50,6 +50,152 @@ If you have questions concerning this license or the applicable additional terms
 #include "../framework/precompiled.h"
 #include "CollisionModel_local.h"
 #include "CollisionModel_cache.h"
+#include <cstdlib>
+
+namespace cmFeature {
+// Metadata is allocated with polygon storage, never for individual contacts.
+// Full native pointers are hash keys only. Positive tokens are issued lazily,
+// never recycled, and exhausted tokens fail closed without changing physics.
+struct owner;
+struct entry {
+	const cm_polygon_t *polygon;
+	owner *model;
+	int capacity;
+	int token;
+	unsigned long long generation;
+	entry *pointerNext, *tokenNext, *ownerNext, *ownerPrev;
+};
+struct owner {
+	const cm_model_t *model;
+	unsigned long long generation;
+	entry *polygons;
+	owner *next;
+};
+static owner *owners[256];
+static entry *pointers[16384];
+static entry *tokens[16384];
+static unsigned long long nextToken = 1; // deliberately survives FreeMap/Init
+
+static size_t PointerKey( const void *pointer, size_t mask ) {
+	uintptr_t value = reinterpret_cast<uintptr_t>( pointer );
+	value ^= value >> 17;
+	value ^= value >> 9;
+	return ( value >> 3 ) & mask;
+}
+static owner *FindOwner( const cm_model_t *model ) {
+	for ( owner *o = owners[PointerKey( model, 255 )]; o; o = o->next ) {
+		if ( o->model == model ) { return o; }
+	}
+	return NULL;
+}
+static entry *FindPointer( const cm_model_t *model, const cm_polygon_t *polygon ) {
+	for ( entry *e = pointers[PointerKey( polygon, 16383 )]; e; e = e->pointerNext ) {
+		if ( e->polygon == polygon && e->model->model == model ) { return e; }
+	}
+	return NULL;
+}
+static void RemoveToken( entry *e ) {
+	if ( e->token <= 0 ) { return; }
+	entry **link = &tokens[e->token & 16383];
+	while ( *link != e ) { link = &(*link)->tokenNext; }
+	*link = e->tokenNext;
+	e->token = 0;
+	e->tokenNext = NULL;
+}
+static void Register( const cm_model_t *model, const cm_polygon_t *polygon, int capacity ) {
+	if ( !model || !polygon || capacity <= 0 || FindPointer( model, polygon ) ) { return; }
+	owner *o = FindOwner( model );
+	if ( !o ) {
+		o = static_cast<owner *>( std::calloc( 1, sizeof( owner ) ) );
+		if ( !o ) { return; } // inspection is optional; collision remains available
+		o->model = model;
+		o->generation = 1;
+		const size_t key = PointerKey( model, 255 );
+		o->next = owners[key];
+		owners[key] = o;
+	}
+	entry *e = static_cast<entry *>( std::calloc( 1, sizeof( entry ) ) );
+	if ( !e ) { return; }
+	e->polygon = polygon;
+	e->model = o;
+	e->capacity = capacity;
+	e->generation = o->generation;
+	e->ownerNext = o->polygons;
+	if ( o->polygons ) { o->polygons->ownerPrev = e; }
+	o->polygons = e;
+	const size_t key = PointerKey( polygon, 16383 );
+	e->pointerNext = pointers[key];
+	pointers[key] = e;
+}
+static void Unregister( entry *e ) {
+	RemoveToken( e );
+	entry **link = &pointers[PointerKey( e->polygon, 16383 )];
+	while ( *link != e ) { link = &(*link)->pointerNext; }
+	*link = e->pointerNext;
+	if ( e->ownerPrev ) { e->ownerPrev->ownerNext = e->ownerNext; }
+	else { e->model->polygons = e->ownerNext; }
+	if ( e->ownerNext ) { e->ownerNext->ownerPrev = e->ownerPrev; }
+	std::free( e );
+}
+static void ForgetPolygon( const cm_model_t *model, const cm_polygon_t *polygon ) {
+	entry *e = FindPointer( model, polygon );
+	if ( e ) { Unregister( e ); }
+}
+static void ForgetModel( const cm_model_t *model ) {
+	owner **link = &owners[PointerKey( model, 255 )];
+	while ( *link && (*link)->model != model ) { link = &(*link)->next; }
+	if ( !*link ) { return; }
+	owner *o = *link;
+	while ( o->polygons ) { Unregister( o->polygons ); }
+	*link = o->next;
+	std::free( o );
+}
+static void Clear() {
+	for ( size_t i = 0; i < 256; ++i ) {
+		while ( owners[i] ) { ForgetModel( owners[i]->model ); }
+	}
+}
+static void Invalidate( const cm_model_t *model ) {
+	owner *o = FindOwner( model );
+	if ( !o ) { return; }
+	// Generation zero is permanently unavailable if even this counter exhausts.
+	if ( o->generation ) { ++o->generation; }
+	for ( entry *e = o->polygons; e; e = e->ownerNext ) {
+		RemoveToken( e );
+		e->generation = o->generation;
+	}
+}
+int Identify( const cm_model_t *model, const cm_polygon_t *polygon ) {
+	entry *e = FindPointer( model, polygon );
+	if ( !e || !e->generation || e->generation != e->model->generation ) { return unavailable; }
+	if ( e->token ) { return e->token; }
+	if ( nextToken > INT_MAX ) { return unavailable; }
+	e->token = static_cast<int>( nextToken++ );
+	const int key = e->token & 16383;
+	e->tokenNext = tokens[key];
+	tokens[key] = e;
+	return e->token;
+}
+static const entry *Resolve( const cm_model_t *model, int token ) {
+	if ( token <= 0 ) { return NULL; }
+	for ( const entry *e = tokens[token & 16383]; e; e = e->tokenNext ) {
+		if ( e->token == token && e->model->model == model && e->generation && e->generation == e->model->generation ) {
+			return e;
+		}
+	}
+	return NULL;
+}
+static void RegisterTree( const cm_model_t *model, const cm_node_t *node ) {
+	if ( !node ) { return; }
+	for ( const cm_polygonRef_t *p = node->polygons; p; p = p->next ) {
+		Register( model, p->p, p->p->numEdges );
+	}
+	if ( node->planeType != -1 ) {
+		RegisterTree( model, node->children[0] );
+		RegisterTree( model, node->children[1] );
+	}
+}
+}
 
 #define CMODEL_BINARYFILE_EXT	"bcmodel"
 
@@ -180,6 +326,7 @@ idCollisionModelManagerLocal::Clear
 ================
 */
 void idCollisionModelManagerLocal::Clear() {
+	cmFeature::Clear();
 	mapName.Clear();
 	mapFileTime = 0;
 	loaded = 0;
@@ -299,6 +446,7 @@ idCollisionModelManagerLocal::FreePolygon
 ================
 */
 void idCollisionModelManagerLocal::FreePolygon( cm_model_t *model, cm_polygon_t *poly ) {
+	cmFeature::ForgetPolygon( model, poly );
 	model->numPolygons--;
 	model->polygonMemory -= cmCache::PolygonSize( poly->numEdges );
 	if ( model->polygonBlock == NULL ) {
@@ -368,6 +516,7 @@ idCollisionModelManagerLocal::FreeModel
 ================
 */
 void idCollisionModelManagerLocal::FreeModel( cm_model_t *model ) {
+	cmFeature::ForgetModel( model );
 	cm_polygonRefBlock_t *polygonRefBlock, *nextPolygonRefBlock;
 	cm_brushRefBlock_t *brushRefBlock, *nextBrushRefBlock;
 	cm_nodeBlock_t *nodeBlock, *nextNodeBlock;
@@ -444,6 +593,7 @@ void idCollisionModelManagerLocal::FreeTrmModelStructure() {
 	if ( !models[MAX_SUBMODELS] ) {
 		return;
 	}
+	cmFeature::ForgetModel( models[MAX_SUBMODELS] );
 
 	for ( i = 0; i < MAX_TRACEMODEL_POLYS; i++ ) {
 		// These reusable buffers were allocated at maximum capacity; their active
@@ -674,6 +824,7 @@ cm_polygon_t *idCollisionModelManagerLocal::AllocPolygon( cm_model_t *model, int
 		}
 		model->numPolygons++;
 		model->polygonMemory += size;
+		cmFeature::Register( model, poly, numEdges );
 		return poly;
 	} catch ( const cmCache::failure &error ) {
 		// Source/trace-model construction has no recoverable allocation result.
@@ -816,10 +967,12 @@ cmHandle_t idCollisionModelManagerLocal::SetupTrmModel( const idTraceModel &trm,
 	}
 
 	model = models[MAX_SUBMODELS];
+	cmFeature::Invalidate( model );
 	model->node->brushes = NULL;
 	model->node->polygons = NULL;
 	// if not a valid trace model
 	if ( trm.type == TRM_INVALID || !trm.numPolys ) {
+		model->numVertices = model->numEdges = model->numPolygons = 0;
 		return TRACE_MODEL_HANDLE;
 	}
 	// vertices
@@ -2997,7 +3150,9 @@ cm_model_t * idCollisionModelManagerLocal::LoadBinaryModelFromFile( idFile *file
 		for ( size_t i = 0; i < data.materials.size(); i++ ) {
 			materials.push_back( data.materials[i].empty() ? NULL : declManager->FindMaterial( data.materials[i].c_str() ) );
 		}
-		return cmCache::Build( data, materials );
+		cm_model_t *model = cmCache::Build( data, materials );
+		cmFeature::RegisterTree( model, model->node );
+		return model;
 	} catch ( const cmCache::failure &error ) {
 		idLib::Warning( "Invalid collision cache %s: %s", file->GetName(), error.message );
 	} catch ( const std::bad_alloc & ) {
@@ -3680,12 +3835,13 @@ idCollisionModelManagerLocal::GetModelVertex
 ===================
 */
 bool idCollisionModelManagerLocal::GetModelVertex( cmHandle_t model, int vertexNum, idVec3 &vertex ) const {
-	if ( model < 0 || model > MAX_SUBMODELS || model >= numModels || !models[model] ) {
+	vertex.Zero();
+	if ( !models || model < 0 || model > MAX_SUBMODELS || ( model >= numModels && model != TRACE_MODEL_HANDLE ) || !models[model] ) {
 		idLib::Printf( "idCollisionModelManagerLocal::GetModelVertex: invalid model handle\n" );
 		return false;
 	}
 
-	if ( vertexNum < 0 || vertexNum >= models[model]->numVertices ) {
+	if ( vertexNum < 0 || vertexNum >= models[model]->numVertices || !models[model]->vertices ) {
 		idLib::Printf( "idCollisionModelManagerLocal::GetModelVertex: invalid vertex number\n" );
 		return false;
 	}
@@ -3701,19 +3857,26 @@ idCollisionModelManagerLocal::GetModelEdge
 ===================
 */
 bool idCollisionModelManagerLocal::GetModelEdge( cmHandle_t model, int edgeNum, idVec3 &start, idVec3 &end ) const {
-	if ( model < 0 || model > MAX_SUBMODELS || model >= numModels || !models[model] ) {
+	start.Zero();
+	end.Zero();
+	if ( edgeNum == cmFeature::unavailable || !models || model < 0 || model > MAX_SUBMODELS || ( model >= numModels && model != TRACE_MODEL_HANDLE ) || !models[model] ) {
 		idLib::Printf( "idCollisionModelManagerLocal::GetModelEdge: invalid model handle\n" );
 		return false;
 	}
 
 	edgeNum = abs( edgeNum );
-	if ( edgeNum >= models[model]->numEdges ) {
+	const cm_model_t *m = models[model];
+	if ( edgeNum == 0 || ( model == TRACE_MODEL_HANDLE ? edgeNum > m->numEdges : edgeNum >= m->numEdges ) || !m->edges || !m->vertices ) {
 		idLib::Printf( "idCollisionModelManagerLocal::GetModelEdge: invalid edge number\n" );
 		return false;
 	}
 
-	start = models[model]->vertices[models[model]->edges[edgeNum].vertexNum[0]].p;
-	end = models[model]->vertices[models[model]->edges[edgeNum].vertexNum[1]].p;
+	const cm_edge_t &edge = m->edges[edgeNum];
+	if ( edge.vertexNum[0] < 0 || edge.vertexNum[0] >= m->numVertices || edge.vertexNum[1] < 0 || edge.vertexNum[1] >= m->numVertices ) {
+		return false;
+	}
+	start = m->vertices[edge.vertexNum[0]].p;
+	end = m->vertices[edge.vertexNum[1]].p;
 
 	return true;
 }
@@ -3724,19 +3887,27 @@ idCollisionModelManagerLocal::GetModelPolygon
 ===================
 */
 bool idCollisionModelManagerLocal::GetModelPolygon( cmHandle_t model, int polygonNum, idFixedWinding &winding ) const {
-	int i, edgeNum;
-	cm_polygon_t *poly;
-
-	if ( model < 0 || model > MAX_SUBMODELS || model >= numModels || !models[model] ) {
-		idLib::Printf( "idCollisionModelManagerLocal::GetModelPolygon: invalid model handle\n" );
+	winding.Clear();
+	if ( polygonNum <= 0 || !models || model < 0 || model > MAX_SUBMODELS || ( model >= numModels && model != TRACE_MODEL_HANDLE ) || !models[model] ) {
 		return false;
 	}
-
-	poly = *reinterpret_cast<cm_polygon_t **>(&polygonNum);
-	winding.Clear();
-	for ( i = 0; i < poly->numEdges; i++ ) {
-		edgeNum = poly->edges[i];
-		winding += models[model]->vertices[ models[model]->edges[abs(edgeNum)].vertexNum[INT32_SIGNBITSET(edgeNum)] ].p;
+	const cm_model_t *m = models[model];
+	const cmFeature::entry *feature = cmFeature::Resolve( m, polygonNum );
+	if ( !feature || !m->edges || !m->vertices ) { return false; }
+	const cm_polygon_t *poly = feature->polygon;
+	if ( poly->numEdges < 3 || poly->numEdges > feature->capacity || poly->numEdges > MAX_POINTS_ON_WINDING ) { return false; }
+	// Validate the entire winding before publishing any of its vertices.
+	for ( int i = 0; i < poly->numEdges; ++i ) {
+		const int directed = poly->edges[i];
+		if ( directed == cmFeature::unavailable || directed == 0 ) { return false; }
+		const int edgeNum = abs( directed );
+		if ( model == TRACE_MODEL_HANDLE ? edgeNum > m->numEdges : edgeNum >= m->numEdges ) { return false; }
+		const cm_edge_t &edge = m->edges[edgeNum];
+		if ( edge.vertexNum[0] < 0 || edge.vertexNum[0] >= m->numVertices || edge.vertexNum[1] < 0 || edge.vertexNum[1] >= m->numVertices ) { return false; }
+	}
+	for ( int i = 0; i < poly->numEdges; ++i ) {
+		const int edgeNum = poly->edges[i];
+		winding += m->vertices[m->edges[abs( edgeNum )].vertexNum[INT32_SIGNBITSET( edgeNum )]].p;
 	}
 
 	return true;

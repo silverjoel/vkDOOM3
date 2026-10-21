@@ -35,6 +35,25 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "CollisionModel.h"
+#include <climits>
+
+// Private runtime feature contract; never a pointer or a persistent save ID.
+namespace cmFeature {
+static const int unavailable = INT_MIN;
+inline void Restore( contactInfo_t &contact ) {
+	if ( contact.type == CONTACT_EDGE || contact.type == CONTACT_TRMVERTEX ) {
+		contact.modelFeature = unavailable;
+	}
+}
+
+// Event trace arguments follow a bool and need not be naturally aligned.
+inline void RestorePackedTrace( void *payload ) {
+	trace_t trace;
+	memcpy( &trace, payload, sizeof( trace ) );
+	Restore( trace.c );
+	memcpy( payload, &trace, sizeof( trace ) );
+}
+}
 
 #define MIN_NODE_SIZE						64.0f
 #define MAX_NODE_POLYGONS					128
@@ -199,6 +218,10 @@ typedef struct cm_model_s {
 	int						numMergedPolys;
 	int						usedMemory;
 } cm_model_t;
+
+namespace cmFeature {
+int Identify( const cm_model_t *model, const cm_polygon_t *polygon );
+}
 
 /*
 ===============================================================================

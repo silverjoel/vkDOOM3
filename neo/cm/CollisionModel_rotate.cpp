@@ -970,7 +970,7 @@ void idCollisionModelManagerLocal::RotateTrmVertexThroughPolygon( cm_traceWork_t
 		tw->trace.c.contents = poly->contents;
 		tw->trace.c.material = poly->material;
 		tw->trace.c.type = CONTACT_TRMVERTEX;
-		tw->trace.c.modelFeature = *reinterpret_cast<int *>(&poly);
+		tw->trace.c.modelFeature = cmFeature::Identify( tw->model, poly );
 		tw->trace.c.trmFeature = v - tw->vertices;
 		tw->trace.c.point = collisionPoint;
 	}

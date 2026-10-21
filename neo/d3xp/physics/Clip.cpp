@@ -30,6 +30,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "../precompiled.h"
 #include "../../renderer/RenderWorld.h"
 #include "../Game_local.h"
+#include "../../cm/CollisionModel_local.h"
 
 #define	MAX_SECTOR_DEPTH				12
 #define MAX_SECTORS						((1<<(MAX_SECTOR_DEPTH+1))-1)
@@ -1670,6 +1671,7 @@ bool idClip::GetModelContactFeature( const contactInfo_t &contact, const idClipM
 
 	handle = -1;
 	winding.Clear();
+	if ( contact.modelFeature == cmFeature::unavailable ) { return false; }
 
 	if ( clipModel == NULL ) {
 		handle = 0;
@@ -1678,6 +1680,9 @@ bool idClip::GetModelContactFeature( const contactInfo_t &contact, const idClipM
 			winding += contact.point;
 			return true;
 		} else if ( clipModel->traceModelIndex != -1 ) {
+			// Rebuilding the shared scratch model cannot recover a contact's old
+			// generation. Without that context, polygon inspection is unavailable.
+			if ( contact.type == CONTACT_TRMVERTEX ) { return false; }
 			handle = collisionModelManager->SetupTrmModel( *idClipModel::GetCachedTraceModel( clipModel->traceModelIndex ), clipModel->material );
 		} else {
 			handle = clipModel->collisionModelHandle;
@@ -1689,25 +1694,26 @@ bool idClip::GetModelContactFeature( const contactInfo_t &contact, const idClipM
 		switch( contact.type ) {
 			case CONTACT_EDGE: {
 				// the model contact feature is a collision model edge
-				collisionModelManager->GetModelEdge( handle, contact.modelFeature, start, end );
+				if ( !collisionModelManager->GetModelEdge( handle, contact.modelFeature, start, end ) ) { return false; }
 				winding += start;
 				winding += end;
 				break;
 			}
 			case CONTACT_MODELVERTEX: {
 				// the model contact feature is a collision model vertex
-				collisionModelManager->GetModelVertex( handle, contact.modelFeature, start );
+				if ( !collisionModelManager->GetModelVertex( handle, contact.modelFeature, start ) ) { return false; }
 				winding += start;
 				break;
 			}
 			case CONTACT_TRMVERTEX: {
 				// the model contact feature is a collision model polygon
-				collisionModelManager->GetModelPolygon( handle, contact.modelFeature, winding );
+				if ( !collisionModelManager->GetModelPolygon( handle, contact.modelFeature, winding ) ) { return false; }
 				break;
 			}
 		}
 	}
 
+	if ( winding.GetNumPoints() == 0 ) { return false; }
 	// transform the winding to world space
 	if ( clipModel ) {
 		for ( i = 0; i < winding.GetNumPoints(); i++ ) {
@@ -1786,7 +1792,9 @@ bool idClip::DrawModelContactFeature( const contactInfo_t &contact, const idClip
 
 	axis[0] = -axis[0];
 	axis[2] = -axis[2];
-	gameRenderWorld->DrawText( contact.material->GetName(), winding.GetCenter() - 4.0f * axis[2], 0.1f, colorWhite, axis, 1, 5000 );
+	if ( contact.material ) {
+		gameRenderWorld->DrawText( contact.material->GetName(), winding.GetCenter() - 4.0f * axis[2], 0.1f, colorWhite, axis, 1, 5000 );
+	}
 
 	return true;
 }

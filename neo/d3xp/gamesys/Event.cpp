@@ -36,6 +36,7 @@ Event are used for scheduling tasks and for linking script commands.
 #pragma hdrstop
 
 #include "../Game_local.h"
+#include "../../cm/CollisionModel_local.h"
 
 #define MAX_EVENTSPERFRAME			4096
 //#define CREATE_EVENT_CODE
@@ -925,7 +926,6 @@ void idEvent::Restore( idRestoreGame *savefile ) {
 
 		event = FreeEvents.Next();
 		event->eventNode.Remove();
-		event->eventNode.AddToEnd( FastEventQueue );
 
 		savefile->ReadInt( event->time );
 
@@ -955,9 +955,23 @@ void idEvent::Restore( idRestoreGame *savefile ) {
 		if ( argsize ) {
 			event->data = eventDataAllocator.Alloc( argsize );
 			savefile->Read( event->data, argsize );
+			format = event->eventdef->GetArgFormat();
+			for ( j = 0; j < event->eventdef->GetNumArgs(); ++j ) {
+				if ( format[j] != D_EVENT_TRACE ) { continue; }
+				const unsigned int offset = event->eventdef->GetArgOffset( j );
+				const size_t traceBytes = sizeof( bool ) + sizeof( trace_t );
+				if ( offset > static_cast<unsigned int>( argsize ) || traceBytes > static_cast<unsigned int>( argsize ) - offset ) {
+					savefile->Error( "idEvent::Restore: invalid trace argument extent" );
+					return;
+				}
+				dataPtr = event->data + offset;
+				static_assert( sizeof( bool ) == 1, "event trace presence byte" );
+				if ( dataPtr[0] != 0 ) { cmFeature::RestorePackedTrace( dataPtr + sizeof( bool ) ); }
+			}
 		} else {
 			event->data = NULL;
 		}
+		event->eventNode.AddToEnd( FastEventQueue );
 	}
 }
 
@@ -983,6 +997,7 @@ void idEvent::RestoreTrace( idRestoreGame *savefile, trace_t &trace ) {
 	savefile->ReadInt( trace.c.modelFeature );
 	savefile->ReadInt( trace.c.trmFeature );
 	savefile->ReadInt( trace.c.id );
+	cmFeature::RestorePackedTrace( &trace );
 }
 
 /*

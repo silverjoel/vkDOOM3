@@ -34,6 +34,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "../../ui/ListGUI.h"
 #include "../../ui/UserInterface.h"
 #include "../Game_local.h"
+#include "../../cm/CollisionModel_local.h"
 //#include "TypeInfo.h"
 
 /*
@@ -1529,6 +1530,8 @@ void idRestoreGame::ReadContactInfo( contactInfo_t &contactInfo ) {
 	ReadInt( contactInfo.trmFeature );
 	ReadInt( contactInfo.entityNum );
 	ReadInt( contactInfo.id );
+	// Saved edge values may be truncated pointers; polygon IDs are ephemeral.
+	cmFeature::Restore( contactInfo );
 }
 
 /*
