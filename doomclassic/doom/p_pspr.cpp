@@ -578,9 +578,11 @@ A_Saw
 	// turn to face target
 	angle = R_PointToAngle2 (player->mo->x, player->mo->y,
 		::g->linetarget->x, ::g->linetarget->y);
+	const angle_t turnStep = ANG90 / 20;
+	const angle_t negativeTurnThreshold = angle_t(0) - turnStep;
 	if (angle - player->mo->angle > ANG180)
 	{
-		if (angle - player->mo->angle < -ANG90/20)
+		if (angle - player->mo->angle < negativeTurnThreshold)
 			player->mo->angle = angle + ANG90/21;
 		else
 			player->mo->angle -= ANG90/20;
