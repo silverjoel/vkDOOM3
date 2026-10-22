@@ -229,7 +229,7 @@ idSoundSystemLocal::FreeSoundWorld
 */
 void idSoundSystemLocal::FreeSoundWorld( idSoundWorld *sw ) {
 	idSoundWorldLocal *local = static_cast<idSoundWorldLocal*>( sw );
-	soundWorlds.Remove( local );
+	// The destructor unregisters the world, including direct deletion by its owner.
 	delete local;
 }
 

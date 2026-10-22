@@ -84,6 +84,9 @@ idSoundWorldLocal::~idSoundWorldLocal
 */
 idSoundWorldLocal::~idSoundWorldLocal() {
 
+	// Unregister before destroying storage that sample cleanup may traverse.
+	soundSystemLocal.soundWorlds.Remove( this );
+
 	if ( soundSystemLocal.currentSoundWorld == this ) {
 		soundSystemLocal.currentSoundWorld = NULL;
 	}
