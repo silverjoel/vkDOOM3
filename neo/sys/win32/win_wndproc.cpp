@@ -33,7 +33,7 @@ If you have questions concerning this license or the applicable additional terms
 #include "../../sound/ClassicAudioCapture.h"
 #include <Windowsx.h>
 
-LONG WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam );
+LRESULT CALLBACK MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam );
 
 static bool s_alttab_disabled;
 
@@ -145,7 +145,7 @@ MainWndProc
 main window procedure
 ====================
 */
-LONG WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam ) {
+LRESULT CALLBACK MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam ) {
 	int key;
 	switch( uMsg ) {
 		case WM_WINDOWPOSCHANGED:
