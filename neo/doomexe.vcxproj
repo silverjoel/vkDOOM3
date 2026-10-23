@@ -86,6 +86,9 @@
     <Import Project="_Release.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Release')">
+    <GenerateManifest>true</GenerateManifest>
+  </PropertyGroup>
   <PropertyGroup>
     <_ProjectFileVersion>10.0.40219.1</_ProjectFileVersion>
     <CodeAnalysisRuleSet Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">AllRules.ruleset</CodeAnalysisRuleSet>
@@ -155,13 +158,15 @@
     <ClCompile />
     <Manifest>
       <EnableDPIAwareness Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</EnableDPIAwareness>
-      <EnableDPIAwareness Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</EnableDPIAwareness>
+      <EnableDPIAwareness Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</EnableDPIAwareness>
     </Manifest>
     <Manifest>
       <EnableDPIAwareness Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</EnableDPIAwareness>
-      <EnableDPIAwareness Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</EnableDPIAwareness>
+      <EnableDPIAwareness Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</EnableDPIAwareness>
     </Manifest>
-    <Manifest />
+    <Manifest>
+      <AdditionalManifestFiles Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Release')">$(ProjectDir)sys\win32\doom3-dpi.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
     <Link>
       <GenerateMapFile Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</GenerateMapFile>
       <GenerateMapFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</GenerateMapFile>
