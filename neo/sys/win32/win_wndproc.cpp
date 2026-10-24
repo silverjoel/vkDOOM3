@@ -45,6 +45,148 @@ extern idCVar r_windowY;
 extern idCVar r_windowWidth;
 extern idCVar r_windowHeight;
 
+// Session history, independent of the HWND and of unconfirmed menu previews.
+static int s_lastFullscreen;
+static idStr s_lastFullscreenDevice;
+static bool s_fullscreenPreview;
+static bool s_fullscreenRestart;
+
+bool R_GetModeListForDisplay( const int displayNum, idList<vidMode_t> & modeList );
+
+static bool WIN_GetFullscreenDevice( int fullscreen, DISPLAY_DEVICE & device ) {
+	device = DISPLAY_DEVICE();
+	device.cb = sizeof( device );
+	if ( fullscreen <= 0 || !EnumDisplayDevices( NULL, fullscreen - 1, &device, 0 ) ||
+		!( device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP ) ) {
+		return false;
+	}
+	DISPLAY_DEVICE monitor = {};
+	monitor.cb = sizeof( monitor );
+	return EnumDisplayDevices( device.DeviceName, 0, &monitor, 0 ) != FALSE;
+}
+
+// Called before the menu overwrites r_fullscreen, and before an outward toggle.
+void WIN_RememberFullscreen() {
+	const int fullscreen = cvarSystem->GetCVarInteger( "r_fullscreen" );
+	if ( s_fullscreenPreview || !renderSystem->IsInitialized() ||
+		fullscreen != win32.isFullscreen || fullscreen == 0 ) {
+		return;
+	}
+	DISPLAY_DEVICE device;
+	if ( fullscreen == -1 || WIN_GetFullscreenDevice( fullscreen, device ) ) {
+		s_lastFullscreen = fullscreen;
+		s_lastFullscreenDevice = fullscreen == -1 ? "" : device.DeviceName;
+	}
+}
+
+void WIN_BeginFullscreenPreview() {
+	WIN_RememberFullscreen();
+	s_fullscreenPreview = true;
+}
+
+void WIN_EndFullscreenPreview( bool accepted ) {
+	s_fullscreenPreview = false;
+	if ( accepted ) {
+		WIN_RememberFullscreen();
+	}
+}
+
+static bool WIN_CanRestoreFullscreen( int fullscreen ) {
+	if ( fullscreen == -1 ) {
+		return true;
+	}
+	DISPLAY_DEVICE device;
+	if ( !WIN_GetFullscreenDevice( fullscreen, device ) ) {
+		return false;
+	}
+	idList<vidMode_t> modes;
+	if ( !R_GetModeListForDisplay( fullscreen - 1, modes ) || modes.Num() == 0 ) {
+		return false;
+	}
+	DEVMODE mode = {};
+	mode.dmSize = sizeof( mode );
+	const int vidMode = cvarSystem->GetCVarInteger( "r_vidMode" );
+	if ( vidMode < 0 ) {
+		const int width = cvarSystem->GetCVarInteger( "r_customWidth" );
+		const int height = cvarSystem->GetCVarInteger( "r_customHeight" );
+		const int hz = cvarSystem->GetCVarInteger( "r_displayRefresh" );
+		if ( width <= 0 || height <= 0 || hz < 0 ) {
+			return false;
+		}
+		mode.dmPelsWidth = width;
+		mode.dmPelsHeight = height;
+		mode.dmDisplayFrequency = hz;
+	} else {
+		if ( vidMode >= modes.Num() ) {
+			return false;
+		}
+		mode.dmPelsWidth = modes[vidMode].width;
+		mode.dmPelsHeight = modes[vidMode].height;
+		mode.dmDisplayFrequency = modes[vidMode].displayHz;
+	}
+	mode.dmBitsPerPel = 32;
+	mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+	if ( mode.dmDisplayFrequency != 0 ) {
+		mode.dmFields |= DM_DISPLAYFREQUENCY;
+	}
+	return ChangeDisplaySettingsEx( device.DeviceName, &mode, NULL, CDS_TEST, NULL ) == DISP_CHANGE_SUCCESSFUL;
+}
+
+static int WIN_FullscreenTarget() {
+	if ( s_lastFullscreen == -1 ) {
+		return -1;
+	}
+	// Keep the display identity if Windows has renumbered the adapters.
+	MONITORINFOEX nearest = {};
+	nearest.cbSize = sizeof( nearest );
+	GetMonitorInfo( MonitorFromWindow( win32.hWnd, MONITOR_DEFAULTTONEAREST ), &nearest );
+	int fallback = 0;
+	for ( int index = 0; ; ++index ) {
+		DISPLAY_DEVICE device = {};
+		device.cb = sizeof( device );
+		if ( !EnumDisplayDevices( NULL, index, &device, 0 ) ) {
+			break;
+		}
+		if ( s_lastFullscreen != 0 && s_lastFullscreenDevice == device.DeviceName &&
+			WIN_GetFullscreenDevice( index + 1, device ) ) {
+			// An available remembered display with an invalid mode is not replaced.
+			return WIN_CanRestoreFullscreen( index + 1 ) ? index + 1 : 0;
+		}
+		if ( WIN_CanRestoreFullscreen( index + 1 ) &&
+			( fallback == 0 || idStr::Icmp( nearest.szDevice, device.DeviceName ) == 0 ) ) {
+			fallback = index + 1;
+		}
+	}
+	if ( fallback != 0 ) {
+		idLib::Printf( "Alt+Enter: %s; using display %d with the current video settings.\n",
+			s_lastFullscreen == 0 ? "no fullscreen history" : "previous display unavailable", fallback );
+	}
+	return fallback;
+}
+
+CONSOLE_COMMAND_SHIP( winToggleFullscreen, "internal queued Alt+Enter action", NULL ) {
+	if ( !renderSystem->IsInitialized() || win32.hWnd == NULL ||
+		s_fullscreenPreview || s_fullscreenRestart ) {
+		return;
+	}
+	// Execute at the command's queue position, not while Windows is dispatching
+	// keys. Several deliberate presses then observe each preceding restart.
+	const int requested = cvarSystem->GetCVarInteger( "r_fullscreen" );
+	const int target = requested == 0 ? WIN_FullscreenTarget() : 0;
+	if ( requested == 0 && target == 0 ) {
+		idLib::Printf( "Alt+Enter: no valid fullscreen target for the current video settings.\n" );
+		return;
+	}
+	WIN_RememberFullscreen();
+	struct restartGuard_t {
+		restartGuard_t() { s_fullscreenRestart = true; }
+		~restartGuard_t() { s_fullscreenRestart = false; }
+	} guard;
+	cvarSystem->SetCVarInteger( "r_fullscreen", target );
+	cmdSystem->BufferCommandText( CMD_EXEC_NOW, "vid_restart\n" );
+	WIN_RememberFullscreen();
+}
+
 static void WIN_DisableAltTab() {
 	if ( s_alttab_disabled || win_allowAltTab.GetBool() ) {
 		return;
@@ -257,9 +399,12 @@ LRESULT CALLBACK MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 			break;
 
 		case WM_SYSKEYDOWN:
-			if ( wParam == 13 ) {	// alt-enter toggles full-screen
-				cvarSystem->SetCVarBool( "r_fullscreen", !renderSystem->IsFullScreen() );
-				cmdSystem->BufferCommandText( CMD_EXEC_APPEND, "vid_restart\n" );
+			if ( wParam == VK_RETURN && ( lParam & ( LPARAM( 1 ) << 29 ) ) != 0 ) {
+				// Windows supplies the previous key state across focus/HWND changes.
+				// No key-up latch: a lost release cannot disable the next real press.
+				if ( ( lParam & ( LPARAM( 1 ) << 30 ) ) == 0 && !s_fullscreenPreview ) {
+					cmdSystem->BufferCommandText( CMD_EXEC_APPEND, "winToggleFullscreen\n" );
+				}
 				return 0;
 			}
 			// fall through for other keys

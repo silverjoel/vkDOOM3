@@ -33,6 +33,13 @@ If you have questions concerning this license or the applicable additional terms
 extern idCVar r_vidMode;
 extern idCVar r_fullscreen;
 
+#ifdef _WIN32
+// Internal Windows fullscreen history; previews are not accepted selections.
+void WIN_RememberFullscreen();
+void WIN_BeginFullscreenPreview();
+void WIN_EndFullscreenPreview( bool accepted );
+#endif
+
 const static int NUM_SETTING_OPTIONS = 7;
 
 enum settingMenuCmds_t {
@@ -247,11 +254,17 @@ bool idMenuScreen_Shell_Resolution::HandleAction( idWidgetAction & action, const
 					menuData->SetNextScreen( SHELL_AREA_SYSTEM_OPTIONS, MENU_TRANSITION_SIMPLE );
 				} else if ( currentOption.fullscreen == 0 ) {
 					// Changing to windowed mode
+#ifdef _WIN32
+					WIN_RememberFullscreen();
+#endif
 					r_fullscreen.SetInteger( 0 );
 					cmdSystem->BufferCommandText( CMD_EXEC_APPEND, "vid_restart\n" );
 					menuData->SetNextScreen( SHELL_AREA_SYSTEM_OPTIONS, MENU_TRANSITION_SIMPLE );
 				} else {
 					// Changing to fullscreen mode
+#ifdef _WIN32
+					WIN_BeginFullscreenPreview();
+#endif
 					r_fullscreen.SetInteger( currentOption.fullscreen );
 					r_vidMode.SetInteger( currentOption.vidmode );
 					cvarSystem->ClearModifiedFlags( CVAR_ARCHIVE );
@@ -278,6 +291,9 @@ bool idMenuScreen_Shell_Resolution::HandleAction( idWidgetAction & action, const
 								cvarSystem->ClearModifiedFlags( CVAR_ARCHIVE );
 								cmdSystem->BufferCommandText( CMD_EXEC_APPEND, "vid_restart\n" );
 							}
+#ifdef _WIN32
+							WIN_EndFullscreenPreview( accept );
+#endif
 							return idSWFScriptVar();
 						}
 					private:
