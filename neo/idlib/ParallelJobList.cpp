@@ -130,6 +130,46 @@ idParallelJobList_Threads
 static idCVar jobs_longJobMicroSec( "jobs_longJobMicroSec", "10000", CVAR_INTEGER, "print a warning for jobs that take more than this number of microseconds" );
 
 
+// One short scheduler-state lock; never held across callbacks, logging or waits.
+// It also protects generation references shared by different dependent lists.
+static idSysMutex jobStateMutex;
+
+static void CopyJobMessage( char * target, const char * source ) {
+	int i = 0;
+	if ( source != NULL ) {
+		for ( ; i < idRecoverableJobCallbackFailure::MAX_MESSAGE_LENGTH - 1 && source[i] != '\0'; ++i ) {
+			target[i] = source[i];
+		}
+	}
+	target[i] = '\0';
+}
+
+idRecoverableJobCallbackFailure::idRecoverableJobCallbackFailure( const char * text ) {
+	CopyJobMessage( message, text );
+}
+
+// Replaces the rotating doneGuards: a dependent retains the exact generation,
+// even if its successful predecessor is reused or destroyed before it drains.
+struct jobCompletion_t {
+	jobCompletion_t() : references( 1 ), terminal( false ), failed( false ), aborted( false ) {
+		result.outcome = JOB_LIST_INCOMPLETE;
+		result.generation = 0;
+		result.message[0] = '\0';
+	}
+	int references;
+	bool terminal;
+	bool failed;
+	bool aborted;
+	jobListResult_t result;
+};
+
+static void ReleaseJobCompletion( jobCompletion_t * & completion ) {
+	if ( completion != NULL && --completion->references == 0 ) {
+		delete completion;
+	}
+	completion = NULL;
+}
+
 const static int		MAX_THREADS	= 32;
 
 struct threadJobListState_t {
@@ -177,6 +217,8 @@ public:
 	void					Wait();
 	bool					TryWait();
 	bool					IsSubmitted() const;
+	jobListResult_t			GetResult() const;
+	bool					AcknowledgeFailure( uint64 generation );
 
 	unsigned int			GetNumExecutedJobs() const { return threadStats.numExecutedJobs; }
 	unsigned int			GetNumSyncs() const { return threadStats.numExecutedSyncs; }
@@ -208,7 +250,6 @@ public:
 	int						RunJobs( unsigned int threadNum, threadJobListState_t & state, bool singleJob );
 
 private:
-	static const int		NUM_DONE_GUARDS = 4;	// cycle through 4 guards so we can cyclicly chain job lists
 
 	bool					threaded;
 	bool					done;
@@ -219,25 +260,52 @@ private:
 	unsigned int			maxSyncs;
 	unsigned int			numSyncs;
 	int						lastSignalJob;
-	idSysInterlockedInteger * waitForGuard;
-	idSysInterlockedInteger doneGuards[NUM_DONE_GUARDS];
-	int						currentDoneGuard;
+	jobCompletion_t *		completion;
+	jobCompletion_t *		dependency;
+	uint64					generation;
+	bool					failureAcknowledged;
+	int						outstandingJobs;
 	idSysInterlockedInteger	version;
 	struct job_t {
 		jobRun_t	function;
 		void *		data;
 		int			executed;
+		int			signalIndex;
 	};
 	idList< job_t, TAG_JOBLIST >		jobList;
 	idList< idSysInterlockedInteger, TAG_JOBLIST >	signalJobCount;
 	idSysInterlockedInteger				currentJob;
-	idSysInterlockedInteger				fetchLock;
 	idSysInterlockedInteger				numThreadsExecuting;
 
 	threadStats_t						deferredThreadStats;
 	threadStats_t						threadStats;
 
 	int						RunJobsInternal( unsigned int threadNum, threadJobListState_t & state, bool singleJob );
+	bool					CanBuild() const;
+	void					FinishWait();
+	void					Fail( const char * message, bool aborted = false );
+	void					FinishRun();
+	class runScope_t {
+	public:
+		runScope_t( idParallelJobList_Threads & list ) : list( list ) {}
+		~runScope_t() { list.FinishRun(); }
+	private:
+		idParallelJobList_Threads & list;
+	};
+	class callbackScope_t {
+	public:
+		callbackScope_t( idParallelJobList_Threads & list, int index, unsigned int threadNum );
+		~callbackScope_t();
+		void Succeeded() { succeeded = true; }
+		void Failed( const char * message );
+	private:
+		idParallelJobList_Threads & list;
+		int index;
+		unsigned int threadNum;
+		uint64 start;
+		bool succeeded;
+		bool contained;
+	};
 
 	static void				Nop( void * data ) {}
 
@@ -263,8 +331,11 @@ idParallelJobList_Threads::idParallelJobList_Threads( jobListId_t id, jobListPri
 	listPriority( priority ),
 	numSyncs( 0 ),
 	lastSignalJob( 0 ),
-	waitForGuard( NULL ),
-	currentDoneGuard( 0 ),
+	completion( NULL ),
+	dependency( NULL ),
+	generation( 0 ),
+	failureAcknowledged( true ),
+	outstandingJobs( 0 ),
 	jobList() {
 
 	assert( listPriority != JOBLIST_PRIORITY_NONE );
@@ -287,6 +358,9 @@ idParallelJobList_Threads::~idParallelJobList_Threads
 */
 idParallelJobList_Threads::~idParallelJobList_Threads() {
 	Wait();
+	idScopedCriticalSection lock( jobStateMutex );
+	ReleaseJobCompletion( dependency );
+	ReleaseJobCompletion( completion );
 }
 
 /*
@@ -295,6 +369,8 @@ idParallelJobList_Threads::AddJob
 ========================
 */
 ID_INLINE void idParallelJobList_Threads::AddJob( jobRun_t function, void * data ) {
+	idScopedCriticalSection lock( jobStateMutex );
+	if ( !CanBuild() ) { return; }
 	assert( done );
 #if defined( _DEBUG )
 	// make sure there isn't already a job with the same function and data in the list
@@ -339,6 +415,8 @@ idParallelJobList_Threads::InsertSyncPoint
 ========================
 */
 ID_INLINE void idParallelJobList_Threads::InsertSyncPoint( jobSyncType_t syncType ) {
+	idScopedCriticalSection lock( jobStateMutex );
+	if ( !CanBuild() ) { return; }
 	assert( done );
 	switch( syncType ) {
 		case SYNC_SIGNAL: {
@@ -374,50 +452,55 @@ idParallelJobList_Threads::Submit
 ========================
 */
 void idParallelJobList_Threads::Submit( idParallelJobList_Threads * waitForJobList, int parallelism ) {
-	assert( done );
-	assert( numSyncs <= maxSyncs );
-	assert( (unsigned int) jobList.Num() <= maxJobs + numSyncs * 2 );
-	assert( fetchLock.GetValue() == 0 );
+	{
+		idScopedCriticalSection lock( jobStateMutex );
+		if ( !CanBuild() ) { return; }
+		assert( waitForJobList != this );
+		if ( waitForJobList == this ) { return; }
+		assert( numSyncs <= maxSyncs );
+		assert( (unsigned int) jobList.Num() <= maxJobs + numSyncs * 2 );
+		assert( numThreadsExecuting.GetValue() == 0 );
+		ReleaseJobCompletion( dependency );
+		if ( waitForJobList != NULL && waitForJobList->completion != NULL ) {
+			dependency = waitForJobList->completion;
+			++dependency->references;
+		}
+		if ( completion == NULL || completion->references != 1 ) {
+			ReleaseJobCompletion( completion );
+			completion = new (TAG_JOBLIST) jobCompletion_t;
+		}
+		completion->terminal = completion->failed = completion->aborted = false;
+		completion->result.outcome = JOB_LIST_INCOMPLETE;
+		completion->result.generation = ++generation;
+		completion->result.message[0] = '\0';
+		failureAcknowledged = false;
+		done = false;
+		currentJob.SetValue( 0 );
+		outstandingJobs = jobList.Num();
+		memset( &deferredThreadStats, 0, sizeof( deferredThreadStats ) );
+		deferredThreadStats.numExecutedSyncs = numSyncs;
+		deferredThreadStats.submitTime = Sys_Microseconds();
 
-	done = false;
-	currentJob.SetValue( 0 );
-
-	memset( &deferredThreadStats, 0, sizeof( deferredThreadStats ) );
-	deferredThreadStats.numExecutedJobs = jobList.Num() - numSyncs * 2;
-	deferredThreadStats.numExecutedSyncs = numSyncs;
-	deferredThreadStats.submitTime = Sys_Microseconds();
-	deferredThreadStats.startTime = 0;
-	deferredThreadStats.endTime = 0;
-	deferredThreadStats.waitTime = 0;
-
-	if ( jobList.Num() == 0 ) {
-		return;
+		signalJobCount.Alloc();
+		signalJobCount[signalJobCount.Num() - 1].SetValue( jobList.Num() - lastSignalJob );
+		int segment = 0;
+		for ( int i = 0; i < jobList.Num(); ++i ) {
+			if ( jobList[i].data == &JOB_SIGNAL ) { ++segment; }
+			jobList[i].signalIndex = segment;
+			jobList[i].executed = 0;
+		}
+		job_t & job = jobList.Alloc();
+		job.function = Nop;
+		job.data = &JOB_LIST_DONE;
+		job.signalIndex = segment;
+		job.executed = 0;
 	}
-
-	if ( waitForJobList != NULL ) {
-		waitForGuard = & waitForJobList->doneGuards[waitForJobList->currentDoneGuard];
-	} else {
-		waitForGuard = NULL;
-	}
-
-	currentDoneGuard = ( currentDoneGuard + 1 ) & ( NUM_DONE_GUARDS - 1 );
-	doneGuards[currentDoneGuard].SetValue( 1 );
-
-	signalJobCount.Alloc();
-	signalJobCount[signalJobCount.Num() - 1].SetValue( jobList.Num() - lastSignalJob );
-
-	job_t & job = jobList.Alloc();
-	job.function = Nop;
-	job.data = & JOB_LIST_DONE;
-
 	if ( threaded ) {
-		// hand over to the manager
 		void SubmitJobList( idParallelJobList_Threads * jobList, int parallelism );
 		SubmitJobList( this, parallelism );
 	} else {
-		// run all the jobs right here
 		threadJobListState_t state( GetVersion() );
-		RunJobs( 0, state, false );
+		while ( ( RunJobs( 0, state, false ) & RUN_DONE ) == 0 ) { Sys_Yield(); }
 	}
 }
 
@@ -427,35 +510,19 @@ idParallelJobList_Threads::Wait
 ========================
 */
 void idParallelJobList_Threads::Wait() {
-	if ( jobList.Num() > 0 ) {
-		// don't lock up but return if the job list was never properly submitted
-		if ( !verify( !done && signalJobCount.Num() > 0 ) ) {
-			return;
+	uint64 start = Sys_Microseconds();
+	for ( ; ; ) {
+		{
+			idScopedCriticalSection lock( jobStateMutex );
+			if ( done ) { return; }
+			if ( completion->terminal ) {
+				deferredThreadStats.waitTime = Sys_Microseconds() - start;
+				FinishWait();
+				return;
+			}
 		}
-
-		bool waited = false;
-		uint64 waitStart = Sys_Microseconds();
-
-		while ( signalJobCount[signalJobCount.Num() - 1].GetValue() > 0 ) {
-			Sys_Yield();
-			waited = true;
-		}
-		version.Increment();
-		while ( numThreadsExecuting.GetValue() > 0 ) {
-			Sys_Yield();
-			waited = true;
-		}
-
-		jobList.SetNum( 0 );
-		signalJobCount.SetNum( 0 );
-		numSyncs = 0;
-		lastSignalJob = 0;
-
-		uint64 waitEnd = Sys_Microseconds();
-		deferredThreadStats.waitTime = waited ? ( waitEnd - waitStart ) : 0;
+		Sys_Yield();
 	}
-	memcpy( & threadStats, & deferredThreadStats, sizeof( threadStats ) );
-	done = true;
 }
 
 /*
@@ -464,11 +531,12 @@ idParallelJobList_Threads::TryWait
 ========================
 */
 bool idParallelJobList_Threads::TryWait() {
-	if ( jobList.Num() == 0 || signalJobCount[signalJobCount.Num() - 1].GetValue() <= 0 ) {
-		Wait();
-		return true;
+	idScopedCriticalSection lock( jobStateMutex );
+	if ( !done ) {
+		if ( !completion->terminal ) { return false; }
+		FinishWait();
 	}
-	return false;
+	return completion == NULL || completion->result.outcome == JOB_LIST_SUCCEEDED;
 }
 
 /*
@@ -477,6 +545,7 @@ idParallelJobList_Threads::IsSubmitted
 ========================
 */
 bool idParallelJobList_Threads::IsSubmitted() const {
+	idScopedCriticalSection lock( jobStateMutex );
 	return !done;
 }
 
@@ -541,162 +610,170 @@ volatile void * longJobData;
 idParallelJobList_Threads::RunJobsInternal
 ========================
 */
-int idParallelJobList_Threads::RunJobsInternal( unsigned int threadNum, threadJobListState_t & state, bool singleJob ) {
-	if ( state.version != version.GetValue() ) {
-		// trying to run an old version of this list that is already done
-		return RUN_DONE;
-	}
+// All helpers below, except callback execution, are protected by jobStateMutex.
+bool idParallelJobList_Threads::CanBuild() const {
+	return done && ( completion == NULL || ( !completion->aborted &&
+		( !completion->failed || ( failureAcknowledged && completion->references == 1 ) ) ) );
+}
 
-	assert( threadNum < MAX_THREADS );
+void idParallelJobList_Threads::FinishWait() {
+	assert( completion->terminal && numThreadsExecuting.GetValue() == 0 && outstandingJobs == 0 );
+	version.Increment();
+	jobList.SetNum( 0 );
+	signalJobCount.SetNum( 0 );
+	numSyncs = 0;
+	lastSignalJob = 0;
+	hasSignal = false;
+	ReleaseJobCompletion( dependency );
+	memcpy( &threadStats, &deferredThreadStats, sizeof( threadStats ) );
+	done = true;
+}
 
-	if ( deferredThreadStats.startTime == 0 ) {
-		deferredThreadStats.startTime = Sys_Microseconds();	// first time any thread is running jobs from this list
-	}
-
-	int result = RUN_OK;
-
-	do {
-
-		// run through all signals and syncs before the last job that has been or is being executed
-		// this loop is really an optimization to minimize the time spent in the fetchLock section below
-		for ( ; state.lastJobIndex < (int) currentJob.GetValue() && state.lastJobIndex < jobList.Num(); state.lastJobIndex++ ) {
-			if ( jobList[state.lastJobIndex].data == & JOB_SIGNAL ) {
-				state.signalIndex++;
-				assert( state.signalIndex < signalJobCount.Num() );
-			} else if ( jobList[state.lastJobIndex].data == & JOB_SYNCHRONIZE ) {
-				assert( state.signalIndex > 0 );
-				if ( signalJobCount[state.signalIndex - 1].GetValue() > 0 ) {
-					// stalled on a synchronization point
-					return ( result | RUN_STALLED );
-				}
-			} else if ( jobList[state.lastJobIndex].data == & JOB_LIST_DONE ) {
-				if ( signalJobCount[signalJobCount.Num() - 1].GetValue() > 0 ) {
-					// stalled on a synchronization point
-					return ( result | RUN_STALLED );
-				}
-			}
-		}
-
-		// try to lock to fetch a new job
-		if ( fetchLock.Increment() == 1 ) {
-
-			// grab a new job
-			state.nextJobIndex = currentJob.Increment() - 1;
-
-			// run through any remaining signals and syncs (this should rarely iterate more than once)
-			for ( ; state.lastJobIndex <= state.nextJobIndex && state.lastJobIndex < jobList.Num(); state.lastJobIndex++ ) {
-				if ( jobList[state.lastJobIndex].data == & JOB_SIGNAL ) {
-					state.signalIndex++;
-					assert( state.signalIndex < signalJobCount.Num() );
-				} else if ( jobList[state.lastJobIndex].data == & JOB_SYNCHRONIZE ) {
-					assert( state.signalIndex > 0 );
-					if ( signalJobCount[state.signalIndex - 1].GetValue() > 0 ) {
-						// return this job to the list
-						currentJob.Decrement();
-						// release the fetch lock
-						fetchLock.Decrement();
-						// stalled on a synchronization point
-						return ( result | RUN_STALLED );
-					}
-				} else if ( jobList[state.lastJobIndex].data == & JOB_LIST_DONE ) {
-					if ( signalJobCount[signalJobCount.Num() - 1].GetValue() > 0 ) {
-						// return this job to the list
-						currentJob.Decrement();
-						// release the fetch lock
-						fetchLock.Decrement();
-						// stalled on a synchronization point
-						return ( result | RUN_STALLED );
-					}
-					// decrement the done count
-					doneGuards[currentDoneGuard].Decrement();
-				}
-			}
-			// release the fetch lock
-			fetchLock.Decrement();
-		} else {
-			// release the fetch lock
-			fetchLock.Decrement();
-			// another thread is fetching right now so consider stalled
-			return ( result | RUN_STALLED );
-		}
-
-		// if at the end of the job list we're done
-		if ( state.nextJobIndex >= jobList.Num() ) {
-			return ( result | RUN_DONE );
-		}
-
-		// execute the next job
-		{
-			uint64 jobStart = Sys_Microseconds();
-
-			jobList[state.nextJobIndex].function( jobList[state.nextJobIndex].data );
-			jobList[state.nextJobIndex].executed = 1;
-
-			uint64 jobEnd = Sys_Microseconds();
-			deferredThreadStats.threadExecTime[threadNum] += jobEnd - jobStart;
-
-#ifndef _DEBUG
-			if ( jobs_longJobMicroSec.GetInteger() > 0 ) {
-				if ( jobEnd - jobStart > jobs_longJobMicroSec.GetInteger()
-					&& GetId() != JOBLIST_UTILITY ) {
-					longJobTime = ( jobEnd - jobStart ) * ( 1.0f / 1000.0f );
-					longJobFunc = jobList[state.nextJobIndex].function;
-					longJobData = jobList[state.nextJobIndex].data;
-					const char * jobName = GetJobName( jobList[state.nextJobIndex].function );
-					const char * jobListName = GetJobListName( GetId() );
-					idLib::Printf( "%1.1f milliseconds for a single '%s' job from job list %s on thread %d\n", longJobTime, jobName, jobListName, threadNum );
-				}
-			}
-#endif
-		}
-
-		result |= RUN_PROGRESS;
-
-		// decrease the job count for the current signal
-		if ( signalJobCount[state.signalIndex].Decrement() == 0 ) {
-			// if this was the very last job of the job list
-			if ( state.signalIndex == signalJobCount.Num() - 1 ) {
-				deferredThreadStats.endTime = Sys_Microseconds();
-				return ( result | RUN_DONE );
-			}
-		}
-
-	} while( ! singleJob );
-
+jobListResult_t idParallelJobList_Threads::GetResult() const {
+	idScopedCriticalSection lock( jobStateMutex );
+	if ( completion != NULL ) { return completion->result; }
+	jobListResult_t result = {};
+	result.outcome = JOB_LIST_NOT_SUBMITTED;
 	return result;
 }
 
-/*
-========================
-idParallelJobList_Threads::RunJobs
-========================
-*/
+bool idParallelJobList_Threads::AcknowledgeFailure( uint64 failedGeneration ) {
+	idScopedCriticalSection lock( jobStateMutex );
+	if ( !done || completion == NULL || completion->references != 1 ||
+		completion->result.generation != failedGeneration || completion->result.outcome != JOB_LIST_FAILED ) {
+		return false;
+	}
+	failureAcknowledged = true;
+	return true;
+}
+
+void idParallelJobList_Threads::Fail( const char * message, bool aborted ) {
+	// First failure to acquire the state lock wins the diagnostic. Unexpected
+	// exceptions still propagate and make the generation non-recoverable.
+	if ( !completion->failed ) { CopyJobMessage( completion->result.message, message ); }
+	completion->failed = true;
+	completion->aborted |= aborted;
+}
+
+idParallelJobList_Threads::callbackScope_t::callbackScope_t( idParallelJobList_Threads & list, int index, unsigned int threadNum ) :
+	list( list ), index( index ), threadNum( threadNum ), start( Sys_Microseconds() ), succeeded( false ), contained( false ) {}
+
+void idParallelJobList_Threads::callbackScope_t::Failed( const char * message ) {
+	idScopedCriticalSection lock( jobStateMutex );
+	list.Fail( message );
+	contained = true;
+}
+
+idParallelJobList_Threads::callbackScope_t::~callbackScope_t() {
+	idScopedCriticalSection lock( jobStateMutex );
+	job_t & job = list.jobList[index];
+	if ( !succeeded && !contained ) { list.Fail( "Unhandled job callback exception", true ); }
+	job.executed = succeeded ? 1 : -1;
+	if ( succeeded ) { ++list.deferredThreadStats.numExecutedJobs; }
+	list.deferredThreadStats.threadExecTime[threadNum] += Sys_Microseconds() - start;
+	assert( list.signalJobCount[job.signalIndex].GetValue() > 0 );
+	list.signalJobCount[job.signalIndex].Decrement();
+	--list.outstandingJobs;
+}
+
+int idParallelJobList_Threads::RunJobsInternal( unsigned int threadNum, threadJobListState_t & state, bool singleJob ) {
+	int result = RUN_OK;
+	do {
+		jobRun_t function;
+		void * data;
+		int index;
+		{
+			idScopedCriticalSection lock( jobStateMutex );
+			if ( dependency != NULL ) {
+				if ( !dependency->terminal ) { return result | RUN_STALLED; }
+				if ( dependency->failed ) { Fail( dependency->result.message, dependency->aborted ); }
+			}
+			index = currentJob.GetValue();
+			if ( index >= jobList.Num() ) { return result | RUN_DONE; }
+			job_t & job = jobList[index];
+			if ( job.data == &JOB_LIST_DONE ) {
+				if ( outstandingJobs != 0 ) { return result | RUN_STALLED; }
+				currentJob.Increment();
+				return result | RUN_DONE;
+			}
+			if ( job.data == &JOB_SYNCHRONIZE && !completion->failed &&
+				signalJobCount[job.signalIndex - 1].GetValue() > 0 ) { return result | RUN_STALLED; }
+			currentJob.Increment();
+			state.nextJobIndex = index;
+			// Claim and admission share the failure-publication lock. A claimed
+			// callback is already admitted; cancellation never kills it mid-flight.
+			if ( completion->failed || job.data == &JOB_SIGNAL || job.data == &JOB_SYNCHRONIZE ) {
+				job.executed = completion->failed ? -2 : 1;
+				assert( signalJobCount[job.signalIndex].GetValue() > 0 );
+				signalJobCount[job.signalIndex].Decrement();
+				--outstandingJobs;
+				result |= RUN_PROGRESS;
+				continue;
+			}
+			job.executed = 2;
+			function = job.function;
+			data = job.data;
+		}
+		uint64 jobStart = Sys_Microseconds();
+		{
+			callbackScope_t callback( *this, index, threadNum );
+			try {
+				function( data );
+				callback.Succeeded();
+			} catch ( const idRecoverableJobCallbackFailure & failure ) {
+				callback.Failed( failure.GetMessage() );
+			}
+		}
+#ifndef _DEBUG
+		uint64 jobEnd = Sys_Microseconds();
+		if ( jobs_longJobMicroSec.GetInteger() > 0 && GetId() != JOBLIST_UTILITY &&
+			jobEnd - jobStart > static_cast<uint64>( jobs_longJobMicroSec.GetInteger() ) ) {
+			longJobTime = ( jobEnd - jobStart ) * ( 1.0f / 1000.0f );
+			longJobFunc = function;
+			longJobData = data;
+			idLib::Printf( "%1.1f milliseconds for a single '%s' job from job list %s on thread %d\n",
+				longJobTime, GetJobName( function ), GetJobListName( GetId() ), threadNum );
+		}
+#else
+		(void)jobStart;
+#endif
+		result |= RUN_PROGRESS;
+	} while ( !singleJob );
+	return result;
+}
+
+void idParallelJobList_Threads::FinishRun() {
+	idScopedCriticalSection lock( jobStateMutex );
+	assert( numThreadsExecuting.GetValue() > 0 );
+	if ( numThreadsExecuting.Decrement() == 0 && outstandingJobs == 0 && currentJob.GetValue() >= jobList.Num() ) {
+		completion->result.outcome = completion->aborted ? JOB_LIST_ABORTED :
+			( completion->failed ? JOB_LIST_FAILED : JOB_LIST_SUCCEEDED );
+		deferredThreadStats.endTime = Sys_Microseconds();
+		completion->terminal = true;
+	}
+}
+
 int idParallelJobList_Threads::RunJobs( unsigned int threadNum, threadJobListState_t & state, bool singleJob ) {
 	uint64 start = Sys_Microseconds();
-
-	numThreadsExecuting.Increment();
-
+	{
+		idScopedCriticalSection lock( jobStateMutex );
+		if ( state.version != version.GetValue() || done || completion->terminal ) { return RUN_DONE; }
+		assert( threadNum < MAX_THREADS );
+		numThreadsExecuting.Increment();
+		if ( deferredThreadStats.startTime == 0 ) { deferredThreadStats.startTime = start; }
+	}
+	runScope_t run( *this );
 	int result = RunJobsInternal( threadNum, state, singleJob );
-
-	numThreadsExecuting.Decrement();
-
-	deferredThreadStats.threadTotalTime[threadNum] += Sys_Microseconds() - start;
-
+	{
+		idScopedCriticalSection lock( jobStateMutex );
+		deferredThreadStats.threadTotalTime[threadNum] += Sys_Microseconds() - start;
+	}
 	return result;
 }
 
-/*
-========================
-idParallelJobList_Threads::WaitForOtherJobList
-========================
-*/
 bool idParallelJobList_Threads::WaitForOtherJobList() {
-	if ( waitForGuard != NULL ) {
-		if ( waitForGuard->GetValue() > 0 ) {
-			return true;
-		}
-	}
-	return false;
+	idScopedCriticalSection lock( jobStateMutex );
+	return dependency != NULL && !dependency->terminal;
 }
 
 /*
@@ -787,6 +864,14 @@ idParallelJobList::IsSubmitted
 */
 bool idParallelJobList::IsSubmitted() const {
 	return jobListThreads->IsSubmitted();
+}
+
+jobListResult_t idParallelJobList::GetResult() const {
+	return jobListThreads->GetResult();
+}
+
+bool idParallelJobList::AcknowledgeFailure( uint64 generation ) {
+	return jobListThreads->AcknowledgeFailure( generation );
 }
 
 /*
@@ -960,17 +1045,20 @@ idJobThread::AddJobList
 ========================
 */
 void idJobThread::AddJobList( idParallelJobList_Threads * jobList ) {
-	// must lock because multiple threads may try to add new job lists at the same time
-	addJobMutex.Lock();
-	// wait until there is space available because in rare cases multiple versions of the same job lists may still be queued 
-	while( lastJobList - firstJobList >= MAX_JOBLISTS ) {
+	// Old generations can still be queued after their owner has drained them.
+	// Publish/pop queue entries under the same lock; do not hold it while full.
+	for ( ; ; ) {
+		{
+			idScopedCriticalSection lock( addJobMutex );
+			if ( lastJobList - firstJobList < MAX_JOBLISTS ) {
+				jobLists[lastJobList & ( MAX_JOBLISTS - 1 )].jobList = jobList;
+				jobLists[lastJobList & ( MAX_JOBLISTS - 1 )].version = jobList->GetVersion();
+				lastJobList++;
+				return;
+			}
+		}
 		Sys_Yield();
 	}
-	assert( lastJobList - firstJobList < MAX_JOBLISTS );
-	jobLists[lastJobList & ( MAX_JOBLISTS - 1 )].jobList = jobList;
-	jobLists[lastJobList & ( MAX_JOBLISTS - 1 )].version = jobList->GetVersion();
-	lastJobList++;
-	addJobMutex.Unlock();
 }
 
 /*
@@ -986,14 +1074,17 @@ int idJobThread::Run() {
 	while ( !IsTerminating() ) {
 
 		// fetch any new job lists and add them to the local list
-		if ( numJobLists < MAX_JOBLISTS && firstJobList < lastJobList ) {
-			threadJobListState[numJobLists].jobList = jobLists[firstJobList & ( MAX_JOBLISTS - 1 )].jobList;
-			threadJobListState[numJobLists].version = jobLists[firstJobList & ( MAX_JOBLISTS - 1 )].version;
-			threadJobListState[numJobLists].signalIndex = 0;
-			threadJobListState[numJobLists].lastJobIndex = 0;
-			threadJobListState[numJobLists].nextJobIndex = -1;
-			numJobLists++;
-			firstJobList++;
+		{
+			idScopedCriticalSection lock( addJobMutex );
+			if ( numJobLists < MAX_JOBLISTS && firstJobList != lastJobList ) {
+				threadJobListState[numJobLists].jobList = jobLists[firstJobList & ( MAX_JOBLISTS - 1 )].jobList;
+				threadJobListState[numJobLists].version = jobLists[firstJobList & ( MAX_JOBLISTS - 1 )].version;
+				threadJobListState[numJobLists].signalIndex = 0;
+				threadJobListState[numJobLists].lastJobIndex = 0;
+				threadJobListState[numJobLists].nextJobIndex = -1;
+				numJobLists++;
+				firstJobList++;
+			}
 		}
 		if ( numJobLists == 0 ) {
 			break;
@@ -1192,7 +1283,9 @@ void idParallelJobManagerLocal::FreeJobList( idParallelJobList * jobList ) {
 		return;
 	}
 	// wait for all job threads to finish because job list deletion is not thread safe
-	for ( unsigned int i = 0; i < maxThreads; i++ ) {
+	// A worker disabled by a later jobs_numThreads change may retain stale
+	// generation entries. Join every queue before deleting the list object.
+	for ( unsigned int i = 0; i < MAX_JOB_THREADS; i++ ) {
 		threads[i].WaitForThread();
 	}
 	int index = jobLists.FindIndex( jobList );
@@ -1277,7 +1370,7 @@ void idParallelJobManagerLocal::Submit( idParallelJobList_Threads * jobList, int
 
 	if ( numThreads <= 0 ) {
 		threadJobListState_t state( jobList->GetVersion() );
-		jobList->RunJobs( 0, state, false );
+		while ( ( jobList->RunJobs( 0, state, false ) & idParallelJobList_Threads::RUN_DONE ) == 0 ) { Sys_Yield(); }
 		return;
 	}
 

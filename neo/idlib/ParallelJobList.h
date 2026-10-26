@@ -32,6 +32,31 @@ class idColor;
 
 typedef void ( * jobRun_t )( void * );
 
+// Explicit opt-in from a callback, not a replacement for common->Error/FatalError.
+// Only this token is contained. Its text is owned even during concurrent throws.
+class idRecoverableJobCallbackFailure {
+public:
+	static const int MAX_MESSAGE_LENGTH = 2048;
+	explicit idRecoverableJobCallbackFailure( const char * message );
+	const char * GetMessage() const { return message; }
+private:
+	char message[MAX_MESSAGE_LENGTH];
+};
+
+enum jobListOutcome_t {
+	JOB_LIST_NOT_SUBMITTED,
+	JOB_LIST_INCOMPLETE,
+	JOB_LIST_SUCCEEDED,
+	JOB_LIST_FAILED,
+	JOB_LIST_ABORTED // unexpected exception: propagated, never acknowledged as recoverable
+};
+
+struct jobListResult_t {
+	jobListOutcome_t outcome;
+	uint64 generation;
+	char message[idRecoverableJobCallbackFailure::MAX_MESSAGE_LENGTH];
+};
+
 enum jobSyncType_t {
 	SYNC_NONE,
 	SYNC_SIGNAL,
@@ -85,12 +110,18 @@ public:
 
 	// Submit the jobs in this list.
 	void					Submit( idParallelJobList * waitForJobList = NULL, int parallelism = JOBLIST_PARALLELISM_DEFAULT );
-	// Wait for the jobs in this list to finish. Will spin in place if any jobs are not done.
+	// Drain terminal work (including failure). Inspect GetResult() before using outputs.
 	void					Wait();
-	// Try to wait for the jobs in this list to finish but either way return immediately. Returns true if all jobs are done.
+	// Nonblocking success query. False also means failed/aborted: inspect GetResult().
 	bool					TryWait();
 	// returns true if the job list has been submitted.
 	bool					IsSubmitted() const;
+
+	// Owner-thread API. Result is a value copy; INCOMPLETE lasts until all workers drain.
+	jobListResult_t			GetResult() const;
+	// Call Wait first. Failed submissions reject AddJob/InsertSyncPoint/Submit until
+	// acknowledged. Dependencies must have been drained with Wait as well.
+	bool					AcknowledgeFailure( uint64 generation );
 
 	// Get the number of jobs executed in this job list.
 	unsigned int			GetNumExecutedJobs() const;
