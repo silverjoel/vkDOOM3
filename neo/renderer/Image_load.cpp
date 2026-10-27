@@ -486,6 +486,12 @@ void idImage::Reload( bool force ) {
 		return;
 	}
 
+	// Renderer-owned targets have no file source. Their owner must recreate
+	// them together with any framebuffers that retain their image views.
+	if ( !m_fileBacked || m_bIsSwapChainImage ) {
+		return;
+	}
+
 	// check file times
 	if ( !force ) {
 		ID_TIME_T current;

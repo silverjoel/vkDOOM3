@@ -368,6 +368,7 @@ idImage	*idImageManager::ImageFromFile( const char *_name, textureFilter_t filte
 	// create a new image
 	//
 	idImage	* image = AllocImage( name );
+	image->m_fileBacked = true;
 	image->m_cubeFiles = cubeMap;
 	image->m_usage = usage;
 	image->m_filter = filter;
@@ -404,6 +405,7 @@ idImage * idImageManager::ScratchImage( const char * name, const idImageOpts & o
 		image->PurgeImage();
 	}
 
+	image->m_fileBacked = false;
 	image->m_opts = opts;
 	image->AllocImage();
 	image->m_referencedOutsideLevelLoad = true;

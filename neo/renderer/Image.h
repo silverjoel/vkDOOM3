@@ -280,6 +280,8 @@ private:
 	textureFilter_t		m_filter;
 	textureRepeat_t		m_repeat;
 
+	// Only ImageFromFile opts into file reload; scratch images retain renderer ownership.
+	bool				m_fileBacked = false;
 	bool				m_referencedOutsideLevelLoad;
 	bool				m_levelLoadReferenced;	// for determining if it needs to be purged
 	ID_TIME_T			m_sourceFileTime;		// the most recent of all images used in creation, for reloadImages command
