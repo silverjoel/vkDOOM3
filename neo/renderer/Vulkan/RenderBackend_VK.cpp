@@ -621,6 +621,7 @@ void idRenderBackend::CreateLogicalDeviceAndQueues() {
 	deviceFeatures.depthClamp = VK_TRUE;
 	deviceFeatures.depthBiasClamp = VK_TRUE;
 	deviceFeatures.depthBounds = vkcontext.gpu.features.depthBounds;
+	deviceFeatures.sampleRateShading = vkcontext.gpu.features.sampleRateShading;
 	deviceFeatures.fillModeNonSolid = VK_TRUE;
 
 	VkDeviceCreateInfo info = {};
@@ -639,6 +640,8 @@ void idRenderBackend::CreateLogicalDeviceAndQueues() {
 	}
 
 	ID_VK_CHECK( vkCreateDevice( m_physicalDevice, &info, NULL, &vkcontext.device ) );
+	// Record enabled device capability; pipelines also require multisampling.
+	vkcontext.supersampling = deviceFeatures.sampleRateShading == VK_TRUE;
 
 	vkGetDeviceQueue( vkcontext.device, vkcontext.graphicsFamilyIdx, 0, &vkcontext.graphicsQueue );
 	vkGetDeviceQueue( vkcontext.device, vkcontext.presentFamilyIdx, 0, &vkcontext.presentQueue );
@@ -872,23 +875,22 @@ void idRenderBackend::CreateQueryPool() {
 idRenderBackend::CreateRenderTargets
 =============
 */
-void idRenderBackend::CreateRenderTargets() {
-	// Determine samples before creating depth
-	VkImageFormatProperties fmtProps = {};
-	vkGetPhysicalDeviceImageFormatProperties( m_physicalDevice, m_swapchainFormat, 
-		VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 0, &fmtProps );
+// This target is a color/resolve attachment, never a shader storage image.
+static const VkImageUsageFlags msaaColorUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
-	const int samples = r_multiSamples.GetInteger();
-
-	if ( samples >= 16 && ( fmtProps.sampleCounts & VK_SAMPLE_COUNT_16_BIT ) ) {
-		vkcontext.sampleCount = VK_SAMPLE_COUNT_16_BIT;
-	} else if ( samples >= 8 && ( fmtProps.sampleCounts & VK_SAMPLE_COUNT_8_BIT ) ) {
-		vkcontext.sampleCount = VK_SAMPLE_COUNT_8_BIT;
-	} else if ( samples >= 4 && ( fmtProps.sampleCounts & VK_SAMPLE_COUNT_4_BIT ) ) {
-		vkcontext.sampleCount = VK_SAMPLE_COUNT_4_BIT;
-	} else if ( samples >= 2 && ( fmtProps.sampleCounts & VK_SAMPLE_COUNT_2_BIT ) ) {
-		vkcontext.sampleCount = VK_SAMPLE_COUNT_2_BIT;
+static VkSampleCountFlagBits SelectMSAASamples( int requested, VkSampleCountFlags supported ) {
+	// Preserve the existing 16x ceiling; fall back to the highest compatible
+	// count no greater than requested, starting afresh for every generation.
+	for ( int samples = 16; samples >= 2; samples >>= 1 ) {
+		if ( requested >= samples && ( supported & samples ) != 0 ) {
+			return static_cast< VkSampleCountFlagBits >( samples );
+		}
 	}
+	return VK_SAMPLE_COUNT_1_BIT;
+}
+
+void idRenderBackend::CreateRenderTargets() {
+	vkcontext.sampleCount = VK_SAMPLE_COUNT_1_BIT;
 
 	// Select Depth Format
 	{
@@ -917,6 +919,20 @@ void idRenderBackend::CreateRenderTargets() {
 		}
 	}
 
+	// Query the actual image usages, then intersect attachment limits for
+	// both aspects of the combined depth/stencil format.
+	VkImageFormatProperties colorProps = {}, depthProps = {};
+	ID_VK_CHECK( vkGetPhysicalDeviceImageFormatProperties( m_physicalDevice, m_swapchainFormat,
+		VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, msaaColorUsage, 0, &colorProps ) );
+	ID_VK_CHECK( vkGetPhysicalDeviceImageFormatProperties( m_physicalDevice, vkcontext.depthFormat,
+		VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0, &depthProps ) );
+	const VkSampleCountFlags supported = colorProps.sampleCounts & depthProps.sampleCounts
+		& vkcontext.gpu.props.limits.framebufferColorSampleCounts
+		& vkcontext.gpu.props.limits.framebufferDepthSampleCounts
+		& vkcontext.gpu.props.limits.framebufferStencilSampleCounts;
+	ID_VK_VALIDATE( ( supported & VK_SAMPLE_COUNT_1_BIT ) != 0, "No compatible color/depth MSAA configuration" );
+	vkcontext.sampleCount = SelectMSAASamples( r_multiSamples.GetInteger(), supported );
+
 	idImageOpts depthOptions;
 	depthOptions.format = FMT_DEPTH;
 	depthOptions.width = renderSystem->GetWidth();
@@ -927,8 +943,6 @@ void idRenderBackend::CreateRenderTargets() {
 	globalImages->ScratchImage( "_viewDepth", depthOptions );
 
 	if ( vkcontext.sampleCount > VK_SAMPLE_COUNT_1_BIT ) {
-		vkcontext.supersampling = vkcontext.gpu.features.sampleRateShading == VK_TRUE;
-
 		VkImageCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 		createInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -940,7 +954,7 @@ void idRenderBackend::CreateRenderTargets() {
 		createInfo.arrayLayers = 1;
 		createInfo.samples = vkcontext.sampleCount;
 		createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-		createInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+		createInfo.usage = msaaColorUsage;
 		createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
 #if defined( ID_USE_AMD_ALLOCATOR )
@@ -1446,10 +1460,16 @@ idRenderBackend::Restart
 void idRenderBackend::Restart() {
 	stagingManager.Flush();
 	
-	vkDeviceWaitIdle( vkcontext.device );
+	ID_VK_CHECK( vkDeviceWaitIdle( vkcontext.device ) );
 
-	// Destroy Frame Buffers
+	// Restart runs between backend submissions. Retire every dependent
+	// object before replacing attachment formats or sample counts.
 	DestroyFrameBuffers();
+	renderProgManager.ClearPipelines();
+	vkDestroyRenderPass( vkcontext.device, vkcontext.renderPassResume, NULL );
+	vkcontext.renderPassResume = VK_NULL_HANDLE;
+	vkDestroyRenderPass( vkcontext.device, vkcontext.renderPass, NULL );
+	vkcontext.renderPass = VK_NULL_HANDLE;
 
 	// Destroy Render Targets (purges go into the garbage ring)
 	DestroyRenderTargets();
@@ -1493,6 +1513,9 @@ void idRenderBackend::Restart() {
 
 	// Create New Render Targets
 	CreateRenderTargets();
+
+	// Pass compatibility and pipeline multisample state follow this generation.
+	CreateRenderPass();
 
 	// Create New Frame Buffers
 	CreateFrameBuffers();

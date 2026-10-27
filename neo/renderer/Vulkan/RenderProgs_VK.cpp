@@ -483,7 +483,7 @@ static VkPipeline CreateGraphicsPipeline(
 	VkPipelineMultisampleStateCreateInfo multisampleState = {};
 	multisampleState.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 	multisampleState.rasterizationSamples = vkcontext.sampleCount;
-	if ( vkcontext.supersampling ) {
+	if ( vkcontext.supersampling && vkcontext.sampleCount > VK_SAMPLE_COUNT_1_BIT ) {
 		multisampleState.sampleShadingEnable = VK_TRUE;
 		multisampleState.minSampleShading = 1.0f;
 	}
@@ -693,6 +693,16 @@ void idRenderProgManager::Init() {
 idRenderProgManager::Shutdown
 ========================
 */
+void idRenderProgManager::ClearPipelines() {
+	for ( int i = 0; i < m_renderProgs.Num(); ++i ) {
+		renderProg_t & prog = m_renderProgs[ i ];
+		for ( int j = 0; j < prog.pipelines.Num(); ++j ) {
+			vkDestroyPipeline( vkcontext.device, prog.pipelines[ j ].pipeline, NULL );
+		}
+		prog.pipelines.Clear();
+	}
+}
+
 void idRenderProgManager::Shutdown() {
 	// destroy shaders
 	for ( int i = 0; i < m_shaders.Num(); ++i ) {
@@ -701,14 +711,9 @@ void idRenderProgManager::Shutdown() {
 		shader.module = VK_NULL_HANDLE;
 	}
 
-	// destroy pipelines
+	ClearPipelines();
 	for ( int i = 0; i < m_renderProgs.Num(); ++i ) {
 		renderProg_t & prog = m_renderProgs[ i ];
-		
-		for ( int j = 0; j < prog.pipelines.Num(); ++j ) {
-			vkDestroyPipeline( vkcontext.device, prog.pipelines[ j ].pipeline, NULL );
-		}
-		prog.pipelines.Clear();
 
 		vkDestroyDescriptorSetLayout( vkcontext.device, prog.descriptorSetLayout, NULL );
 		vkDestroyPipelineLayout( vkcontext.device, prog.pipelineLayout, NULL );
@@ -1130,13 +1135,8 @@ void idRenderProgManager::LoadShader( shader_t & shader ) {
 }
 
 CONSOLE_COMMAND( Vulkan_ClearPipelines, "Clear all existing pipelines, forcing them to be recreated.", 0 ) {
-	for ( int i = 0; i < renderProgManager.m_renderProgs.Num(); ++i ) {
-		renderProg_t & prog = renderProgManager.m_renderProgs[ i ];
-		for ( int j = 0; j < prog.pipelines.Num(); ++j ) {
-			vkDestroyPipeline( vkcontext.device, prog.pipelines[ j ].pipeline, NULL );
-		}
-		prog.pipelines.Clear();
-	}
+	ID_VK_CHECK( vkDeviceWaitIdle( vkcontext.device ) );
+	renderProgManager.ClearPipelines();
 }
 
 CONSOLE_COMMAND( Vulkan_PrintNumPipelines, "Print the number of pipelines available.", 0 ) {

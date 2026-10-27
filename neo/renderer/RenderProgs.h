@@ -252,6 +252,8 @@ public:
 
 	void	Init();
 	void	Shutdown();
+	// Caller must have completed GPU work referencing cached pipelines.
+	void	ClearPipelines();
 
 	void	StartFrame();
 
