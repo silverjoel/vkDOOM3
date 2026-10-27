@@ -1039,6 +1039,8 @@ void idRenderBackend::CreateRenderPass() {
 	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
 	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
 
@@ -1046,7 +1048,10 @@ void idRenderBackend::CreateRenderPass() {
 	depthAttachment.format = vkcontext.depthFormat;
 	depthAttachment.samples = vkcontext.sampleCount;
 	depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	// Views explicitly clear depth/stencil before use; copy breaks must retain both.
+	depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
 	depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -1055,6 +1060,8 @@ void idRenderBackend::CreateRenderPass() {
 	resolveAttachment.samples = vkcontext.sampleCount;
 	resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
 
@@ -1079,13 +1086,29 @@ void idRenderBackend::CreateRenderPass() {
 		subpass.pResolveAttachments = &resolveRef;
 	}
 
+	// A resumed pass loads the previous pass's stored depth/stencil and MSAA
+	// color. Order those writes before attachment loads and subsequent tests.
+	// Keep this dependency identical in both passes for compatibility.
+	VkSubpassDependency attachmentDependency = {};
+	attachmentDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	attachmentDependency.dstSubpass = 0;
+	attachmentDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	attachmentDependency.dstStageMask = attachmentDependency.srcStageMask;
+	attachmentDependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	attachmentDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	attachmentDependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
 	VkRenderPassCreateInfo renderPassCreateInfo = {};
 	renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 	renderPassCreateInfo.attachmentCount = resolve ? 3 : 2;
 	renderPassCreateInfo.pAttachments = attachments;
 	renderPassCreateInfo.subpassCount = 1;
 	renderPassCreateInfo.pSubpasses = &subpass;
-	renderPassCreateInfo.dependencyCount = 0;
+	renderPassCreateInfo.dependencyCount = 1;
+	renderPassCreateInfo.pDependencies = &attachmentDependency;
 
 	ID_VK_CHECK( vkCreateRenderPass( vkcontext.device, &renderPassCreateInfo, NULL, &vkcontext.renderPass ) );
 
@@ -1101,8 +1124,8 @@ void idRenderBackend::CreateRenderPass() {
 	// Depth/stencil: the original code left this at DONT_CARE/UNDEFINED,
 	// which discarded the frame's depth and stencil every time the render
 	// pass was broken for a framebuffer copy. Preserve it.
-	// (stencilLoadOp is already 0 == VK_ATTACHMENT_LOAD_OP_LOAD from memset.)
 	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
 	// MSAA color target (when multisampling): also preserved across the break.
@@ -1117,7 +1140,8 @@ void idRenderBackend::CreateRenderPass() {
 	renderPassResumeCreateInfo.pAttachments = attachments;
 	renderPassResumeCreateInfo.subpassCount = 1;
 	renderPassResumeCreateInfo.pSubpasses = &subpass;
-	renderPassResumeCreateInfo.dependencyCount = 0;
+	renderPassResumeCreateInfo.dependencyCount = 1;
+	renderPassResumeCreateInfo.pDependencies = &attachmentDependency;
 
 	ID_VK_CHECK(vkCreateRenderPass(vkcontext.device, &renderPassResumeCreateInfo, NULL, &vkcontext.renderPassResume));
 }
