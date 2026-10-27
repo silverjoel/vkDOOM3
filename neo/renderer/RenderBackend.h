@@ -232,7 +232,7 @@ private:
 	void				StencilSelectLight( const viewLight_t * vLight );
 
 private:
-	void				GL_StartFrame();
+	bool				GL_StartFrame(); // false: deferred; unrecoverable errors retain existing fatal routing
 	void				GL_EndFrame();
 
 	uint64				GL_GetCurrentStateMinusStencil() const;
@@ -274,8 +274,10 @@ private:
 	void				CreateCommandPool();
 	void				CreateCommandBuffer();
 
-	void				CreateSwapChain();
+	bool				CreateSwapChain();
 	void				DestroySwapChain();
+	void				CollectRetiredSwapchains( uint64 completedGeneration );
+	void				CompleteFrame( int frame );
 
 	void				CreateRenderTargets();
 	void				DestroyRenderTargets();
@@ -373,15 +375,36 @@ private:
 #endif
 	VkCommandPool					m_commandPool;
 
-	idArray< VkImage, NUM_FRAME_DATA >			m_swapchainImages;
-	idArray< VkImageView, NUM_FRAME_DATA >		m_swapchainViews;
-	idArray< VkFramebuffer, NUM_FRAME_DATA >	m_frameBuffers;
+	idList< VkImage >			m_swapchainImages;
+	idList< VkImageView >		m_swapchainViews;
+	idList< VkFramebuffer >	m_frameBuffers;
 	
 	idArray< VkCommandBuffer, NUM_FRAME_DATA >	m_commandBuffers;
 	idArray< VkFence, NUM_FRAME_DATA >			m_commandBufferFences;
 	idArray< bool, NUM_FRAME_DATA >				m_commandBufferRecorded;
 	idArray< VkSemaphore, NUM_FRAME_DATA >		m_acquireSemaphores;
-	idArray< VkSemaphore, NUM_FRAME_DATA >		m_renderCompleteSemaphores;
+	idList< VkSemaphore >					m_renderCompleteSemaphores;
+
+	// Same-surface generations. Views/framebuffers retire after graphics idle;
+	// presentation retains the swapchain and its per-image semaphores.
+	struct retiredSwapchain_t {
+		VkSwapchainKHR swapchain;
+		VkSurfaceKHR surface;
+		uint64 generation;
+		idList< VkSemaphore > semaphores;
+	};
+	// Four retained generations plus one current. At 4K RGBA8 and three
+	// images this is about 380 MiB of retained image payload, plus WSI overhead.
+	// No retired framebuffers, attachments, pipelines or command buffers grow.
+	static const int MAX_RETIRED_SWAPCHAINS = 4;
+	idList< retiredSwapchain_t > m_retiredSwapchains;
+	uint64 m_swapchainGeneration;
+	int m_firstPresentImage;
+	idArray< uint64, NUM_FRAME_DATA > m_acquireCompletionGeneration;
+	uint64 m_nextSwapchainAttempt;
+	bool m_retirementLimitReported;
+	bool m_frameDeferred;
+	VkFence m_deferredMaintenanceFence;
 
 	idArray< uint32, NUM_FRAME_DATA >			m_queryIndex;
 	idArray< idArray< uint64, NUM_TIMESTAMP_QUERIES >, NUM_FRAME_DATA >	m_queryResults;

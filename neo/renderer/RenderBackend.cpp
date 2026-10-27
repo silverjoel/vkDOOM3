@@ -1112,7 +1112,12 @@ void idRenderBackend::Execute( const int numCmds, const idArray< renderCommand_t
 	}
 
 	renderLog.StartFrame();
-	GL_StartFrame();
+	if ( !GL_StartFrame() ) {
+		m_pc.totalMicroSec = 0;
+		m_pc.gpuMicroSec = 0;
+		renderLog.EndFrame();
+		return;
+	}
 
 	uint64 backEndStartTime = Sys_Microseconds();
 

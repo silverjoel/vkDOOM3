@@ -722,7 +722,7 @@ VkExtent2D ChooseSurfaceExtent( VkSurfaceCapabilitiesKHR & caps ) {
 idRenderBackend::CreateSwapChain
 =============
 */
-void idRenderBackend::CreateSwapChain() {
+bool idRenderBackend::CreateSwapChain() {
 	GPUInfo_t & gpu = vkcontext.gpu;
 
 	VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat( gpu.surfaceFormats );
@@ -732,15 +732,19 @@ void idRenderBackend::CreateSwapChain() {
 	VkSwapchainCreateInfoKHR info = {};
 	info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 	info.surface = m_surface;
-	info.minImageCount = NUM_FRAME_DATA;
+	info.minImageCount = Max( uint32( NUM_FRAME_DATA ), gpu.surfaceCaps.minImageCount );
+	if ( gpu.surfaceCaps.maxImageCount != 0 ) {
+		info.minImageCount = Min( info.minImageCount, gpu.surfaceCaps.maxImageCount );
+	}
+	info.oldSwapchain = m_swapchain; // Restart preserves this same surface.
 	info.imageFormat = surfaceFormat.format;
 	info.imageColorSpace = surfaceFormat.colorSpace;
 	info.imageExtent = extent;
 	info.imageArrayLayers = 1;
 	info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
+	uint32 indices[] = { uint32( vkcontext.graphicsFamilyIdx ), uint32( vkcontext.presentFamilyIdx ) };
 	if ( vkcontext.graphicsFamilyIdx != vkcontext.presentFamilyIdx ) {
-		uint32 indices[] = { (uint32)vkcontext.graphicsFamilyIdx, (uint32)vkcontext.presentFamilyIdx };
 
 		info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
 		info.queueFamilyIndexCount = 2;
@@ -754,7 +758,35 @@ void idRenderBackend::CreateSwapChain() {
 	info.presentMode = presentMode;
 	info.clipped = VK_TRUE;
 
-	ID_VK_CHECK( vkCreateSwapchainKHR( vkcontext.device, &info, NULL, &m_swapchain ) );
+	VkSwapchainKHR replacement = VK_NULL_HANDLE;
+	const VkResult createResult = vkCreateSwapchainKHR( vkcontext.device, &info, NULL, &replacement );
+	// Passing oldSwapchain retires it even when creation fails. Transfer its
+	// presentation ownership before handling any error; never reacquire it.
+	if ( m_swapchain != VK_NULL_HANDLE ) {
+		if ( m_firstPresentImage >= 0 ) {
+			retiredSwapchain_t retired;
+			retired.swapchain = m_swapchain;
+			retired.surface = m_surface;
+			retired.generation = m_swapchainGeneration;
+			retired.semaphores = m_renderCompleteSemaphores;
+			m_renderCompleteSemaphores.Clear();
+			m_retiredSwapchains.Append( retired );
+		} else {
+			// Never presented; Restart has completed all graphics work.
+			for ( int i = 0; i < m_renderCompleteSemaphores.Num(); ++i ) {
+				vkDestroySemaphore( vkcontext.device, m_renderCompleteSemaphores[i], NULL );
+			}
+			vkDestroySwapchainKHR( vkcontext.device, m_swapchain, NULL );
+			m_renderCompleteSemaphores.Clear();
+		}
+	}
+	m_swapchain = replacement;
+	m_firstPresentImage = -1;
+	if ( createResult == VK_ERROR_OUT_OF_DATE_KHR ) {
+		return false;
+	}
+	ID_VK_CHECK( createResult );
+	++m_swapchainGeneration;
 
 	m_swapchainFormat = surfaceFormat.format;
 	m_presentMode = presentMode;
@@ -763,12 +795,18 @@ void idRenderBackend::CreateSwapChain() {
 
 	uint32 numImages = 0;
 	ID_VK_CHECK( vkGetSwapchainImagesKHR( vkcontext.device, m_swapchain, &numImages, NULL ) );
-	ID_VK_VALIDATE( numImages > 0, "vkGetSwapchainImagesKHR returned a zero image count." );
-
+	ID_VK_VALIDATE( numImages > 0 && numImages <= INT_MAX, "Invalid swapchain image count." );
+	m_swapchainImages.SetNum( int( numImages ) );
 	ID_VK_CHECK( vkGetSwapchainImagesKHR( vkcontext.device, m_swapchain, &numImages, m_swapchainImages.Ptr() ) );
-	ID_VK_VALIDATE( numImages > 0, "vkGetSwapchainImagesKHR returned a zero image count." );
+	ID_VK_VALIDATE( numImages > 0 && numImages <= uint32( m_swapchainImages.Num() ), "Invalid swapchain image count." );
+	m_swapchainImages.SetNum( int( numImages ) );
+	m_swapchainViews.SetNum( int( numImages ) );
+	m_renderCompleteSemaphores.SetNum( int( numImages ) );
+	VkSemaphoreCreateInfo semaphoreInfo = {};
+	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-	for ( uint32 i = 0; i < NUM_FRAME_DATA; ++i ) {
+	for ( uint32 i = 0; i < numImages; ++i ) {
+		ID_VK_CHECK( vkCreateSemaphore( vkcontext.device, &semaphoreInfo, NULL, &m_renderCompleteSemaphores[i] ) );
 		VkImageViewCreateInfo imageViewCreateInfo = {};
 		imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		imageViewCreateInfo.image = m_swapchainImages[ i ];
@@ -787,6 +825,7 @@ void idRenderBackend::CreateSwapChain() {
 
 		ID_VK_CHECK( vkCreateImageView( vkcontext.device, &imageViewCreateInfo, NULL, &m_swapchainViews[ i ] ) );
 	}
+	return true;
 }
 
 /*
@@ -795,12 +834,49 @@ idRenderBackend::DestroySwapChain
 =============
 */
 void idRenderBackend::DestroySwapChain() {
-	for ( uint32 i = 0; i < NUM_FRAME_DATA; ++i ) {
-		vkDestroyImageView( vkcontext.device, m_swapchainViews[ i ], NULL );
+	for ( int i = 0; i < m_swapchainViews.Num(); ++i ) {
+		vkDestroyImageView( vkcontext.device, m_swapchainViews[i], NULL );
 	}
-	m_swapchainViews.Zero();
-
+	m_swapchainViews.Clear();
+	for ( int i = 0; i < m_renderCompleteSemaphores.Num(); ++i ) {
+		vkDestroySemaphore( vkcontext.device, m_renderCompleteSemaphores[i], NULL );
+	}
+	m_renderCompleteSemaphores.Clear();
 	vkDestroySwapchainKHR( vkcontext.device, m_swapchain, NULL );
+	m_swapchain = VK_NULL_HANDLE;
+	// Terminal-only compatibility fallback has run before this call. This
+	// does not claim formal presentation completion from device idle.
+	CollectRetiredSwapchains( UINT64_MAX );
+}
+
+void idRenderBackend::CollectRetiredSwapchains( uint64 completedGeneration ) {
+	for ( int i = m_retiredSwapchains.Num() - 1; i >= 0; --i ) {
+		retiredSwapchain_t & retired = m_retiredSwapchains[i];
+		if ( retired.generation >= completedGeneration ) {
+			continue;
+		}
+		assert( retired.surface == m_surface );
+		for ( int j = 0; j < retired.semaphores.Num(); ++j ) {
+			vkDestroySemaphore( vkcontext.device, retired.semaphores[j], NULL );
+		}
+		vkDestroySwapchainKHR( vkcontext.device, retired.swapchain, NULL );
+		m_retiredSwapchains.RemoveIndex( i );
+	}
+}
+
+void idRenderBackend::CompleteFrame( int frame ) {
+	if ( !m_commandBufferRecorded[frame] ) {
+		return;
+	}
+	ID_VK_CHECK( vkWaitForFences( vkcontext.device, 1, &m_commandBufferFences[frame], VK_TRUE, UINT64_MAX ) );
+	m_commandBufferRecorded[frame] = false;
+	// This fence is evidence only because this submission waited for the
+	// reacquire of the generation's FIRST presented image. A graphics fence
+	// without that acquire dependency is not presentation evidence.
+	if ( m_acquireCompletionGeneration[frame] != 0 ) {
+		CollectRetiredSwapchains( m_acquireCompletionGeneration[frame] );
+		m_acquireCompletionGeneration[frame] = 0;
+	}
 }
 
 /*
@@ -837,6 +913,7 @@ void idRenderBackend::CreateCommandBuffer() {
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
 		ID_VK_CHECK( vkCreateFence( vkcontext.device, &fenceCreateInfo, NULL, &m_commandBufferFences[ i ] ) );
 	}
+	ID_VK_CHECK( vkCreateFence( vkcontext.device, &fenceCreateInfo, NULL, &m_deferredMaintenanceFence ) );
 }
 
 /*
@@ -850,7 +927,6 @@ void idRenderBackend::CreateSemaphores() {
 
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
 		ID_VK_CHECK( vkCreateSemaphore( vkcontext.device, &semaphoreCreateInfo, NULL, &m_acquireSemaphores[ i ] ) );
-		ID_VK_CHECK( vkCreateSemaphore( vkcontext.device, &semaphoreCreateInfo, NULL, &m_renderCompleteSemaphores[ i ] ) );
 	}
 }
 
@@ -1187,7 +1263,8 @@ void idRenderBackend::CreateFrameBuffers() {
 	frameBufferCreateInfo.height = renderSystem->GetHeight();
 	frameBufferCreateInfo.layers = 1;
 
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+	m_frameBuffers.SetNum( m_swapchainViews.Num() );
+	for ( int i = 0; i < m_frameBuffers.Num(); ++i ) {
 		attachments[ 0 ] = m_swapchainViews[ i ];
 		ID_VK_CHECK( vkCreateFramebuffer( vkcontext.device, &frameBufferCreateInfo, NULL, &m_frameBuffers[ i ] ) );
 	}
@@ -1199,10 +1276,10 @@ idRenderBackend::DestroyFrameBuffers
 =============
 */
 void idRenderBackend::DestroyFrameBuffers() {
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+	for ( int i = 0; i < m_frameBuffers.Num(); ++i ) {
 		vkDestroyFramebuffer( vkcontext.device, m_frameBuffers[ i ], NULL );
 	}
-	m_frameBuffers.Zero();
+	m_frameBuffers.Clear();
 }
 
 /*
@@ -1275,21 +1352,29 @@ void idRenderBackend::Clear() {
 	m_msaaImageView = VK_NULL_HANDLE;
 	m_commandPool = VK_NULL_HANDLE;
 
-	m_swapchainImages.Zero();
-	m_swapchainViews.Zero();
-	m_frameBuffers.Zero();
+	m_swapchainImages.Clear();
+	m_swapchainViews.Clear();
+	m_frameBuffers.Clear();
 
 	m_screenshotPending = false;
 	m_screenshotBuffer = VK_NULL_HANDLE;
 	m_screenshotMemory = VK_NULL_HANDLE;
 	m_screenshotFrame = 0;
 	m_swapchainInvalid = false;
+	m_swapchainGeneration = 0;
+	m_firstPresentImage = -1;
+	m_acquireCompletionGeneration.Zero();
+	m_retiredSwapchains.Clear();
+	m_nextSwapchainAttempt = 0;
+	m_retirementLimitReported = false;
+	m_frameDeferred = false;
+	m_deferredMaintenanceFence = VK_NULL_HANDLE;
 
 	m_commandBuffers.Zero();
 	m_commandBufferFences.Zero();
 	m_commandBufferRecorded.Zero();
 	m_acquireSemaphores.Zero();
-	m_renderCompleteSemaphores.Zero();
+	m_renderCompleteSemaphores.Clear();
 
 	m_queryIndex.Zero();
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
@@ -1366,8 +1451,8 @@ void idRenderBackend::Init() {
 	// Start the Staging Manager
 	stagingManager.Init();
 
-	// Create Swap Chain
-	CreateSwapChain();
+	// Initial creation has no running frame/event loop to defer to.
+	ID_VK_VALIDATE( CreateSwapChain(), "Initial swapchain creation was out of date." );
 
 	// Create Render Targets
 	CreateRenderTargets();
@@ -1423,6 +1508,9 @@ void idRenderBackend::Shutdown() {
 	// Destroy Render Targets
 	DestroyRenderTargets();
 
+	// Final-retirement compatibility fallback, not formal presentation proof.
+	// Keep this terminal-only; independent earlier shutdown ordering is unchanged.
+	ID_VK_CHECK( vkDeviceWaitIdle( vkcontext.device ) );
 	// Destroy Swap Chain
 	DestroySwapChain();
 
@@ -1435,6 +1523,8 @@ void idRenderBackend::Shutdown() {
 		vkDestroyFence( vkcontext.device, m_commandBufferFences[ i ], NULL );
 	}
 
+	vkDestroyFence( vkcontext.device, m_deferredMaintenanceFence, NULL );
+
 	// Destroy Command Pool
 	vkDestroyCommandPool( vkcontext.device, m_commandPool, NULL );
 
@@ -1446,7 +1536,6 @@ void idRenderBackend::Shutdown() {
 	// Destroy Semaphores
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
 		vkDestroySemaphore( vkcontext.device, m_acquireSemaphores[ i ], NULL );
-		vkDestroySemaphore( vkcontext.device, m_renderCompleteSemaphores[ i ], NULL );
 	}
 
 	// Destroy Debug Callback
@@ -1482,6 +1571,29 @@ idRenderBackend::Restart
 ====================
 */
 void idRenderBackend::Restart() {
+	m_swapchainInvalid = true;
+	const uint64 now = Sys_Microseconds();
+	if ( now < m_nextSwapchainAttempt ) {
+		return;
+	}
+	m_nextSwapchainAttempt = now + 250000; // coalesce retries; never spin on WSI
+	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+		CompleteFrame( i );
+	}
+	if ( m_firstPresentImage >= 0 && m_retiredSwapchains.Num() >= MAX_RETIRED_SWAPCHAINS ) {
+		if ( !m_retirementLimitReported ) {
+			idLib::Warning( "Presentation retirement limit reached; rendering suspended. Quit remains available." );
+			m_retirementLimitReported = true;
+		}
+		return;
+	}
+	// The HWND/surface survives mode switches. A minimized surface cannot
+	// admit a new generation; wait for a positive extent, without altering it.
+	ID_VK_CHECK( vkGetPhysicalDeviceSurfaceCapabilitiesKHR( m_physicalDevice, m_surface, &vkcontext.gpu.surfaceCaps ) );
+	const VkExtent2D extent = ChooseSurfaceExtent( vkcontext.gpu.surfaceCaps );
+	if ( IsIconic( win32.hWnd ) || extent.width == 0 || extent.height == 0 ) {
+		return;
+	}
 	stagingManager.Flush();
 	
 	ID_VK_CHECK( vkDeviceWaitIdle( vkcontext.device ) );
@@ -1498,11 +1610,11 @@ void idRenderBackend::Restart() {
 	// Destroy Render Targets (purges go into the garbage ring)
 	DestroyRenderTargets();
 
-	// Destroy Current Swap Chain
-	DestroySwapChain();
-
-	// Destroy Current Surface
-	vkDestroySurfaceKHR( m_instance, m_surface, NULL );
+	// Graphics is idle; release image views but retain presentation ownership.
+	for ( int i = 0; i < m_swapchainViews.Num(); ++i ) {
+		vkDestroyImageView( vkcontext.device, m_swapchainViews[i], NULL );
+	}
+	m_swapchainViews.Clear();
 
 	// The device is idle: drain EVERY garbage slot, including the targets
 	// purged just above. EmptyGarbage() advances one slot per call; image
@@ -1519,8 +1631,7 @@ void idRenderBackend::Restart() {
 	}
 #endif
 
-	// Create New Surface
-	CreateSurface();
+	// Retained swapchains keep using this surface until final shutdown.
 
 	// Refresh Surface Capabilities
 	ID_VK_CHECK( vkGetPhysicalDeviceSurfaceCapabilitiesKHR( m_physicalDevice, m_surface, &vkcontext.gpu.surfaceCaps ) );
@@ -1532,8 +1643,11 @@ void idRenderBackend::Restart() {
 		idLib::FatalError( "idRenderBackend::ResizeImages: New surface does not support present?" );
 	}
 
-	// Create New Swap Chain
-	CreateSwapChain();
+	// Creation itself may race another resize. The old chain is now retired;
+	// keep the no-frame state and retry from the event loop, never acquire it.
+	if ( !CreateSwapChain() ) {
+		return;
+	}
 
 	// Create New Render Targets
 	CreateRenderTargets();
@@ -1543,6 +1657,8 @@ void idRenderBackend::Restart() {
 
 	// Create New Frame Buffers
 	CreateFrameBuffers();
+	m_swapchainInvalid = false;
+	m_retirementLimitReported = false;
 }
 
 /*
@@ -1552,20 +1668,25 @@ idRenderBackend::BlockingSwapBuffers
 */
 void idRenderBackend::BlockingSwapBuffers() {
 	RENDERLOG_PRINTF( "***************** BlockingSwapBuffers *****************\n\n\n" );
-
-	m_counter++;
-	m_currentFrameData = m_counter % NUM_FRAME_DATA;
-
-	if ( m_commandBufferRecorded[ m_currentFrameData ] == false ) {
-		return;
-	}	
-
-	ID_VK_CHECK( vkWaitForFences( vkcontext.device, 1, &m_commandBufferFences[ m_currentFrameData ], VK_TRUE, UINT64_MAX ) );
-
-	ID_VK_CHECK( vkResetFences( vkcontext.device, 1, &m_commandBufferFences[ m_currentFrameData ] ) );
-	m_commandBufferRecorded[ m_currentFrameData ] = false;
-
-	//vkDeviceWaitIdle( vkcontext.device );
+	// CPU frame/vertex buffers rotate even when rendering is deferred. Finish
+	// outstanding graphics before that rotation, including after a skipped frame.
+	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+		CompleteFrame( i );
+	}
+	if ( m_frameDeferred ) {
+		// The caller has joined the previous game/draw work and has not yet
+		// started the next job. Skipped draws must not strand image garbage.
+		// Submit pending uploads, then a fence-only queue operation: this is
+		// maintenance, NOT a frame submission or presentation-completion proof.
+		stagingManager.Flush();
+		ID_VK_CHECK( vkResetFences( vkcontext.device, 1, &m_deferredMaintenanceFence ) );
+		ID_VK_CHECK( vkQueueSubmit( vkcontext.graphicsQueue, 0, NULL, m_deferredMaintenanceFence ) );
+		ID_VK_CHECK( vkWaitForFences( vkcontext.device, 1, &m_deferredMaintenanceFence, VK_TRUE, UINT64_MAX ) );
+		idImage::EmptyGarbage();
+#if !defined( ID_USE_AMD_ALLOCATOR )
+		vulkanAllocator.EmptyGarbage();
+#endif
+	}
 }
 
 /*
@@ -1742,33 +1863,38 @@ GL COMMANDS
 idRenderBackend::GL_StartFrame
 ==================
 */
-void idRenderBackend::GL_StartFrame() {
-	// Deferred recreation from a previous frame's SUBOPTIMAL/OUT_OF_DATE
-	// present result (or a SUBOPTIMAL acquire, whose semaphore was consumed
-	// by that frame's submit).
-	if (m_swapchainInvalid) {
-		m_swapchainInvalid = false;
+bool idRenderBackend::GL_StartFrame() {
+	m_frameDeferred = true;
+	if ( m_swapchainInvalid ) {
 		Restart();
+		if ( m_swapchainInvalid ) {
+			return false;
+		}
+	}
+	if ( IsIconic( win32.hWnd ) ) {
+		return false;
 	}
 
-	VkResult result = vkAcquireNextImageKHR( vkcontext.device, m_swapchain, UINT64_MAX,
-		m_acquireSemaphores[m_currentFrameData], VK_NULL_HANDLE, &m_currentSwapIndex );
-
-	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-		// Semaphore was NOT signaled: safe to recreate and re-acquire now.
-		Restart();
-		result = vkAcquireNextImageKHR( vkcontext.device, m_swapchain, UINT64_MAX,
-			m_acquireSemaphores[m_currentFrameData], VK_NULL_HANDLE, &m_currentSwapIndex );
-	}
-
-	if (result == VK_SUBOPTIMAL_KHR) {
-		// Semaphore WAS signaled and the image is usable: render this frame,
-		// recreate before the next one.
+	uint32 imageIndex = UINT32_MAX;
+	VkResult result = vkAcquireNextImageKHR( vkcontext.device, m_swapchain, 100000000,
+		m_acquireSemaphores[m_currentFrameData], VK_NULL_HANDLE, &imageIndex );
+	if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
 		m_swapchainInvalid = true;
-		result = VK_SUCCESS;
+		m_nextSwapchainAttempt = Sys_Microseconds() + 250000;
+		return false;
 	}
-
-	ID_VK_CHECK( result );
+	if ( result == VK_NOT_READY || result == VK_TIMEOUT ) {
+		return false; // bounded 100 ms acquisition wait; no retry loop
+	}
+	if ( result == VK_SUBOPTIMAL_KHR ) {
+		m_swapchainInvalid = true; // successful acquisition MUST be consumed
+	} else {
+		ID_VK_CHECK( result ); // unrecoverable errors are not ordinary suspension
+	}
+	ID_VK_VALIDATE( imageIndex < uint32( m_swapchainImages.Num() ), "Acquired swapchain image index out of range." );
+	m_currentSwapIndex = imageIndex;
+	m_acquireCompletionGeneration[m_currentFrameData] =
+		( m_firstPresentImage == int( imageIndex ) ) ? m_swapchainGeneration : 0;
 
 	idImage::EmptyGarbage();
 #if !defined( ID_USE_AMD_ALLOCATOR )
@@ -1809,6 +1935,8 @@ void idRenderBackend::GL_StartFrame() {
 	vkCmdBeginRenderPass( commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE );
 
 	vkCmdWriteTimestamp( commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, m_queryIndex[ m_currentFrameData ]++ );
+	m_frameDeferred = false;
+	return true;
 }
 
 /*
@@ -1914,10 +2042,9 @@ void idRenderBackend::GL_EndFrame() {
 		0, 0, NULL, 0, NULL, 1, &barrier );
 
 	ID_VK_CHECK( vkEndCommandBuffer( commandBuffer ) )
-	m_commandBufferRecorded[ m_currentFrameData ] = true;
 
 	VkSemaphore * acquire = &m_acquireSemaphores[ m_currentFrameData ];
-	VkSemaphore * finished = &m_renderCompleteSemaphores[ m_currentFrameData ];
+	VkSemaphore * finished = &m_renderCompleteSemaphores[ m_currentSwapIndex ];
 
 	VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
@@ -1931,7 +2058,9 @@ void idRenderBackend::GL_EndFrame() {
 	submitInfo.pSignalSemaphores = finished;
 	submitInfo.pWaitDstStageMask = &dstStageMask;
 
+	ID_VK_CHECK( vkResetFences( vkcontext.device, 1, &m_commandBufferFences[m_currentFrameData] ) );
 	ID_VK_CHECK( vkQueueSubmit( vkcontext.graphicsQueue, 1, &submitInfo, m_commandBufferFences[ m_currentFrameData ] ) );
+	m_commandBufferRecorded[m_currentFrameData] = true;
 
 	VkPresentInfoKHR presentInfo = {}; 
 	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR; 
@@ -1941,6 +2070,9 @@ void idRenderBackend::GL_EndFrame() {
 	presentInfo.pSwapchains = &m_swapchain; 
 	presentInfo.pImageIndices = &m_currentSwapIndex; 
  
+	if ( m_firstPresentImage < 0 ) {
+		m_firstPresentImage = int( m_currentSwapIndex );
+	}
 	VkResult presentResult = vkQueuePresentKHR( vkcontext.presentQueue, &presentInfo );
 	if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
 		// The frame's semaphores/fences were consumed normally by the submit;
