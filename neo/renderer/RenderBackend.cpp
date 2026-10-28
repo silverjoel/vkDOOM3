@@ -1102,7 +1102,44 @@ This function will be called syncronously if running without
 smp extensions, or asyncronously by another thread.
 =============
 */
-void idRenderBackend::Execute( const int numCmds, const idArray< renderCommand_t, 16 > & renderCommands ) {
+VkExtent2D idRenderBackend::BeginFrontendFrame( int frontendSlot ) {
+	assert( idLib::IsMainThread() );
+	assert( frontendSlot >= 0 && frontendSlot < NUM_FRAME_DATA );
+	// The previous worker has completed at this handoff. Only the main thread
+	// reads/writes this array; workers read the copied frontend root crop.
+	m_frontendExtents[frontendSlot] = m_swapchainExtent;
+	return m_frontendExtents[frontendSlot];
+}
+
+static bool RenderRectFitsExtent( int x, int y, int width, int height, const VkExtent2D & extent ) {
+	return x >= 0 && y >= 0 && width > 0 && height > 0
+		&& uint32( x ) < extent.width && uint32( y ) < extent.height
+		&& uint32( width ) <= extent.width - uint32( x )
+		&& uint32( height ) <= extent.height - uint32( y );
+}
+
+bool idRenderBackend::FrameFitsExtent( int numCmds, const idArray< renderCommand_t, 16 > & renderCommands, const VkExtent2D & extent ) const {
+	// Check all copy/view bounds BEFORE acquisition. Rejecting after acquiring
+	// an image would strand its semaphore and presentation ownership.
+	for ( int i = 0; i < numCmds; ++i ) {
+		const renderCommand_t & cmd = renderCommands[i];
+		if ( cmd.op == RC_DRAW_VIEW && cmd.viewDef != NULL ) {
+			const idScreenRect & rect = cmd.viewDef->viewport;
+			if ( !RenderRectFitsExtent( rect.x1, rect.y1, rect.x2 - rect.x1 + 1, rect.y2 - rect.y1 + 1, extent ) ) {
+				return false;
+			}
+		} else if ( cmd.op == RC_COPY_RENDER ) {
+			if ( !RenderRectFitsExtent( cmd.x, cmd.y, cmd.imageWidth, cmd.imageHeight, extent ) ) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+void idRenderBackend::Execute( const int numCmds, const idArray< renderCommand_t, 16 > & renderCommands, int frontendSlot ) {
+	assert( idLib::IsMainThread() );
+	assert( frontendSlot >= 0 && frontendSlot < NUM_FRAME_DATA );
 	CheckCVars();
 
 	resolutionScale.SetCurrentGPUFrameTime( commonLocal.m_mainFrameTiming.gpuTime );
@@ -1112,7 +1149,7 @@ void idRenderBackend::Execute( const int numCmds, const idArray< renderCommand_t
 	}
 
 	renderLog.StartFrame();
-	if ( !GL_StartFrame() ) {
+	if ( !GL_StartFrame( m_frontendExtents[frontendSlot], numCmds, renderCommands ) ) {
 		m_pc.totalMicroSec = 0;
 		m_pc.gpuMicroSec = 0;
 		renderLog.EndFrame();

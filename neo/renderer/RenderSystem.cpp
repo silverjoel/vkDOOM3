@@ -1400,11 +1400,17 @@ void idRenderSystemLocal::SwapCommandBuffers_FinishCommandBuffers() {
 	R_InitDrawSurfFromTri( m_zeroOneCubeSurface, *m_zeroOneCubeTriangles );
 	R_InitDrawSurfFromTri( m_testImageSurface, *m_testImageTriangles );
 
-	// Reset render crop to be the full screen
+	// Publish the new frontend slot before the game/draw worker is signaled.
+	// Requested window dimensions remain separate from the admitted render size.
+	const VkExtent2D extent = m_backend.BeginFrontendFrame( m_smpFrame % NUM_FRAME_DATA );
+	// Before the first drawable exists, CPU-only UI generation can retain the
+	// requested size. Its zero extent stamp prevents any Vulkan execution.
+	const int renderWidth = extent.width != 0 ? int( extent.width ) : GetWidth();
+	const int renderHeight = extent.height != 0 ? int( extent.height ) : GetHeight();
 	m_renderCrops[0].x1 = 0;
 	m_renderCrops[0].y1 = 0;
-	m_renderCrops[0].x2 = GetWidth() - 1;
-	m_renderCrops[0].y2 = GetHeight() - 1;
+	m_renderCrops[0].x2 = renderWidth - 1;
+	m_renderCrops[0].y2 = renderHeight - 1;
 	m_currentRenderCrop = 0;
 
 	// this is the ONLY place this is modified
@@ -1435,7 +1441,7 @@ void idRenderSystemLocal::RenderCommandBuffers() {
 		return;
 	}
 
-	m_backend.Execute( frameData.renderCommandIndex, frameData.renderCommands );
+	m_backend.Execute( frameData.renderCommandIndex, frameData.renderCommands, ( m_smpFrame - 1 ) % NUM_FRAME_DATA );
 
 	// pass in null for now - we may need to do some map specific hackery in the future
 	resolutionScale.InitForMap( NULL );
@@ -1468,8 +1474,9 @@ void idRenderSystemLocal::PerformResolutionScaling( int& newWidth, int& newHeigh
 	resolutionScale.ResetToFullResolution();
 	resolutionScale.GetCurrentResolutionScale( xScale, yScale );
 
-	newWidth = idMath::Ftoi( GetWidth() * xScale );
-	newHeight = idMath::Ftoi( GetHeight() * yScale );
+	// Use this frontend frame's snapshot, not live window/backend dimensions.
+	newWidth = Max( 1, Min( int( m_renderCrops[0].GetWidth() ), idMath::Ftoi( m_renderCrops[0].GetWidth() * xScale ) ) );
+	newHeight = Max( 1, Min( int( m_renderCrops[0].GetHeight() ), idMath::Ftoi( m_renderCrops[0].GetHeight() * yScale ) ) );
 }
 
 /*
@@ -1490,6 +1497,11 @@ void idRenderSystemLocal::CropRenderSize( int width, int height ) {
 	}
 
 	idScreenRect & previous = m_renderCrops[ m_currentRenderCrop ];
+
+	// Subview materials can request a fixed render size larger than a small
+	// drawable. Keep their top-left anchored crop inside this frame's root.
+	width = Min( width, m_renderCrops[0].x2 - previous.x1 + 1 );
+	height = Min( height, previous.y2 - m_renderCrops[0].y1 + 1 );
 
 	m_currentRenderCrop++;
 

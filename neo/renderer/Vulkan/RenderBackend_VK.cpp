@@ -704,17 +704,43 @@ VkPresentModeKHR ChoosePresentMode( idList< VkPresentModeKHR > & modes ) {
 ChooseSurfaceExtent
 =============
 */
-VkExtent2D ChooseSurfaceExtent( VkSurfaceCapabilitiesKHR & caps ) {
-	VkExtent2D extent;
-
-	if ( caps.currentExtent.width == -1 ) {
-		extent.width = win32.nativeScreenWidth;
-		extent.height = win32.nativeScreenHeight;
-	} else {
-		extent = caps.currentExtent;
+static bool ChooseSurfaceExtent( const VkSurfaceCapabilitiesKHR & caps, const VkExtent2D & drawable, VkExtent2D & extent ) {
+	// Availability is checked before clamping: never turn an absent drawable
+	// into a fabricated positive swapchain.
+	if ( drawable.width == 0 || drawable.height == 0
+		|| caps.minImageExtent.width > caps.maxImageExtent.width
+		|| caps.minImageExtent.height > caps.maxImageExtent.height ) {
+		return false;
 	}
+	VkExtent2D selected = caps.currentExtent;
+	if ( selected.width == UINT32_MAX && selected.height == UINT32_MAX ) {
+		selected.width = Max( caps.minImageExtent.width, Min( drawable.width, caps.maxImageExtent.width ) );
+		selected.height = Max( caps.minImageExtent.height, Min( drawable.height, caps.maxImageExtent.height ) );
+	}
+	if ( selected.width == 0 || selected.height == 0
+		|| selected.width < caps.minImageExtent.width || selected.width > caps.maxImageExtent.width
+		|| selected.height < caps.minImageExtent.height || selected.height > caps.maxImageExtent.height ) {
+		return false;
+	}
+	extent = selected;
+	return true;
+}
 
-	return extent;
+bool idRenderBackend::QueryDrawableExtent( VkExtent2D & extent ) {
+	ID_VK_CHECK( vkGetPhysicalDeviceSurfaceCapabilitiesKHR( m_physicalDevice, m_surface, &vkcontext.gpu.surfaceCaps ) );
+	RECT client;
+	if ( IsIconic( win32.hWnd ) || !GetClientRect( win32.hWnd, &client )
+		|| client.right <= client.left || client.bottom <= client.top ) {
+		return false;
+	}
+	// The established PMv2 manifest makes these physical client pixels.
+	const VkExtent2D drawable = { uint32( client.right - client.left ), uint32( client.bottom - client.top ) };
+	if ( !ChooseSurfaceExtent( vkcontext.gpu.surfaceCaps, drawable, extent ) ) {
+		return false;
+	}
+	// Frontend screen rectangles and their widths are signed shorts.
+	ID_VK_VALIDATE( extent.width <= SHRT_MAX && extent.height <= SHRT_MAX, "Drawable exceeds renderer screen-rectangle limits." );
+	return true;
 }
 
 /*
@@ -727,7 +753,10 @@ bool idRenderBackend::CreateSwapChain() {
 
 	VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat( gpu.surfaceFormats );
 	VkPresentModeKHR presentMode = ChoosePresentMode( gpu.presentModes );
-	VkExtent2D extent = ChooseSurfaceExtent( gpu.surfaceCaps );
+	VkExtent2D extent;
+	if ( !QueryDrawableExtent( extent ) ) {
+		return false;
+	}
 
 	VkSwapchainCreateInfoKHR info = {};
 	info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -1011,8 +1040,8 @@ void idRenderBackend::CreateRenderTargets() {
 
 	idImageOpts depthOptions;
 	depthOptions.format = FMT_DEPTH;
-	depthOptions.width = renderSystem->GetWidth();
-	depthOptions.height = renderSystem->GetHeight();
+	depthOptions.width = int( m_swapchainExtent.width );
+	depthOptions.height = int( m_swapchainExtent.height );
 	depthOptions.numLevels = 1;
 	depthOptions.samples = static_cast< textureSamples_t >( vkcontext.sampleCount );
 
@@ -1259,8 +1288,8 @@ void idRenderBackend::CreateFrameBuffers() {
 	frameBufferCreateInfo.renderPass = vkcontext.renderPass;
 	frameBufferCreateInfo.attachmentCount = resolve ? 3 : 2;
 	frameBufferCreateInfo.pAttachments = attachments;
-	frameBufferCreateInfo.width = renderSystem->GetWidth();
-	frameBufferCreateInfo.height = renderSystem->GetHeight();
+	frameBufferCreateInfo.width = m_swapchainExtent.width;
+	frameBufferCreateInfo.height = m_swapchainExtent.height;
 	frameBufferCreateInfo.layers = 1;
 
 	m_frameBuffers.SetNum( m_swapchainViews.Num() );
@@ -1347,6 +1376,8 @@ void idRenderBackend::Clear() {
 	m_fullscreen = 0;
 	m_swapchain = VK_NULL_HANDLE;
 	m_swapchainFormat = VK_FORMAT_UNDEFINED;
+	m_swapchainExtent = {};
+	m_frontendExtents.Zero();
 	m_currentSwapIndex = 0;
 	m_msaaImage = VK_NULL_HANDLE;
 	m_msaaImageView = VK_NULL_HANDLE;
@@ -1451,20 +1482,18 @@ void idRenderBackend::Init() {
 	// Start the Staging Manager
 	stagingManager.Init();
 
-	// Initial creation has no running frame/event loop to defer to.
-	ID_VK_VALIDATE( CreateSwapChain(), "Initial swapchain creation was out of date." );
-
-	// Create Render Targets
-	CreateRenderTargets();
-
-	// Create Render Pass
-	CreateRenderPass();
-
-	// Create Pipeline Cache
+	// Extent-independent initialization must finish even if startup is minimized.
+	// The ordinary no-frame path will retry generation creation after restoration.
+	m_swapchainInvalid = true;
+	if ( CreateSwapChain() ) {
+		CreateRenderTargets();
+		CreateRenderPass();
+		CreateFrameBuffers();
+		VkExtent2D current;
+		m_swapchainInvalid = !QueryDrawableExtent( current )
+			|| current.width != m_swapchainExtent.width || current.height != m_swapchainExtent.height;
+	}
 	CreatePipelineCache();
-
-	// Create Frame Buffers
-	CreateFrameBuffers();
 
 	// Init RenderProg Manager
 	renderProgManager.Init();
@@ -1589,14 +1618,18 @@ void idRenderBackend::Restart() {
 	}
 	// The HWND/surface survives mode switches. A minimized surface cannot
 	// admit a new generation; wait for a positive extent, without altering it.
-	ID_VK_CHECK( vkGetPhysicalDeviceSurfaceCapabilitiesKHR( m_physicalDevice, m_surface, &vkcontext.gpu.surfaceCaps ) );
-	const VkExtent2D extent = ChooseSurfaceExtent( vkcontext.gpu.surfaceCaps );
-	if ( IsIconic( win32.hWnd ) || extent.width == 0 || extent.height == 0 ) {
+	VkExtent2D extent;
+	if ( !QueryDrawableExtent( extent ) ) {
 		return;
 	}
 	stagingManager.Flush();
 	
 	ID_VK_CHECK( vkDeviceWaitIdle( vkcontext.device ) );
+	// Availability can change during the wait. Preserve the usable generation
+	// if there is no replacement to admit before destructive work starts.
+	if ( !QueryDrawableExtent( extent ) ) {
+		return;
+	}
 
 	// Restart runs between backend submissions. Retire every dependent
 	// object before replacing attachment formats or sample counts.
@@ -1633,10 +1666,7 @@ void idRenderBackend::Restart() {
 
 	// Retained swapchains keep using this surface until final shutdown.
 
-	// Refresh Surface Capabilities
-	ID_VK_CHECK( vkGetPhysicalDeviceSurfaceCapabilitiesKHR( m_physicalDevice, m_surface, &vkcontext.gpu.surfaceCaps ) );
-
-	// Recheck presentation support
+		// Recheck presentation support
 	VkBool32 supportsPresent = VK_FALSE;
 	ID_VK_CHECK( vkGetPhysicalDeviceSurfaceSupportKHR( m_physicalDevice, vkcontext.presentFamilyIdx, m_surface, &supportsPresent ) );
 	if ( supportsPresent == VK_FALSE ) {
@@ -1657,7 +1687,11 @@ void idRenderBackend::Restart() {
 
 	// Create New Frame Buffers
 	CreateFrameBuffers();
-	m_swapchainInvalid = false;
+	// All objects use the successful creation extent. If the window changed
+	// during construction, keep them non-renderable until a bounded retry.
+	VkExtent2D current;
+	m_swapchainInvalid = !QueryDrawableExtent( current )
+		|| current.width != m_swapchainExtent.width || current.height != m_swapchainExtent.height;
 	m_retirementLimitReported = false;
 }
 
@@ -1863,15 +1897,26 @@ GL COMMANDS
 idRenderBackend::GL_StartFrame
 ==================
 */
-bool idRenderBackend::GL_StartFrame() {
+bool idRenderBackend::GL_StartFrame( const VkExtent2D & frameExtent, int numCmds, const idArray< renderCommand_t, 16 > & renderCommands ) {
 	m_frameDeferred = true;
+	VkExtent2D current;
+	if ( !QueryDrawableExtent( current ) ) {
+		return false;
+	}
+	if ( current.width != m_swapchainExtent.width || current.height != m_swapchainExtent.height ) {
+		m_swapchainInvalid = true;
+	}
 	if ( m_swapchainInvalid ) {
 		Restart();
 		if ( m_swapchainInvalid ) {
 			return false;
 		}
 	}
-	if ( IsIconic( win32.hWnd ) ) {
+	// CPU command batches own no generation-specific Vulkan objects. An older
+	// batch is compatible after recreation only when its admitted extent matches.
+	if ( frameExtent.width == 0 || frameExtent.height == 0
+		|| frameExtent.width != m_swapchainExtent.width || frameExtent.height != m_swapchainExtent.height
+		|| !FrameFitsExtent( numCmds, renderCommands, m_swapchainExtent ) ) {
 		return false;
 	}
 
@@ -2102,7 +2147,7 @@ void idRenderBackend::GL_SetDefaultState() {
 
 	GL_State( 0, true );
 
-	GL_Scissor( 0, 0, renderSystem->GetWidth(), renderSystem->GetHeight() );
+	GL_Scissor( 0, 0, int( m_swapchainExtent.width ), int( m_swapchainExtent.height ) );
 }
 
 /*
@@ -2349,11 +2394,17 @@ idRenderBackend::GL_Scissor
 ====================
 */
 void idRenderBackend::GL_Scissor( int x /* left*/, int y /* bottom */, int w, int h ) {
+	// Intersect derived light/surface scissors with this generation. Empty
+	// intersections are valid; arithmetic stays wide until the bounded result.
+	const int64 left = Max( int64( 0 ), Min( int64( x ), int64( m_swapchainExtent.width ) ) );
+	const int64 top = Max( int64( 0 ), Min( int64( y ), int64( m_swapchainExtent.height ) ) );
+	const int64 right = Max( left, Min( int64( x ) + w, int64( m_swapchainExtent.width ) ) );
+	const int64 bottom = Max( top, Min( int64( y ) + h, int64( m_swapchainExtent.height ) ) );
 	VkRect2D scissor;
-	scissor.offset.x = x;
-	scissor.offset.y = y;
-	scissor.extent.width = w;
-	scissor.extent.height = h;
+	scissor.offset.x = int( left );
+	scissor.offset.y = int( top );
+	scissor.extent.width = uint32( right - left );
+	scissor.extent.height = uint32( bottom - top );
 	vkCmdSetScissor( m_commandBuffers[ m_currentFrameData ], 0, 1, &scissor );
 }
 

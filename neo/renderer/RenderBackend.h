@@ -190,7 +190,8 @@ public:
 	void				Init();
 	void				Shutdown();
 
-	void				Execute( const int numCmds, const idArray< renderCommand_t, 16 > & renderCommands );
+	void				Execute( const int numCmds, const idArray< renderCommand_t, 16 > & renderCommands, int frontendSlot );
+	VkExtent2D			BeginFrontendFrame( int frontendSlot );
 	void				BlockingSwapBuffers();
 	// Screenshot support: arm a capture of the next submitted frame, then
 	// block until its data is available. FinishScreenshotCapture converts to
@@ -232,7 +233,7 @@ private:
 	void				StencilSelectLight( const viewLight_t * vLight );
 
 private:
-	bool				GL_StartFrame(); // false: deferred; unrecoverable errors retain existing fatal routing
+	bool				GL_StartFrame( const VkExtent2D & frameExtent, int numCmds, const idArray< renderCommand_t, 16 > & renderCommands ); // false: deferred; unrecoverable errors retain existing fatal routing
 	void				GL_EndFrame();
 
 	uint64				GL_GetCurrentStateMinusStencil() const;
@@ -274,6 +275,8 @@ private:
 	void				CreateCommandPool();
 	void				CreateCommandBuffer();
 
+	bool				QueryDrawableExtent( VkExtent2D & extent );
+	bool				FrameFitsExtent( int numCmds, const idArray< renderCommand_t, 16 > & renderCommands, const VkExtent2D & extent ) const;
 	bool				CreateSwapChain();
 	void				DestroySwapChain();
 	void				CollectRetiredSwapchains( uint64 completedGeneration );
@@ -364,6 +367,8 @@ private:
 	VkSwapchainKHR					m_swapchain;
 	VkFormat						m_swapchainFormat;
 	VkExtent2D						m_swapchainExtent;
+	// Main-thread frame handoff metadata; the worker uses its immutable root crop.
+	idArray< VkExtent2D, NUM_FRAME_DATA > m_frontendExtents;
 	uint32							m_currentSwapIndex;
 	VkImage							m_msaaImage;
 	VkImageView						m_msaaImageView;
