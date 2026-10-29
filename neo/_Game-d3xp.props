@@ -11,11 +11,7 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <Link>
-      <OutputFile Condition="'$(Platform)'=='Win32'">$(OutDir)gamex86.dll</OutputFile>
       <ModuleDefinitionFile>.\d3xp\game.def</ModuleDefinitionFile>
     </Link>
-    <PreBuildEvent>
-      <Command>..\build\Win32\"$(Configuration)"\TypeInfo.exe</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
 </Project>
