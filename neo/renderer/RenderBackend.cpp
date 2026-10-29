@@ -667,6 +667,111 @@ bool ChangeDisplaySettingsIfNeeded( gfxImpParms_t parms ) {
 GetWindowDimensions
 ====================
 */
+// Physical windowed placement is independent of transient Windows display-change
+// relocations and of the confirmed fullscreen mode. Accessed on the window thread.
+static gfxImpParms_t s_windowedParms;
+static bool s_windowedPlacementValid;
+static bool s_windowModeChanging;
+
+struct windowModeGuard_t {
+	bool previous;
+	windowModeGuard_t() : previous( s_windowModeChanging ) { s_windowModeChanging = true; }
+	~windowModeGuard_t() { s_windowModeChanging = previous; }
+};
+
+static bool WIN_WindowedDimensions( const gfxImpParms_t & parms, UINT dpi, int & x, int & y, int & w, int & h ) {
+	if ( parms.width <= 0 || parms.height <= 0 || dpi == 0 ) {
+		return false;
+	}
+	const POINT origin = { parms.x, parms.y };
+	MONITORINFO monitor = {};
+	monitor.cbSize = sizeof( monitor );
+	RECT decoration = {};
+	if ( !GetMonitorInfo( MonitorFromPoint( origin, MONITOR_DEFAULTTONEAREST ), &monitor ) ||
+		!AdjustWindowRectExForDpi( &decoration, WINDOW_STYLE | WS_SYSMENU, FALSE, 0, dpi ) ) {
+		return false;
+	}
+	const int64 borderWidth = int64( decoration.right ) - decoration.left;
+	const int64 borderHeight = int64( decoration.bottom ) - decoration.top;
+	const int64 workWidth = int64( monitor.rcWork.right ) - monitor.rcWork.left;
+	const int64 workHeight = int64( monitor.rcWork.bottom ) - monitor.rcWork.top;
+	const int64 availableWidth = workWidth - borderWidth;
+	const int64 availableHeight = workHeight - borderHeight;
+	if ( borderWidth < 0 || borderHeight < 0 || workWidth > INT_MAX || workHeight > INT_MAX ||
+		availableWidth <= 0 || availableHeight <= 0 ) {
+		return false;
+	}
+	int64 clientWidth = parms.width;
+	int64 clientHeight = parms.height;
+	// Fit oversized clients proportionally, without changing the saved resolution.
+	// All factors are positive and bounded by INT_MAX before multiplication.
+	if ( clientWidth > availableWidth || clientHeight > availableHeight ) {
+		if ( clientWidth * availableHeight > clientHeight * availableWidth ) {
+			clientHeight = clientHeight * availableWidth / clientWidth;
+			clientWidth = availableWidth;
+		} else {
+			clientWidth = clientWidth * availableHeight / clientHeight;
+			clientHeight = availableHeight;
+		}
+		clientWidth = clientWidth > 0 ? clientWidth : 1;
+		clientHeight = clientHeight > 0 ? clientHeight : 1;
+	}
+	w = static_cast<int>( clientWidth + borderWidth );
+	h = static_cast<int>( clientHeight + borderHeight );
+	const int64 maxX = int64( monitor.rcWork.right ) - w;
+	const int64 maxY = int64( monitor.rcWork.bottom ) - h;
+	x = static_cast<int>( parms.x < monitor.rcWork.left ? monitor.rcWork.left : ( parms.x > maxX ? maxX : parms.x ) );
+	y = static_cast<int>( parms.y < monitor.rcWork.top ? monitor.rcWork.top : ( parms.y > maxY ? maxY : parms.y ) );
+	return true;
+}
+
+static bool WIN_ApplyWindowedPlacement() {
+	UINT dpi = GetDpiForWindow( win32.hWnd );
+	// Moving to another monitor can change the HWND DPI during SetWindowPos.
+	// Recompute decorations once using that final DPI; client units stay physical.
+	for ( int pass = 0; pass < 2; ++pass ) {
+		int x, y, w, h;
+		if ( !WIN_WindowedDimensions( s_windowedParms, dpi, x, y, w, h ) ||
+			!SetWindowPos( win32.hWnd, HWND_NOTOPMOST, x, y, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_FRAMECHANGED ) ) {
+			return false;
+		}
+		const UINT newDpi = GetDpiForWindow( win32.hWnd );
+		if ( newDpi == dpi ) {
+			break;
+		}
+		dpi = newDpi;
+	}
+	return true;
+}
+
+// Windows may relocate the old fullscreen rectangle after SetScreenParms has
+// returned. Reapply the windowed request at the display-change notification,
+// before the next renderer frame admits its drawable. No renderer restart here.
+void WIN_RestoreWindowedPlacement() {
+	if ( !s_windowModeChanging && s_windowedPlacementValid && win32.hWnd != NULL &&
+		win32.isFullscreen == 0 && !IsIconic( win32.hWnd ) ) {
+		windowModeGuard_t guard;
+		if ( !WIN_ApplyWindowedPlacement() ) {
+			idLib::Warning( "Could not restore windowed placement after display change" );
+		}
+	}
+}
+
+// Only deliberate completed user movement/sizing replaces the request snapshot.
+void WIN_SaveWindowedPlacement() {
+	if ( !s_windowModeChanging && s_windowedPlacementValid && win32.hWnd != NULL &&
+		win32.isFullscreen == 0 && !IsIconic( win32.hWnd ) ) {
+		RECT window, client;
+		if ( GetWindowRect( win32.hWnd, &window ) && GetClientRect( win32.hWnd, &client ) &&
+			client.right > 0 && client.bottom > 0 ) {
+			s_windowedParms.x = window.left;
+			s_windowedParms.y = window.top;
+			s_windowedParms.width = client.right;
+			s_windowedParms.height = client.bottom;
+		}
+	}
+}
+
 static bool GetWindowDimensions( const gfxImpParms_t parms, int &x, int &y, int &w, int &h ) {
 	//
 	// compute width and height
@@ -688,21 +793,8 @@ static bool GetWindowDimensions( const gfxImpParms_t parms, int &x, int &y, int 
 			}
 		}
 	} else {
-		RECT	r;
-
-		// adjust width and height for window border
-		r.bottom = parms.height;
-		r.left = 0;
-		r.top = 0;
-		r.right = parms.width;
-
-		AdjustWindowRect (&r, WINDOW_STYLE|WS_SYSMENU, FALSE);
-
-		w = r.right - r.left;
-		h = r.bottom - r.top;
-
-		x = parms.x;
-		y = parms.y;
+		const UINT dpi = win32.hWnd != NULL ? GetDpiForWindow( win32.hWnd ) : GetDpiForSystem();
+		return WIN_WindowedDimensions( parms, dpi, x, y, w, h );
 	}
 
 	return true;
@@ -840,6 +932,8 @@ Sets up the screen based on passed parms..
 ===================
 */
 bool SetScreenParms( gfxImpParms_t parms ) {
+	windowModeGuard_t guard;
+
 	// Optionally ChangeDisplaySettings to get a different fullscreen resolution.
 	if ( !ChangeDisplaySettingsIfNeeded( parms ) ) {
 		return false;
@@ -860,11 +954,26 @@ bool SetScreenParms( gfxImpParms_t parms ) {
 
 	SetWindowLong( win32.hWnd, GWL_STYLE, stylebits );
 	SetWindowLong( win32.hWnd, GWL_EXSTYLE, 0 );
-	SetWindowPos( win32.hWnd, HWND_NOTOPMOST, x, y, w, h, SWP_SHOWWINDOW );
+	if ( parms.fullScreen == 0 ) {
+		s_windowedParms = parms;
+		s_windowedPlacementValid = true;
+		if ( !WIN_ApplyWindowedPlacement() ) {
+			return false;
+		}
+	} else if ( !SetWindowPos( win32.hWnd, HWND_NOTOPMOST, x, y, w, h, SWP_SHOWWINDOW | SWP_FRAMECHANGED ) ) {
+		return false;
+	}
 
 	win32.isFullscreen = parms.fullScreen;
 	win32.nativeScreenWidth = parms.width;
 	win32.nativeScreenHeight = parms.height;
+	if ( parms.fullScreen == 0 ) {
+		RECT client;
+		if ( GetClientRect( win32.hWnd, &client ) && client.right > 0 && client.bottom > 0 ) {
+			win32.nativeScreenWidth = client.right;
+			win32.nativeScreenHeight = client.bottom;
+		}
+	}
 	win32.pixelAspect = 1.0f;	// FIXME: some monitor modes may be distorted
 
 	return true;
@@ -974,6 +1083,8 @@ CreateGameWindow
 =======================
 */
 bool CreateGameWindow( gfxImpParms_t parms ) {
+	windowModeGuard_t guard;
+	s_windowedPlacementValid = false;
 	int				x, y, w, h;
 	if ( !GetWindowDimensions( parms, x, y, w, h ) ) {
 		return false;
@@ -1019,6 +1130,13 @@ bool CreateGameWindow( gfxImpParms_t parms ) {
 	SetFocus( win32.hWnd );
 
 	win32.isFullscreen = parms.fullScreen;
+	if ( parms.fullScreen == 0 ) {
+		s_windowedParms = parms;
+		s_windowedPlacementValid = true;
+		if ( !WIN_ApplyWindowedPlacement() ) {
+			return false;
+		}
+	}
 
 	return true;
 }

@@ -45,6 +45,9 @@ extern idCVar r_windowY;
 extern idCVar r_windowWidth;
 extern idCVar r_windowHeight;
 
+void WIN_RestoreWindowedPlacement();
+void WIN_SaveWindowedPlacement();
+
 // Session history, independent of the HWND and of unconfirmed menu previews.
 static int s_lastFullscreen;
 static idStr s_lastFullscreenDevice;
@@ -302,25 +305,16 @@ LRESULT CALLBACK MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 				}
 			}
 			break;
+		case WM_DISPLAYCHANGE:
+			WIN_RestoreWindowedPlacement();
+			break;
 		case WM_MOVE: {
-			int		xPos, yPos;
-			RECT r;
-
-			// save the window origin in cvars if we aren't fullscreen
-			int style = GetWindowLong( hWnd, GWL_STYLE );
-			if ( ( style & WS_POPUP ) == 0 ) {
-				xPos = (short) LOWORD(lParam);    // horizontal position 
-				yPos = (short) HIWORD(lParam);    // vertical position 
-
-				r.left   = 0;
-				r.top    = 0;
-				r.right  = 1;
-				r.bottom = 1;
-
-				AdjustWindowRect( &r, style, FALSE );
-
-				r_windowX.SetInteger( xPos + r.left );
-				r_windowY.SetInteger( yPos + r.top );
+			// Save the physical outer origin, not packed 16-bit client coordinates.
+			RECT rect;
+			if ( ( GetWindowLong( hWnd, GWL_STYLE ) & WS_POPUP ) == 0 &&
+				!IsIconic( hWnd ) && GetWindowRect( hWnd, &rect ) ) {
+				r_windowX.SetInteger( rect.left );
+				r_windowY.SetInteger( rect.top );
 			}
 			break;
 		}
@@ -453,6 +447,7 @@ LRESULT CALLBACK MainWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 		case WM_EXITSIZEMOVE:
 			win32.movingWindow = false;
+			WIN_SaveWindowedPlacement();
 			break;
 
 		case WM_SIZING:
