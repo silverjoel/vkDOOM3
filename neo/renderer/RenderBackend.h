@@ -188,6 +188,8 @@ public:
 	~idRenderBackend();
 
 	void				Init();
+	// Main-thread terminal boundary, after ordinary game/draw completion.
+	void				PrepareForShutdown();
 	void				Shutdown();
 
 	void				Execute( const int numCmds, const idArray< renderCommand_t, 16 > & renderCommands, int frontendSlot );
@@ -409,6 +411,7 @@ private:
 	uint64 m_nextSwapchainAttempt;
 	bool m_retirementLimitReported;
 	bool m_frameDeferred;
+	bool m_shutdownPrepared;
 	VkFence m_deferredMaintenanceFence;
 
 	idArray< uint32, NUM_FRAME_DATA >			m_queryIndex;

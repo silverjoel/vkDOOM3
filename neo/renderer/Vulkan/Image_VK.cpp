@@ -265,6 +265,12 @@ void idImage::EmptyGarbage() {
 	idList< VkImageView > & viewsToFree = m_viewGarbage[ m_garbageIndex ];
 	idList< VkSampler > & samplersToFree = m_samplerGarbage[ m_garbageIndex ];
 
+	// Views must retire before their images and backing allocations.
+	const int numViews = viewsToFree.Num();
+	for ( int i = 0; i < numViews; ++i ) {
+		vkDestroyImageView( vkcontext.device, viewsToFree[ i ], NULL );
+	}
+
 #if defined( ID_USE_AMD_ALLOCATOR )
 	const int numAllocations = allocationsToFree.Num();
 	for ( int i = 0; i < numAllocations; ++i ) {
@@ -281,11 +287,6 @@ void idImage::EmptyGarbage() {
 		vkDestroyImage( vkcontext.device, imagesToFree[ i ], NULL );
 	}
 #endif
-
-	const int numViews = viewsToFree.Num();
-	for ( int i = 0; i < numViews; ++i ) {
-		vkDestroyImageView( vkcontext.device, viewsToFree[ i ], NULL );
-	}
 
 	const int numSamplers = samplersToFree.Num();
 	for ( int i = 0; i < numSamplers; ++i ) {

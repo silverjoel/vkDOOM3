@@ -74,6 +74,8 @@ idVulkanStagingManager::Init
 =============
 */
 void idVulkanStagingManager::Init() {
+	// Publish each owned resource only after success: error teardown may
+	// observe partial initialization, and failed outputs are not ownership.
 	m_maxBufferSize = (size_t)( r_vkUploadBufferSizeMB.GetInteger() * 1024 * 1024 );
 
 	VkBufferCreateInfo bufferCreateInfo = {};
@@ -84,7 +86,13 @@ void idVulkanStagingManager::Init() {
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
 		m_buffers[ i ].offset = 0;
 
-		ID_VK_CHECK( vkCreateBuffer( vkcontext.device, &bufferCreateInfo, NULL, &m_buffers[ i ].buffer ) );
+		VkBuffer buffer = VK_NULL_HANDLE;
+		const VkResult bufferResult = vkCreateBuffer( vkcontext.device, &bufferCreateInfo, NULL, &buffer );
+		if ( bufferResult != VK_SUCCESS ) {
+			idLib::FatalError( "VK: %s - vkCreateBuffer", VK_ErrorToString( bufferResult ) );
+			return;
+		}
+		m_buffers[ i ].buffer = buffer;
 	}
 
 	VkMemoryRequirements memoryRequirements;
@@ -98,19 +106,37 @@ void idVulkanStagingManager::Init() {
 	memoryAllocateInfo.allocationSize = alignedSize * NUM_FRAME_DATA;
 	memoryAllocateInfo.memoryTypeIndex = FindMemoryTypeIndex( memoryRequirements.memoryTypeBits, VULKAN_MEMORY_USAGE_CPU_TO_GPU );
 
-	ID_VK_CHECK( vkAllocateMemory( vkcontext.device, &memoryAllocateInfo, NULL, &m_memory ) );
+	VkDeviceMemory memory = VK_NULL_HANDLE;
+	const VkResult memoryResult = vkAllocateMemory( vkcontext.device, &memoryAllocateInfo, NULL, &memory );
+	if ( memoryResult != VK_SUCCESS ) {
+		idLib::FatalError( "VK: %s - vkAllocateMemory", VK_ErrorToString( memoryResult ) );
+		return;
+	}
+	m_memory = memory;
 
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
 		ID_VK_CHECK( vkBindBufferMemory( vkcontext.device, m_buffers[ i ].buffer, m_memory, i * alignedSize ) );
 	}
 
-	ID_VK_CHECK( vkMapMemory( vkcontext.device, m_memory, 0, alignedSize * NUM_FRAME_DATA, 0, reinterpret_cast< void ** >( &m_mappedData ) ) );
+	void * mappedData = NULL;
+	const VkResult mappedDataResult = vkMapMemory( vkcontext.device, m_memory, 0, alignedSize * NUM_FRAME_DATA, 0, &mappedData );
+	if ( mappedDataResult != VK_SUCCESS ) {
+		idLib::FatalError( "VK: %s - vkMapMemory", VK_ErrorToString( mappedDataResult ) );
+		return;
+	}
+	m_mappedData = static_cast< byte * >( mappedData );
 
 	VkCommandPoolCreateInfo commandPoolCreateInfo = {};
 	commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 	commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	commandPoolCreateInfo.queueFamilyIndex = vkcontext.graphicsFamilyIdx;
-	ID_VK_CHECK( vkCreateCommandPool( vkcontext.device, &commandPoolCreateInfo, NULL, &m_commandPool ) );
+	VkCommandPool commandPool = VK_NULL_HANDLE;
+	const VkResult commandPoolResult = vkCreateCommandPool( vkcontext.device, &commandPoolCreateInfo, NULL, &commandPool );
+	if ( commandPoolResult != VK_SUCCESS ) {
+		idLib::FatalError( "VK: %s - vkCreateCommandPool", VK_ErrorToString( commandPoolResult ) );
+		return;
+	}
+	m_commandPool = commandPool;
 
 	VkCommandBufferAllocateInfo commandBufferAllocateInfo = {};
 	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -124,8 +150,20 @@ void idVulkanStagingManager::Init() {
 	commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		ID_VK_CHECK( vkAllocateCommandBuffers( vkcontext.device, &commandBufferAllocateInfo, &m_buffers[ i ].commandBuffer ) );
-		ID_VK_CHECK( vkCreateFence( vkcontext.device, &fenceCreateInfo, NULL, &m_buffers[ i ].fence ) );
+		VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+		const VkResult commandBufferResult = vkAllocateCommandBuffers( vkcontext.device, &commandBufferAllocateInfo, &commandBuffer );
+		if ( commandBufferResult != VK_SUCCESS ) {
+			idLib::FatalError( "VK: %s - vkAllocateCommandBuffers", VK_ErrorToString( commandBufferResult ) );
+			return;
+		}
+		m_buffers[ i ].commandBuffer = commandBuffer;
+		VkFence fence = VK_NULL_HANDLE;
+		const VkResult fenceResult = vkCreateFence( vkcontext.device, &fenceCreateInfo, NULL, &fence );
+		if ( fenceResult != VK_SUCCESS ) {
+			idLib::FatalError( "VK: %s - vkCreateFence", VK_ErrorToString( fenceResult ) );
+			return;
+		}
+		m_buffers[ i ].fence = fence;
 		ID_VK_CHECK( vkBeginCommandBuffer( m_buffers[ i ].commandBuffer, &commandBufferBeginInfo ) );
 
 		m_buffers[ i ].data = (byte *)m_mappedData + (i * alignedSize);
@@ -138,17 +176,37 @@ idVulkanStagingManager::Shutdown
 =============
 */
 void idVulkanStagingManager::Shutdown() {
-	vkUnmapMemory( vkcontext.device, m_memory );
-	m_memory = VK_NULL_HANDLE;
-	m_mappedData = NULL;
-
+	// Caller has stopped CPU producers and completed submitted GPU work.
+	// Discard unsubmitted recordings; do not submit them during teardown.
 	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		vkDestroyFence( vkcontext.device, m_buffers[ i ].fence, NULL );
-		vkDestroyBuffer( vkcontext.device, m_buffers[ i ].buffer, NULL );
-		vkFreeCommandBuffers( vkcontext.device, m_commandPool, 1, &m_buffers[ i ].commandBuffer );
+		if ( m_buffers[ i ].commandBuffer != VK_NULL_HANDLE ) {
+			vkFreeCommandBuffers( vkcontext.device, m_commandPool, 1, &m_buffers[ i ].commandBuffer );
+			m_buffers[ i ].commandBuffer = VK_NULL_HANDLE;
+		}
+		if ( m_buffers[ i ].fence != VK_NULL_HANDLE ) {
+			vkDestroyFence( vkcontext.device, m_buffers[ i ].fence, NULL );
+			m_buffers[ i ].fence = VK_NULL_HANDLE;
+		}
+		m_buffers[ i ].data = NULL;
 	}
-	memset( m_buffers, 0, sizeof( m_buffers ) );
-
+	if ( m_commandPool != VK_NULL_HANDLE ) {
+		vkDestroyCommandPool( vkcontext.device, m_commandPool, NULL );
+		m_commandPool = VK_NULL_HANDLE;
+	}
+	if ( m_mappedData != NULL ) {
+		vkUnmapMemory( vkcontext.device, m_memory );
+		m_mappedData = NULL;
+	}
+	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+		if ( m_buffers[ i ].buffer != VK_NULL_HANDLE ) {
+			vkDestroyBuffer( vkcontext.device, m_buffers[ i ].buffer, NULL );
+		}
+		m_buffers[ i ] = stagingBuffer_t();
+	}
+	if ( m_memory != VK_NULL_HANDLE ) {
+		vkFreeMemory( vkcontext.device, m_memory, NULL );
+		m_memory = VK_NULL_HANDLE;
+	}
 	m_maxBufferSize = 0;
 	m_currentBuffer = 0;
 }

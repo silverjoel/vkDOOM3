@@ -571,6 +571,12 @@ idRenderSystemLocal::Shutdown
 void RB_ShutdownDebugTools();
 void idRenderSystemLocal::Shutdown() {	
 	idLib::Printf( "idRenderSystem::Shutdown()\n" );
+	// Ordinary Quit runs on the main thread after the last game/draw job.
+	// Finish frontend jobs before the terminal GPU/resource boundary.
+	if ( m_frontEndJobList != NULL ) {
+		m_frontEndJobList->Wait();
+	}
+	m_backend.PrepareForShutdown();
 
 	m_fonts.DeleteContents();
 
@@ -597,7 +603,10 @@ void idRenderSystemLocal::Shutdown() {
 	delete m_guiModel;
 	m_guiModel = NULL;
 
-	parallelJobManager->FreeJobList( m_frontEndJobList );
+	if ( m_frontEndJobList != NULL ) {
+		parallelJobManager->FreeJobList( m_frontEndJobList );
+		m_frontEndJobList = NULL;
+	}
 
 	m_backend.Shutdown();
 

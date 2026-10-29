@@ -1326,6 +1326,7 @@ static void ClearContext() {
 	vkcontext.presentQueue = VK_NULL_HANDLE;
 	vkcontext.depthFormat = VK_FORMAT_UNDEFINED;
 	vkcontext.renderPass = VK_NULL_HANDLE;
+	vkcontext.renderPassResume = VK_NULL_HANDLE;
 	vkcontext.pipelineCache = VK_NULL_HANDLE;
 	vkcontext.sampleCount = VK_SAMPLE_COUNT_1_BIT;
 	vkcontext.supersampling = false;
@@ -1381,6 +1382,12 @@ void idRenderBackend::Clear() {
 	m_currentSwapIndex = 0;
 	m_msaaImage = VK_NULL_HANDLE;
 	m_msaaImageView = VK_NULL_HANDLE;
+#if defined( ID_USE_AMD_ALLOCATOR )
+	m_msaaVmaAllocation = NULL;
+	m_msaaAllocation = VmaAllocationInfo();
+#else
+	m_msaaAllocation = vulkanAllocation_t();
+#endif
 	m_commandPool = VK_NULL_HANDLE;
 
 	m_swapchainImages.Clear();
@@ -1399,6 +1406,7 @@ void idRenderBackend::Clear() {
 	m_nextSwapchainAttempt = 0;
 	m_retirementLimitReported = false;
 	m_frameDeferred = false;
+	m_shutdownPrepared = false;
 	m_deferredMaintenanceFence = VK_NULL_HANDLE;
 
 	m_commandBuffers.Zero();
@@ -1512,85 +1520,72 @@ void idRenderBackend::Init() {
 idRenderBackend::Shutdown
 =============
 */
-void idRenderBackend::Shutdown() {
-	// Shutdown input
-	Sys_ShutdownInput();
-
-	renderProgManager.Shutdown();
-
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		idImage::EmptyGarbage();
+void idRenderBackend::PrepareForShutdown() {
+	// Healthy orderly Quit: the owning main thread has completed game/draw
+	// work and will not schedule another frame. This is not worker recovery.
+	assert( idLib::IsMainThread() );
+	if ( m_shutdownPrepared || vkcontext.device == VK_NULL_HANDLE ) {
+		return;
 	}
-
-	// Detroy Frame Buffers
-	DestroyFrameBuffers();
-
-	// Destroy Pipeline Cache
-	vkDestroyPipelineCache( vkcontext.device, vkcontext.pipelineCache, NULL );
-
-	// Destroy Render Pass
-	vkDestroyRenderPass( vkcontext.device, vkcontext.renderPass, NULL );
-
-	// Destroy Render Pass
-	vkDestroyRenderPass(vkcontext.device, vkcontext.renderPassResume, NULL);
-
-	// Destroy Render Targets
-	DestroyRenderTargets();
-
-	// Final-retirement compatibility fallback, not formal presentation proof.
-	// Keep this terminal-only; independent earlier shutdown ordering is unchanged.
+	// Complete actual submissions, not reset/unsubmitted slot fences.
+	// Retain Stage C's terminal compatibility fallback; device idle alone
+	// is not claimed as formal presentation-completion proof.
 	ID_VK_CHECK( vkDeviceWaitIdle( vkcontext.device ) );
-	// Destroy Swap Chain
-	DestroySwapChain();
-
-	// Stop the Staging Manager
+	m_shutdownPrepared = true;
 	stagingManager.Shutdown();
+	DestroyFrameBuffers();
+}
 
-	// Destroy Command Buffer
-	vkFreeCommandBuffers( vkcontext.device, m_commandPool, NUM_FRAME_DATA, m_commandBuffers.Ptr() );
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		vkDestroyFence( vkcontext.device, m_commandBufferFences[ i ], NULL );
-	}
+void idRenderBackend::Shutdown() {
+	Sys_ShutdownInput();
+	PrepareForShutdown();
+	if ( vkcontext.device != VK_NULL_HANDLE ) {
+		renderProgManager.Shutdown();
 
-	vkDestroyFence( vkcontext.device, m_deferredMaintenanceFence, NULL );
+		// Framebuffers were released before frontend image purging. Drain
+		// every deferred slot while the device and allocator still exist.
+		for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+			idImage::EmptyGarbage();
+		}
+		vkDestroyPipelineCache( vkcontext.device, vkcontext.pipelineCache, NULL );
+		vkDestroyRenderPass( vkcontext.device, vkcontext.renderPass, NULL );
+		vkDestroyRenderPass( vkcontext.device, vkcontext.renderPassResume, NULL );
+		DestroyRenderTargets();
+		DestroySwapChain();
 
-	// Destroy Command Pool
-	vkDestroyCommandPool( vkcontext.device, m_commandPool, NULL );
+		// A pool owns all its command buffers, including partial allocation.
+		if ( m_commandPool != VK_NULL_HANDLE ) {
+			vkDestroyCommandPool( vkcontext.device, m_commandPool, NULL );
+		}
+		for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+			vkDestroyFence( vkcontext.device, m_commandBufferFences[ i ], NULL );
+			vkDestroyQueryPool( vkcontext.device, m_queryPools[ i ], NULL );
+			vkDestroySemaphore( vkcontext.device, m_acquireSemaphores[ i ], NULL );
+		}
+		vkDestroyFence( vkcontext.device, m_deferredMaintenanceFence, NULL );
+		vkDestroyBuffer( vkcontext.device, m_screenshotBuffer, NULL );
+		vkFreeMemory( vkcontext.device, m_screenshotMemory, NULL );
 
-	// Destroy Query Pools
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		vkDestroyQueryPool( vkcontext.device, m_queryPools[ i ], NULL );
-	}
-
-	// Destroy Semaphores
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		vkDestroySemaphore( vkcontext.device, m_acquireSemaphores[ i ], NULL );
-	}
-
-	// Destroy Debug Callback
-	if ( r_vkEnableValidationLayers.GetBool() ) {
-		DestroyDebugUtilsMessenger( m_instance );
-	}
-
-	// Dump all our memory
 #if defined( ID_USE_AMD_ALLOCATOR )
-	vmaDestroyAllocator( vmaAllocator );
+		if ( vmaAllocator != NULL ) {
+			vmaDestroyAllocator( vmaAllocator );
+			vmaAllocator = NULL;
+		}
 #else
-	vulkanAllocator.Shutdown();
+		vulkanAllocator.Shutdown();
 #endif
-
-	// Destroy Logical Device
-	vkDestroyDevice( vkcontext.device, NULL );
-
-	// Destroy Surface
-	vkDestroySurfaceKHR( m_instance, m_surface, NULL );
-
-	// Destroy the Instance
-	vkDestroyInstance( m_instance, NULL );
-
+		vkDestroyDevice( vkcontext.device, NULL );
+	}
+	if ( m_instance != VK_NULL_HANDLE ) {
+		// Keep validation alive through device-child destruction.
+		if ( debugUtilsMessenger != VK_NULL_HANDLE ) {
+			DestroyDebugUtilsMessenger( m_instance );
+		}
+		vkDestroySurfaceKHR( m_instance, m_surface, NULL );
+		vkDestroyInstance( m_instance, NULL );
+	}
 	ClearContext();
 	Clear();
-
 	VK_Shutdown();
 }
 
@@ -1600,6 +1595,9 @@ idRenderBackend::Restart
 ====================
 */
 void idRenderBackend::Restart() {
+	if ( m_shutdownPrepared ) {
+		return;
+	}
 	m_swapchainInvalid = true;
 	const uint64 now = Sys_Microseconds();
 	if ( now < m_nextSwapchainAttempt ) {
@@ -1701,6 +1699,9 @@ idRenderBackend::BlockingSwapBuffers
 ====================
 */
 void idRenderBackend::BlockingSwapBuffers() {
+	if ( m_shutdownPrepared ) {
+		return;
+	}
 	RENDERLOG_PRINTF( "***************** BlockingSwapBuffers *****************\n\n\n" );
 	// CPU frame/vertex buffers rotate even when rendering is deferred. Finish
 	// outstanding graphics before that rotation, including after a skipped frame.
@@ -1898,6 +1899,9 @@ idRenderBackend::GL_StartFrame
 ==================
 */
 bool idRenderBackend::GL_StartFrame( const VkExtent2D & frameExtent, int numCmds, const idArray< renderCommand_t, 16 > & renderCommands ) {
+	if ( m_shutdownPrepared ) {
+		return false;
+	}
 	m_frameDeferred = true;
 	VkExtent2D current;
 	if ( !QueryDrawableExtent( current ) ) {
@@ -1990,6 +1994,9 @@ idRenderBackend::GL_EndFrame
 ==================
 */
 void idRenderBackend::GL_EndFrame() {
+	if ( m_shutdownPrepared ) {
+		return;
+	}
 	VkCommandBuffer commandBuffer = m_commandBuffers[ m_currentFrameData ];
 
 	vkCmdWriteTimestamp( commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPools[ m_currentFrameData ], m_queryIndex[ m_currentFrameData ]++ );
