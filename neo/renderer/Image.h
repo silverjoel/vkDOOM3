@@ -176,6 +176,14 @@ No texture is ever used that does not have a corresponding idImage.
 
 #include "BinaryImage.h"
 
+// Internal CPU admission shared by generated-image loading and Vulkan upload.
+namespace imageUpload {
+bool StorageSize( textureFormat_t format, int width, int height, size_t & bytes );
+bool SourceDimensions( int width, int height );
+bool FileHeader( const bimageFile_t & header );
+bool Record( const bimageFile_t & header, const bimageImage_t & image, int & width, int & height );
+}
+
 #define	MAX_IMAGE_NAME	256
 
 class idImage {
@@ -249,18 +257,14 @@ private:
 	void		SetSamplerState( textureFilter_t filter, textureRepeat_t repeat );
 	void		UploadScratchImage( const byte * data, int cols, int rows );
 
-	// z is 0 for 2D textures, 0 - 5 for cube maps, and 0 - uploadDepth for 3D textures. Only 
-	// one plane at a time of 3D textures can be uploaded. The data is assumed to be correct for 
-	// the format, either bytes, halfFloats, floats, or DXT compressed. The data is assumed to 
-	// be in OpenGL RGBA format, the consoles may have to reorganize. pixelPitch is only needed 
-	// when updating from a source subrect. Width, height, and dest* are always in pixels, so 
-	// they must be a multiple of four for dxt data.
-	void		SubImageUpload( 
-					int mipLevel, 
-					int x, int y, int z, 
-					int width, int height, 
-					const void * pic, 
-					int pixelPitch = 0 );
+	bool		ValidateBinaryImage( idBinaryImage & image ) const;
+	bool		UploadBinaryImage( idBinaryImage & image );
+	static bool ValidateUpload( const idImageOpts & opts, int mipLevel, int x, int y, int z,
+					int width, int height, const void * pic, size_t sourceBytes, int pixelPitch, int & bytes );
+	// Only complete, tightly packed mip replacements are supported. Bounds describe
+	// owned payloads, or the documented allocation contract of borrowed scratch data.
+	bool		SubImageUpload( int mipLevel, int x, int y, int z, int width, int height,
+					const void * pic, size_t sourceBytes, int pixelPitch = 0 );
 
 #if defined( ID_VULKAN )
 	void		CreateSampler();

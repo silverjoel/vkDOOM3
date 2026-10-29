@@ -412,15 +412,50 @@ void idImage::SetSamplerState( textureFilter_t filter, textureRepeat_t repeat ) 
 idImage::SubImageUpload
 ====================
 */
-void idImage::SubImageUpload( int mipLevel, int x, int y, int z, int width, int height, const void * pic, int pixelPitch ) {
-	assert( x >= 0 && y >= 0 && mipLevel >= 0 && width >= 0 && height >= 0 && mipLevel < m_opts.numLevels );
+extern idCVar r_vkUploadBufferSizeMB;
 
-	if ( IsCompressed() ) {
-		width = ( width + 3 ) & ~3;
-		height = ( height + 3 ) & ~3;
+bool idImage::ValidateUpload( const idImageOpts & opts, int mipLevel, int x, int y, int z,
+	int width, int height, const void * pic, size_t sourceBytes, int pixelPitch, int & bytes ) {
+	bytes = 0;
+	if ( pic == NULL || opts.width <= 0 || opts.height <= 0 || opts.numLevels <= 0 || opts.numLevels > 31 ||
+		mipLevel < 0 || mipLevel >= opts.numLevels || z < 0 ||
+		( opts.textureType != TT_2D && opts.textureType != TT_CUBIC ) ||
+		z >= ( opts.textureType == TT_CUBIC ? 6 : 1 ) || opts.samples != SAMPLE_1 || opts.format == FMT_DEPTH ) {
+		return false;
 	}
+	int levels = 1;
+	for ( int extent = Max( opts.width, opts.height ); extent > 1; extent >>= 1 ) {
+		++levels;
+	}
+	if ( opts.numLevels > levels || ( opts.textureType == TT_CUBIC && opts.width != opts.height ) ) {
+		return false;
+	}
+	const uint32 limit = opts.textureType == TT_CUBIC ? vkcontext.gpu.props.limits.maxImageDimensionCube : vkcontext.gpu.props.limits.maxImageDimension2D;
+	if ( static_cast< uint32 >( opts.width ) > limit || static_cast< uint32 >( opts.height ) > limit ) {
+		return false;
+	}
+	// Current callers replace a complete mip. Do not pretend to support pitched
+	// or partial updates: UNDEFINED is valid only when all old contents may go.
+	if ( x != 0 || y != 0 || pixelPitch != 0 || width != Max( 1, opts.width >> mipLevel ) || height != Max( 1, opts.height >> mipLevel ) ) {
+		return false;
+	}
+	size_t required;
+	const int megabytes = r_vkUploadBufferSizeMB.GetInteger();
+	if ( megabytes <= 0 || megabytes > INT_MAX / ( 1024 * 1024 ) ||
+		!imageUpload::StorageSize( opts.format, width, height, required ) || required > sourceBytes ||
+		required > static_cast< size_t >( megabytes ) * 1024 * 1024 ) {
+		return false;
+	}
+	bytes = static_cast< int >( required );
+	return true;
+}
 
-	int size = width * height * BitsForFormat( m_opts.format ) / 8;
+bool idImage::SubImageUpload( int mipLevel, int x, int y, int z, int width, int height, const void * pic, size_t sourceBytes, int pixelPitch ) {
+	int size;
+	if ( !ValidateUpload( m_opts, mipLevel, x, y, z, width, height, pic, sourceBytes, pixelPitch, size ) ) {
+		idLib::Warning( "Invalid image upload: %s", GetName() );
+		return false;
+	}
 
 	VkBuffer buffer;
 	VkCommandBuffer commandBuffer;
@@ -438,8 +473,8 @@ void idImage::SubImageUpload( int mipLevel, int x, int y, int z, int width, int 
 
 	VkBufferImageCopy imgCopy = {};
 	imgCopy.bufferOffset = offset;
-	imgCopy.bufferRowLength = pixelPitch;
-	imgCopy.bufferImageHeight = height;
+	imgCopy.bufferRowLength = 0;
+	imgCopy.bufferImageHeight = 0;
 	imgCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 	imgCopy.imageSubresource.layerCount = 1;
 	imgCopy.imageSubresource.mipLevel = mipLevel;
@@ -457,16 +492,18 @@ void idImage::SubImageUpload( int mipLevel, int x, int y, int z, int width, int 
 	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	barrier.image = m_image;
 	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	barrier.subresourceRange.baseMipLevel = 0;
-	barrier.subresourceRange.levelCount = m_opts.numLevels;
+	barrier.subresourceRange.baseMipLevel = mipLevel;
+	barrier.subresourceRange.levelCount = 1;
 	barrier.subresourceRange.baseArrayLayer = z;
 	barrier.subresourceRange.layerCount = 1;
 	
 	barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	barrier.srcAccessMask = 0;
+	// Full replacement discards only this mip/face, but must still order prior
+	// reads and writes (including earlier queued uploads) before overwriting it.
+	barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
 	barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	vkCmdPipelineBarrier( commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier );
+	vkCmdPipelineBarrier( commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier );
 
 	vkCmdCopyBufferToImage( commandBuffer, buffer, m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imgCopy );
 
@@ -477,4 +514,5 @@ void idImage::SubImageUpload( int mipLevel, int x, int y, int z, int width, int 
 	vkCmdPipelineBarrier( commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, NULL, 0, NULL, 1, &barrier );
 
 	m_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	return true;
 }

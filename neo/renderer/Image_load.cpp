@@ -193,6 +193,54 @@ name contains GetName() upon entry
 }
 
 
+// Preflight every required mip/face before allocating or recording any upload.
+bool idImage::ValidateBinaryImage( idBinaryImage & image ) const {
+	const bimageFile_t & header = image.GetFileHeader();
+	if ( !imageUpload::FileHeader( header ) || image.NumImages() != header.numLevels * ( header.textureType == TT_CUBIC ? 6 : 1 ) ) {
+		return false;
+	}
+	idImageOpts opts = m_opts;
+	opts.width = header.width;
+	opts.height = header.height;
+	opts.numLevels = header.numLevels;
+	opts.format = static_cast< textureFormat_t >( header.format );
+	opts.textureType = static_cast< textureType_t >( header.textureType );
+	bool seen[31][6] = {};
+	for ( int i = 0; i < image.NumImages(); ++i ) {
+		const bimageImage_t & record = image.GetImageHeader( i );
+		int width, height, bytes;
+		if ( !imageUpload::Record( header, record, width, height ) || seen[record.level][record.destZ] ||
+			!ValidateUpload( opts, record.level, 0, 0, record.destZ, width, height, image.GetImageData( i ), static_cast< size_t >( record.dataSize ), 0, bytes ) ) {
+			return false;
+		}
+		seen[record.level][record.destZ] = true;
+	}
+	return true;
+}
+
+bool idImage::UploadBinaryImage( idBinaryImage & image ) {
+	if ( !ValidateBinaryImage( image ) ) {
+		idLib::Warning( "Invalid complete image: %s", GetName() );
+		return false;
+	}
+	const bimageFile_t & header = image.GetFileHeader();
+	m_opts.width = header.width;
+	m_opts.height = header.height;
+	m_opts.numLevels = header.numLevels;
+	m_opts.format = static_cast< textureFormat_t >( header.format );
+	m_opts.colorFormat = static_cast< textureColor_t >( header.colorFormat );
+	m_opts.textureType = static_cast< textureType_t >( header.textureType );
+	AllocImage();
+	for ( int i = 0; i < image.NumImages(); ++i ) {
+		const bimageImage_t & record = image.GetImageHeader( i );
+		// Record validated legacy cube padding; Vulkan receives logical dimensions.
+		const int width = Max( 1, m_opts.width >> record.level );
+		const int height = Max( 1, m_opts.height >> record.level );
+		SubImageUpload( record.level, 0, 0, record.destZ, width, height, image.GetImageData( i ), static_cast< size_t >( record.dataSize ) );
+	}
+	return true;
+}
+
 /*
 ===============
 ActuallyLoadImage
@@ -202,6 +250,7 @@ On exit, the idImage will have a valid OpenGL texture number that can be bound
 ===============
 */
 void idImage::ActuallyLoadImage( bool fromBackEnd ) {
+	const idImageOpts previousOpts = m_opts;
 	// this is the ONLY place m_generatorFunction will ever be called
 	if ( m_generatorFunction ) {
 		m_generatorFunction( this );
@@ -270,6 +319,9 @@ void idImage::ActuallyLoadImage( bool fromBackEnd ) {
 			}
 		}
 	}
+	if ( m_binaryFileTime != FILE_NOT_FOUND_TIMESTAMP && !ValidateBinaryImage( im ) ) {
+		m_binaryFileTime = FILE_NOT_FOUND_TIMESTAMP;
+	}
 	const bimageFile_t & header = im.GetFileHeader();
 
 	if ( ( fileSystem->InProductionMode() && m_binaryFileTime != FILE_NOT_FOUND_TIMESTAMP ) || ( ( m_binaryFileTime != FILE_NOT_FOUND_TIMESTAMP )
@@ -294,6 +346,7 @@ void idImage::ActuallyLoadImage( bool fromBackEnd ) {
 
 			if ( !R_LoadCubeImages( GetName(), m_cubeFiles, pics, &size, &m_sourceFileTime ) || size == 0 ) {
 				idLib::Warning( "Couldn't load cube image: %s", GetName() );
+				m_opts = previousOpts;
 				return;
 			}
 
@@ -325,13 +378,19 @@ void idImage::ActuallyLoadImage( bool fromBackEnd ) {
 				m_opts.height = 8;
 				m_opts.numLevels = 1;
 				DeriveOpts();
-				AllocImage();
 				
 				// clear the data so it's not left uninitialized
 				idTempArray<byte> clear( m_opts.width * m_opts.height * 4 );
 				memset( clear.Ptr(), 0, clear.Size() );
+				int bytes;
+				if ( !ValidateUpload( m_opts, 0, 0, 0, 0, 8, 8, clear.Ptr(), static_cast< size_t >( clear.Size() ), 0, bytes ) ) {
+					idLib::Warning( "Invalid fallback image: %s", GetName() );
+					m_opts = previousOpts;
+					return;
+				}
+				AllocImage();
 				for ( int level = 0; level < m_opts.numLevels; level++ ) {
-					SubImageUpload( level, 0, 0, 0, m_opts.width >> level, m_opts.height >> level, clear.Ptr() );
+					SubImageUpload( level, 0, 0, 0, m_opts.width >> level, m_opts.height >> level, clear.Ptr(), static_cast< size_t >( clear.Size() ) );
 				}
 
 				return;
@@ -345,15 +404,16 @@ void idImage::ActuallyLoadImage( bool fromBackEnd ) {
 
 			Mem_Free( pic );
 		}
+		if ( !ValidateBinaryImage( im ) ) {
+			idLib::Warning( "Invalid generated image: %s", GetName() );
+			m_opts = previousOpts;
+			return;
+		}
 		m_binaryFileTime = im.WriteGeneratedFile( m_sourceFileTime );
 	}
 
-	AllocImage();
-
-	for ( int i = 0; i < im.NumImages(); i++ ) {
-		const bimageImage_t & img = im.GetImageHeader( i );
-		const byte * data = im.GetImageData( i );
-		SubImageUpload( img.level, 0, 0, img.destZ, img.width, img.height, data );
+	if ( !UploadBinaryImage( im ) ) {
+		m_opts = previousOpts;
 	}
 }
 
@@ -508,8 +568,7 @@ void idImage::Reload( bool force ) {
 
 	common->DPrintf( "reloading %s.\n", GetName() );
 
-	PurgeImage();
-
+	// AllocImage purges only after CPU preflight of the replacement.
 	// Load is from the front end, so the back end must be synced
 	ActuallyLoadImage( false );
 }
@@ -525,8 +584,11 @@ void idImage::GenerateImage(
 		textureFilter_t filter, 
 		textureRepeat_t repeat, 
 		textureUsage_t usage ) {
-	
-	PurgeImage();
+	const idImageOpts previousOpts = m_opts;
+	if ( pic == NULL || !imageUpload::SourceDimensions( width, height ) ) {
+		idLib::Warning( "Invalid image source: %s", GetName() );
+		return;
+	}
 
 	m_filter = filter;
 	m_repeat = repeat;
@@ -547,12 +609,8 @@ void idImage::GenerateImage(
 		m_opts.colorFormat, 
 		m_opts.gammaMips );
 
-	AllocImage();
-
-	for ( int i = 0; i < im.NumImages(); ++i ) {
-		const bimageImage_t & img = im.GetImageHeader( i );
-		const byte * data = im.GetImageData( i );
-		SubImageUpload( img.level, 0, 0, img.destZ, img.width, img.height, data );
+	if ( !UploadBinaryImage( im ) ) {
+		m_opts = previousOpts;
 	}
 }
 
@@ -566,8 +624,11 @@ void idImage::GenerateCubeImage(
 		int size, 
 		textureFilter_t filter, 
 		textureUsage_t usage ) {
-
-	PurgeImage();
+	const idImageOpts previousOpts = m_opts;
+	if ( pic == NULL || !imageUpload::SourceDimensions( size, size ) ) {
+		idLib::Warning( "Invalid image source: %s", GetName() );
+		return;
+	}
 
 	m_filter = filter;
 	m_repeat = TR_CLAMP;
@@ -587,12 +648,8 @@ void idImage::GenerateCubeImage(
 		m_opts.format, 
 		m_opts.gammaMips );
 
-	AllocImage();
-
-	for ( int i = 0; i < im.NumImages(); ++i ) {
-		const bimageImage_t & img = im.GetImageHeader( i );
-		const byte * data = im.GetImageData( i );
-		SubImageUpload( img.level, 0, 0, img.destZ, img.width, img.height, data );
+	if ( !UploadBinaryImage( im ) ) {
+		m_opts = previousOpts;
 	}
 }
 
@@ -604,12 +661,33 @@ if rows = cols * 6, assume it is a cube map animation
 ====================
 */
 void idImage::UploadScratchImage( const byte * data, int cols, int rows ) {
+	if ( data == NULL || !imageUpload::SourceDimensions( cols, rows ) ) {
+		idLib::Warning( "Invalid scratch source: %s", GetName() );
+		return;
+	}
+	// Borrowed RGBA capacity is promised by UploadImage's caller, not discovered
+	// from this pointer. The current caller owns the fixed Classic Doom array.
+	const size_t sourceBytes = static_cast< size_t >( cols ) * rows * 4;
+
+	idImageOpts scratchOpts;
+	scratchOpts.format = FMT_RGBA8;
+	scratchOpts.width = cols;
+	const bool cube = static_cast< size_t >( rows ) == static_cast< size_t >( cols ) * 6;
+	scratchOpts.height = cube ? rows / 6 : rows;
+	scratchOpts.textureType = cube ? TT_CUBIC : TT_2D;
+	scratchOpts.numLevels = 1;
+	int bytes;
+	if ( !ValidateUpload( scratchOpts, 0, 0, 0, 0, cols, scratchOpts.height, data, cube ? sourceBytes / 6 : sourceBytes, 0, bytes ) ) {
+		idLib::Warning( "Invalid scratch upload: %s", GetName() );
+		return;
+	}
+
 	// if rows = cols * 6, assume it is a cube map animation
-	if ( rows == cols * 6 ) {
+	if ( static_cast< size_t >( rows ) == static_cast< size_t >( cols ) * 6 ) {
 		rows /= 6;
 		const byte * pic[6];
 		for ( int i = 0; i < 6; ++i ) {
-			pic[i] = data + cols * rows * 4 * i;
+			pic[i] = data + ( sourceBytes / 6 ) * i;
 		}
 
 		if ( m_opts.textureType != TT_CUBIC || m_usage != TD_LOOKUP_TABLE_RGBA ) {
@@ -624,7 +702,7 @@ void idImage::UploadScratchImage( const byte * data, int cols, int rows ) {
 		}
 		SetSamplerState( TF_LINEAR, TR_CLAMP );
 		for ( int i = 0; i < 6; ++i ) {
-			SubImageUpload( 0, 0, 0, i, m_opts.width, m_opts.height, pic[i] );
+			SubImageUpload( 0, 0, 0, i, m_opts.width, m_opts.height, pic[i], sourceBytes / 6 );
 		}
 	} else {
 		if ( m_opts.textureType != TT_2D || m_usage != TD_LOOKUP_TABLE_RGBA ) {
@@ -638,6 +716,6 @@ void idImage::UploadScratchImage( const byte * data, int cols, int rows ) {
 			AllocImage();
 		}
 		SetSamplerState( TF_LINEAR, TR_REPEAT );
-		SubImageUpload( 0, 0, 0, 0, m_opts.width, m_opts.height, data );
+		SubImageUpload( 0, 0, 0, 0, m_opts.width, m_opts.height, data, sourceBytes );
 	}
 }
