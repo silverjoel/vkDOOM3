@@ -78,6 +78,57 @@ private:
 	stagingBuffer_t m_buffers[ NUM_FRAME_DATA ];
 };
 
+// Inactive prerequisite: no live manager/caller uses this interface yet.
+// The caller owns every Vulkan object and all source/destination lifetimes.
+// It must provide an exclusively owned recording command buffer, an unsignaled
+// fence, valid mapped memory, and external queue/pool synchronization. The
+// mutex below protects this record only, not other users of those objects.
+struct stagingSubmissionResources_t {
+	VkDevice device;
+	VkQueue queue;
+	VkDeviceMemory memory;
+	VkBuffer source;
+	VkCommandBuffer commandBuffer;
+	VkFence fence;
+};
+
+struct stagingSubmissionResult_t {
+	enum state_t { UNINITIALIZED, RECORDING, NO_WORK, ACCEPTED, COMPLETED, FAILED } state;
+	enum phase_t { NONE, END_COMMANDS, FLUSH_MEMORY, SUBMIT, WAIT, RESET_FENCE, BEGIN_COMMANDS } phase;
+	enum retention_t { NONE_RETAINED, RECORDING_REFERENCES, UNSUBMITTED_REFERENCES,
+		PENDING_REFERENCES, COMPLETED_REFERENCES, UNCERTAIN_REFERENCES } retention;
+	VkResult result;
+	uint64 generation;
+	stagingSubmissionResources_t resources;
+	bool submissionAccepted;
+	bool completionObserved;
+	bool failureReported;
+	char message[96]; // owned text; copies remain valid after acknowledgment/reuse
+};
+
+// Explicitly invoked, non-owning checked batch operation. No ring mutation,
+// resource destruction, retry, cancellation, logging, or framework error route.
+// Keep referenced resources alive until a separate owner resolves retention.
+// Destruction releases only the CPU mutex; never use it concurrently with a call.
+class idVulkanStagingSubmission {
+public:
+	idVulkanStagingSubmission();
+	bool Configure( const stagingSubmissionResources_t & resources, uint64 generation, bool hasWork );
+	stagingSubmissionResult_t Submit();
+	stagingSubmissionResult_t PollCompletion(); // zero-timeout; no indefinite host wait
+	bool BeginReuse( uint64 expectedGeneration, uint64 nextGeneration );
+	stagingSubmissionResult_t Snapshot() const;
+	bool AcknowledgeFailure( uint64 expectedGeneration ); // once; does not clear failure/retention
+
+private:
+	void Fail( VkResult error, stagingSubmissionResult_t::phase_t phase, const char * message );
+	idVulkanStagingSubmission( const idVulkanStagingSubmission & ) = delete;
+	idVulkanStagingSubmission & operator=( const idVulkanStagingSubmission & ) = delete;
+	mutable idSysMutex mutex;
+	stagingSubmissionResult_t status;
+};
+
+
 extern idVulkanStagingManager stagingManager;
 
 #endif

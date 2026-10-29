@@ -306,3 +306,142 @@ void idVulkanStagingManager::Wait( stagingBuffer_t & stage ) {
 
 	ID_VK_CHECK( vkBeginCommandBuffer( stage.commandBuffer, &commandBufferBeginInfo ) );
 }
+
+// Inactive checked-submission prerequisite. Legacy Stage/Flush/Wait do not call it.
+idVulkanStagingSubmission::idVulkanStagingSubmission() : status() {
+	status.state = stagingSubmissionResult_t::UNINITIALIZED;
+}
+
+bool idVulkanStagingSubmission::Configure( const stagingSubmissionResources_t & resources, uint64 generation, bool hasWork ) {
+	idScopedCriticalSection lock( mutex );
+	if ( status.state != stagingSubmissionResult_t::UNINITIALIZED || generation == 0 ||
+		resources.device == VK_NULL_HANDLE || resources.queue == VK_NULL_HANDLE ||
+		resources.memory == VK_NULL_HANDLE || resources.source == VK_NULL_HANDLE ||
+		resources.commandBuffer == VK_NULL_HANDLE || resources.fence == VK_NULL_HANDLE ) {
+		return false;
+	}
+	status.resources = resources;
+	status.generation = generation;
+	status.state = hasWork ? stagingSubmissionResult_t::RECORDING : stagingSubmissionResult_t::NO_WORK;
+	status.retention = stagingSubmissionResult_t::RECORDING_REFERENCES;
+	return true;
+}
+
+void idVulkanStagingSubmission::Fail( VkResult error, stagingSubmissionResult_t::phase_t phase, const char * message ) {
+	// Caller holds mutex. First failure is sticky; no borrowed diagnostic pointer.
+	status.state = stagingSubmissionResult_t::FAILED;
+	status.phase = phase;
+	status.result = error;
+	if ( error == VK_ERROR_DEVICE_LOST || error == VK_ERROR_UNKNOWN ) {
+		status.retention = stagingSubmissionResult_t::UNCERTAIN_REFERENCES;
+	}
+	int i = 0;
+	for ( ; i < int( sizeof( status.message ) ) - 1 && message[i] != '\0'; ++i ) {
+		status.message[i] = message[i];
+	}
+	status.message[i] = '\0';
+}
+
+stagingSubmissionResult_t idVulkanStagingSubmission::Submit() {
+	idScopedCriticalSection lock( mutex );
+	if ( status.state != stagingSubmissionResult_t::RECORDING ) {
+		return status;
+	}
+	const stagingSubmissionResources_t & r = status.resources;
+	VkMemoryBarrier barrier = {};
+	barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+	vkCmdPipelineBarrier( r.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+		0, 1, &barrier, 0, NULL, 0, NULL );
+	VkResult result = vkEndCommandBuffer( r.commandBuffer );
+	if ( result != VK_SUCCESS ) {
+		Fail( result, stagingSubmissionResult_t::END_COMMANDS, "vkEndCommandBuffer failed" );
+		return status;
+	}
+	status.retention = stagingSubmissionResult_t::UNSUBMITTED_REFERENCES;
+	VkMappedMemoryRange range = {};
+	range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+	range.memory = r.memory;
+	range.size = VK_WHOLE_SIZE;
+	result = vkFlushMappedMemoryRanges( r.device, 1, &range );
+	if ( result != VK_SUCCESS ) {
+		Fail( result, stagingSubmissionResult_t::FLUSH_MEMORY, "vkFlushMappedMemoryRanges failed" );
+		return status;
+	}
+	VkSubmitInfo submit = {};
+	submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit.commandBufferCount = 1;
+	submit.pCommandBuffers = &r.commandBuffer;
+	result = vkQueueSubmit( r.queue, 1, &submit, r.fence );
+	if ( result != VK_SUCCESS ) {
+		Fail( result, stagingSubmissionResult_t::SUBMIT, "vkQueueSubmit failed" );
+		return status;
+	}
+	status.state = stagingSubmissionResult_t::ACCEPTED;
+	status.phase = stagingSubmissionResult_t::SUBMIT;
+	status.retention = stagingSubmissionResult_t::PENDING_REFERENCES;
+	status.submissionAccepted = true;
+	return status;
+}
+
+stagingSubmissionResult_t idVulkanStagingSubmission::PollCompletion() {
+	idScopedCriticalSection lock( mutex );
+	if ( status.state != stagingSubmissionResult_t::ACCEPTED ) {
+		return status;
+	}
+	const VkResult result = vkWaitForFences( status.resources.device, 1, &status.resources.fence, VK_TRUE, 0 );
+	if ( result == VK_TIMEOUT ) {
+		return status; // still pending, never a successful completion or terminal failure
+	}
+	if ( result != VK_SUCCESS ) {
+		Fail( result, stagingSubmissionResult_t::WAIT, "vkWaitForFences failed" );
+		return status;
+	}
+	status.state = stagingSubmissionResult_t::COMPLETED;
+	status.phase = stagingSubmissionResult_t::WAIT;
+	status.retention = stagingSubmissionResult_t::COMPLETED_REFERENCES;
+	status.completionObserved = true;
+	return status;
+}
+
+bool idVulkanStagingSubmission::BeginReuse( uint64 expectedGeneration, uint64 nextGeneration ) {
+	idScopedCriticalSection lock( mutex );
+	if ( status.state != stagingSubmissionResult_t::COMPLETED ||
+		status.generation != expectedGeneration || nextGeneration <= expectedGeneration ) {
+		return false;
+	}
+	VkResult result = vkResetFences( status.resources.device, 1, &status.resources.fence );
+	if ( result != VK_SUCCESS ) {
+		Fail( result, stagingSubmissionResult_t::RESET_FENCE, "vkResetFences failed" );
+		return false;
+	}
+	VkCommandBufferBeginInfo begin = {};
+	begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	result = vkBeginCommandBuffer( status.resources.commandBuffer, &begin );
+	if ( result != VK_SUCCESS ) {
+		Fail( result, stagingSubmissionResult_t::BEGIN_COMMANDS, "vkBeginCommandBuffer failed" );
+		return false;
+	}
+	const stagingSubmissionResources_t resources = status.resources;
+	status = stagingSubmissionResult_t();
+	status.resources = resources;
+	status.generation = nextGeneration;
+	status.state = stagingSubmissionResult_t::RECORDING;
+	status.retention = stagingSubmissionResult_t::RECORDING_REFERENCES;
+	return true;
+}
+
+stagingSubmissionResult_t idVulkanStagingSubmission::Snapshot() const {
+	idScopedCriticalSection lock( mutex );
+	return status;
+}
+
+bool idVulkanStagingSubmission::AcknowledgeFailure( uint64 expectedGeneration ) {
+	idScopedCriticalSection lock( mutex );
+	if ( status.state != stagingSubmissionResult_t::FAILED || status.generation != expectedGeneration || status.failureReported ) {
+		return false;
+	}
+	status.failureReported = true;
+	return true;
+}
