@@ -7,7 +7,7 @@ layout( binding = 1 ) uniform UBO {
 	vec4 rpColor;
 };
 
-layout( location = 1 ) out vec4 out_Color;
+layout( location = 0 ) out vec4 out_Color;
 
 void main() {
 	out_Color = rpColor;
