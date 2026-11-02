@@ -3,10 +3,10 @@
 
 #extension GL_ARB_separate_shader_objects : enable
 
-layout( binding = 2 ) uniform UBO {
+layout( binding = 1 ) uniform UBO {
 	vec4 rpColor;
 };
-layout( binding = 3 ) uniform sampler2D samp0;
+layout( binding = 2 ) uniform sampler2D samp0;
 
 layout( location = 0 ) in vec2 in_TexCoord0;
 
