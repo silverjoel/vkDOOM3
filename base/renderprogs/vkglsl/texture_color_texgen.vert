@@ -20,7 +20,7 @@ layout( binding = 0 ) uniform UBO {
 };
 
 layout( location = 0 ) in vec3 in_Position;
-layout( location = 1 ) in vec4 in_Color;
+layout( location = 4 ) in vec4 in_Color;
 
 layout( location = 0 ) out vec4 out_TexCoord0;
 layout( location = 1 ) out vec4 out_Color;
