@@ -112,8 +112,8 @@ private:
 	
 	// OpenAL Stop()/FlushSourceBuffers() is synchronous, so stopped voices can
 	// be returned directly to the free list without a second zombie pool.
-	idStaticList<idSoundVoice_OpenAL, MAX_HARDWARE_VOICES > voices;
-	idStaticList<idSoundVoice_OpenAL*, MAX_HARDWARE_VOICES > freeVoices;
+	idStaticList<idSoundVoice, MAX_HARDWARE_VOICES > voices;
+	idStaticList<idSoundVoice*, MAX_HARDWARE_VOICES > freeVoices;
 };
 
 /*

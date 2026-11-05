@@ -500,10 +500,10 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 	// voice at the front of freeVoices hits that source limit, returning
 	// immediately would hide reusable source objects later in the list and
 	// could starve all subsequent allocations.
-	idSoundVoice_OpenAL * unusedVoice = NULL;
+	idSoundVoice * unusedVoice = NULL;
 	for( int i = 0; i < freeVoices.Num(); i++ )
 	{
-		idSoundVoice_OpenAL* candidate = freeVoices[i];
+		idSoundVoice* candidate = freeVoices[i];
 		if (candidate->IsPlaying())
 		{
 			continue;
@@ -529,7 +529,7 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 		}
 		
 		freeVoices.Remove(candidate);
-		return (idSoundVoice*)candidate;
+		return candidate;
 	}
 	// No reusable source was available. Try to instantiate one unused voice.
 	// If source creation fails here, trying every other unused slot would hit
@@ -542,7 +542,7 @@ idSoundVoice* idSoundHardware_OpenAL::AllocateVoice( const idSoundSample* leadin
 			return NULL;
 		}
 		freeVoices.Remove(unusedVoice);
-		return (idSoundVoice*)unusedVoice;
+		return unusedVoice;
 	}
 	
 	return NULL;
@@ -560,8 +560,6 @@ void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 		return;
 	}
 
-	idSoundVoice_OpenAL* openalVoice = static_cast<idSoundVoice_OpenAL*>(voice);
-	
 	// FreeVoice() is also used by the sound-system Restart() mute pass and by
 	// out-of-band StopAllSounds() calls. Those paths can run after the owned
 	// OpenAL context has been lost or another context has become current, but
@@ -569,14 +567,14 @@ void idSoundHardware_OpenAL::FreeVoice( idSoundVoice* voice )
 	// issue source calls with stale numeric names against the wrong context.
 	if (IsContextCurrent())
 	{
-		openalVoice->Stop();
+		voice->Stop();
 	}
 	else
 	{
 		// The old context will reclaim its source/filter objects when it is
 		// destroyed. Clear only this voice's cached context-local names so the
 		// logical channel can release the voice safely in the meantime.
-		openalVoice->InvalidateContextObjects();
+		voice->InvalidateContextObjects();
 		
 		if (openalContext != NULL)
 		{
