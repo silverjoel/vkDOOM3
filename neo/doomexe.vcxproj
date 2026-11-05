@@ -76,7 +76,7 @@
     </ProjectReference>
     <Link>
       <GenerateDebugInformation Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateDebugInformation>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;libcmt.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;libcmt.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(DXSDK_DIR)\Lib\x64\;$(VULKAN_SDK)\Lib;$(SolutionDir)libs\openal-soft\lib\Win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Deploy />
@@ -114,7 +114,7 @@
     </Manifest>
     <Link>
       <GenerateMapFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</GenerateMapFile>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dsound.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;libcmtd.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">xinput.lib;dbghelp.lib;dinput8.lib;dxguid.lib;DxErr.lib;iphlpapi.lib;odbc32.lib;odbccp32.lib;winmm.lib;wsock32.lib;libcmtd.lib;vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(DXSDK_DIR)\Lib\x64\;$(VULKAN_SDK)\Lib;$(SolutionDir)libs\openal-soft\lib\Win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
