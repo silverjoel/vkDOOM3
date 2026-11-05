@@ -211,8 +211,8 @@ private:
 	// rejected deletion of an owned source in the current live context.
 	bool					DestroyInternal();
 
-	// Clear cached AL object names without issuing AL calls. Used only when
-	// the owning context cannot be made current during hardware shutdown.
+	// Clear cached AL object names without issuing AL calls when abandoning
+	// the owning context.
 	void					InvalidateContextObjects();
 	
 	// EFX low-pass filter used to reproduce the XAudio2 occlusion/muffling path.

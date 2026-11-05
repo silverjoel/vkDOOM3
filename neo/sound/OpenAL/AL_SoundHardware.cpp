@@ -383,6 +383,8 @@ void idSoundHardware_OpenAL::Shutdown()
 		for (int i = 0; i < voices.Num(); i++)
 		{
 			voices[i].DestroyInternal();
+			// The old context is being discarded even if object deletion failed.
+			voices[i].InvalidateContextObjects();
 		}
 		
 		// ---------------------
