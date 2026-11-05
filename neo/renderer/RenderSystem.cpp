@@ -612,8 +612,6 @@ void idRenderSystemLocal::Shutdown() {
 
 	Clear();
 
-	// free the context and close the window
-	ShutdownFrameData();
 	
 	m_bInitialized = false;
 }

@@ -252,8 +252,6 @@ private:
 
 	void				GL_Scissor( int x /* left*/, int y /* bottom */, int w, int h );
 	void				GL_Viewport( int x /* left */, int y /* bottom */, int w, int h );
-	ID_INLINE void		GL_Scissor( const idScreenRect & rect ) { GL_Scissor( rect.x1, rect.y1, rect.x2 - rect.x1 + 1, rect.y2 - rect.y1 + 1 ); }
-	ID_INLINE void		GL_Viewport( const idScreenRect & rect ) { GL_Viewport( rect.x1, rect.y1, rect.x2 - rect.x1 + 1, rect.y2 - rect.y1 + 1 ); }
 
 	void				GL_Color( float r, float g, float b, float a );
 	ID_INLINE void		GL_Color( float r, float g, float b ) { GL_Color( r, g, b, 1.0f ); }
