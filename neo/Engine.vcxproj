@@ -206,7 +206,6 @@
     <ClCompile Include="sys\win32\win_session_local.cpp" />
     <ClCompile Include="sys\win32\win_shared.cpp" />
     <ClCompile Include="sys\win32\win_signin.cpp" />
-    <ClCompile Include="sys\win32\win_snd.cpp" />
     <ClCompile Include="sys\win32\win_syscon.cpp" />
     <ClCompile Include="sys\win32\win_wndproc.cpp" />
     <ClCompile Include="ui\BindWindow.cpp" />

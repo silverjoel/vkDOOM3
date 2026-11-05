@@ -201,9 +201,6 @@
     <ClCompile Include="sys\win32\win_signin.cpp">
       <Filter>Sys\Win32</Filter>
     </ClCompile>
-    <ClCompile Include="sys\win32\win_snd.cpp">
-      <Filter>Sys\Win32</Filter>
-    </ClCompile>
     <ClCompile Include="sys\win32\win_syscon.cpp">
       <Filter>Sys\Win32</Filter>
     </ClCompile>
