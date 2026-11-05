@@ -30,7 +30,6 @@ If you have questions concerning this license or the applicable additional terms
 #ifndef __QVK_H__
 #define __QVK_H__
 
-#if defined( ID_VULKAN )
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #define ID_USE_AMD_ALLOCATOR
@@ -52,6 +51,5 @@ If you have questions concerning this license or the applicable additional terms
 
 const char * VK_ErrorToString( VkResult result );
 
-#endif
 
 #endif

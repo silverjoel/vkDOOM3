@@ -70,7 +70,6 @@ static const int NUM_PORTAL_ATTRIBUTES = 3;
 static const int CHILDREN_HAVE_MULTIPLE_AREAS = -2;
 static const int AREANUM_SOLID = -1;
 
-#if defined( ID_VULKAN )
 static const int MAX_DESC_SETS				= 16384;
 static const int MAX_DESC_UNIFORM_BUFFERS	= 8192;
 static const int MAX_DESC_IMAGE_SAMPLERS	= 12384;
@@ -79,7 +78,6 @@ static const int MAX_DESC_SET_UNIFORMS		= 48;
 static const int MAX_IMAGE_PARMS			= 16;
 static const int MAX_UBO_PARMS				= 2;
 static const int NUM_TIMESTAMP_QUERIES		= 16;
-#endif
 
 // vertCacheHandle_t packs size, offset, and frame number into 64 bits
 typedef uint64 vertCacheHandle_t;

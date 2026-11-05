@@ -215,13 +215,11 @@ public:
 	// Platform specific implementations
 	//---------------------------------------------
 
-#if defined( ID_VULKAN )
 	void		CreateFromSwapImage( VkImage image, VkImageView imageView, VkFormat format, const VkExtent2D & extent );
 	VkImage		GetImage() const { return m_image; }
 	VkImageView	GetView() const { return m_view; }
 	VkImageLayout GetLayout() const { return m_layout; }
 	VkSampler	GetSampler() const { return m_sampler; }
-#endif
 
 	void		AllocImage( const idImageOpts &imgOpts, textureFilter_t filter, textureRepeat_t repeat );
 	void		PurgeImage();
@@ -266,11 +264,9 @@ private:
 	bool		SubImageUpload( int mipLevel, int x, int y, int z, int width, int height,
 					const void * pic, size_t sourceBytes, int pixelPitch = 0 );
 
-#if defined( ID_VULKAN )
 	void		CreateSampler();
 
 	static void EmptyGarbage();
-#endif
 
 private:
 	// parameters that define this image

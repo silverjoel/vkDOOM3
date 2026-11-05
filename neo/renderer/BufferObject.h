@@ -29,9 +29,7 @@ If you have questions concerning this license or the applicable additional terms
 #ifndef __BUFFEROBJECT_H__
 #define __BUFFEROBJECT_H__
 
-#if defined( ID_VULKAN )
 #include "Vulkan/Allocator_VK.h"
-#endif
 
 enum bufferMapType_t {
 	BM_READ,			// map for reading

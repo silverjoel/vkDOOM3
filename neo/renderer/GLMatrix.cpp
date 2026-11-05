@@ -415,11 +415,7 @@ void R_SetupProjectionMatrix( viewDef_t *viewDef ) {
 	viewDef->projectionMatrix[3*4+0] = 0.0f;
 
 	viewDef->projectionMatrix[0*4+1] = 0.0f;
-#if defined( ID_VULKAN )
 	viewDef->projectionMatrix[1*4+1] = -2.0f * zNear / height;
-#else
-	viewDef->projectionMatrix[1*4+1] = 2.0f * zNear / height;
-#endif
 	viewDef->projectionMatrix[2*4+1] = 0.0f;
 	viewDef->projectionMatrix[3*4+1] = 0.0f;
 

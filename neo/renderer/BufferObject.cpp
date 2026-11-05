@@ -126,14 +126,9 @@ idBufferObject::idBufferObject() {
 	m_offsetInOtherBuffer = OWNS_BUFFER_FLAG;
 	m_usage = BU_STATIC;
 	
-#if defined( ID_VULKAN )
 	m_apiObject = VK_NULL_HANDLE;
 #if defined( ID_USE_AMD_ALLOCATOR )
 	m_vmaAllocation = NULL;
-#endif
-#else
-	m_apiObject = 0xFFFF;
-	m_buffer = NULL;
 #endif
 }
 
@@ -169,9 +164,7 @@ void idVertexBuffer::Reference( const idVertexBuffer & other ) {
 	m_offsetInOtherBuffer = other.GetOffset();	// this strips the OWNS_BUFFER_FLAG
 	m_usage = other.m_usage;
 	m_apiObject = other.m_apiObject;
-#if defined( ID_VULKAN )
 	m_allocation = other.m_allocation;
-#endif
 	assert( OwnsBuffer() == false );
 }
 
@@ -192,9 +185,7 @@ void idVertexBuffer::Reference( const idVertexBuffer & other, int refOffset, int
 	m_offsetInOtherBuffer = other.GetOffset() + refOffset;
 	m_usage = other.m_usage;
 	m_apiObject = other.m_apiObject;
-#if defined( ID_VULKAN )
 	m_allocation = other.m_allocation;
-#endif
 	assert( OwnsBuffer() == false );
 }
 
@@ -230,9 +221,7 @@ void idIndexBuffer::Reference( const idIndexBuffer & other ) {
 	m_offsetInOtherBuffer = other.GetOffset();	// this strips the OWNS_BUFFER_FLAG
 	m_usage = other.m_usage;
 	m_apiObject = other.m_apiObject;
-#if defined( ID_VULKAN )
 	m_allocation = other.m_allocation;
-#endif
 	assert( OwnsBuffer() == false );
 }
 
@@ -253,9 +242,7 @@ void idIndexBuffer::Reference( const idIndexBuffer & other, int refOffset, int r
 	m_offsetInOtherBuffer = other.GetOffset() + refOffset;
 	m_usage = other.m_usage;
 	m_apiObject = other.m_apiObject;
-#if defined( ID_VULKAN )
 	m_allocation = other.m_allocation;
-#endif
 	assert( OwnsBuffer() == false );
 }
 
@@ -291,9 +278,7 @@ void idUniformBuffer::Reference( const idUniformBuffer & other ) {
 	m_offsetInOtherBuffer = other.GetOffset();	// this strips the OWNS_BUFFER_FLAG
 	m_usage = other.m_usage;
 	m_apiObject = other.m_apiObject;
-#if defined( ID_VULKAN )
 	m_allocation = other.m_allocation;
-#endif
 	assert( OwnsBuffer() == false );
 }
 
@@ -314,8 +299,6 @@ void idUniformBuffer::Reference( const idUniformBuffer & other, int refOffset, i
 	m_offsetInOtherBuffer = other.GetOffset() + refOffset;
 	m_usage = other.m_usage;
 	m_apiObject = other.m_apiObject;
-#if defined( ID_VULKAN )
 	m_allocation = other.m_allocation;
-#endif
 	assert( OwnsBuffer() == false );
 }
